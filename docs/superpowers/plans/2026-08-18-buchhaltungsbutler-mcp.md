@@ -838,7 +838,7 @@ export function trimList<T extends Record<string, unknown>>(
     const out: Partial<T> = {};
     for (const field of fields) {
       if (field in record) {
-        out[field as keyof T] = record[field];
+        out[field as keyof T] = record[field as keyof T];
       }
     }
     return out;
@@ -900,7 +900,13 @@ export interface ToolDef<Shape extends ZodRawShape = ZodRawShape> {
 export function ok(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
+
+export function defineTool<Shape extends ZodRawShape>(tool: ToolDef<Shape>): ToolDef {
+  return tool as unknown as ToolDef;
+}
 ```
+
+`defineTool` exists because TypeScript's structural typing won't let a `ToolDef<SpecificShape>` stand in for the default `ToolDef` (function parameters are checked contravariantly, so a handler that only accepts `SpecificShape`'s inferred args isn't assignable to "accepts any shape's args"). Passing the object literal through `defineTool(...)` still gives the handler full, precise argument typing from `Shape` (TypeScript infers `Shape` from the argument you pass in), while the return value is the type-erased `ToolDef` every tool array actually needs — the erasure is safe in practice because the MCP SDK always calls a tool's handler with arguments already validated against that same tool's own `inputSchema`. Every tool constant below is defined via `defineTool({...})`, not a bare object literal, for this reason.
 
 `src/tools/accounts.test.ts`:
 
@@ -956,10 +962,10 @@ Expected: FAIL — `Cannot find module './accounts.js'`
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import type { BBListResult } from "../bb-client/client.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
-  const listAccounts: ToolDef = {
+  const listAccounts = defineTool({
     name: "list_accounts",
     description: "List all basic accounts (cash, bank, other) configured in BuchhaltungsButler.",
     inputSchema: {},
@@ -967,7 +973,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call<BBListResult>("accountsGet", {});
       return ok(result.data);
     },
-  };
+  });
 
   const createAccountShape = {
     type: z.enum(["cash", "bank/institution", "other"]),
@@ -977,7 +983,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
     is_revision_safe: z.boolean().optional(),
   };
 
-  const createAccount: ToolDef<typeof createAccountShape> = {
+  const createAccount = defineTool({
     name: "create_account",
     description: "Create a new basic account (cash register, bank account, or other).",
     inputSchema: createAccountShape,
@@ -985,7 +991,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call("accountsAdd", args);
       return ok(result);
     },
-  };
+  });
 
   return [listAccounts, createAccount];
 }
@@ -1061,7 +1067,7 @@ Expected: FAIL — `Cannot find module './comments.js'`
 ```ts
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 export function createCommentsTools(client: BBClient): [ToolDef] {
   const addCommentShape = {
@@ -1070,7 +1076,7 @@ export function createCommentsTools(client: BBClient): [ToolDef] {
     receipt_id_by_customer: z.number().int().optional(),
   };
 
-  const addComment: ToolDef<typeof addCommentShape> = {
+  const addComment = defineTool({
     name: "add_comment",
     description: "Add a comment to a transaction or a receipt (provide the matching id).",
     inputSchema: addCommentShape,
@@ -1078,7 +1084,7 @@ export function createCommentsTools(client: BBClient): [ToolDef] {
       const result = await client.call("commentsAdd", args);
       return ok(result);
     },
-  };
+  });
 
   return [addComment];
 }
@@ -1185,7 +1191,7 @@ Expected: FAIL — `Cannot find module './cost-locations.js'`
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["code", "name"] as const;
 
@@ -1194,7 +1200,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
     full: z.boolean().default(false),
   };
 
-  const listCostLocations: ToolDef<typeof listShape> = {
+  const listCostLocations = defineTool({
     name: "list_cost_locations",
     description: "List all cost locations (Kostenstellen).",
     inputSchema: listShape,
@@ -1202,7 +1208,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call<BBListResult>("costLocationsGet", {});
       return ok(trimList(result.data, SUMMARY_FIELDS, args.full));
     },
-  };
+  });
 
   const manageShape = {
     action: z.enum(["create", "update", "delete"]),
@@ -1210,7 +1216,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
     name: z.string().optional(),
   };
 
-  const manageCostLocation: ToolDef<typeof manageShape> = {
+  const manageCostLocation = defineTool({
     name: "manage_cost_location",
     description:
       "Create, update, or delete a cost location. 'name' is required for create/update and ignored for delete.",
@@ -1227,7 +1233,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call(endpointKey, { code: args.code, name: args.name });
       return ok(result);
     },
-  };
+  });
 
   return [listCostLocations, manageCostLocation];
 }
@@ -1355,7 +1361,7 @@ Expected: FAIL — `Cannot find module './contacts.js'`
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["postingaccount_number", "name", "email", "city"] as const;
 
@@ -1384,7 +1390,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     full: z.boolean().default(false),
   };
 
-  const listContacts: ToolDef<typeof listShape> = {
+  const listContacts = defineTool({
     name: "list_contacts",
     description: "List debtors (Debitoren) or creditors (Kreditoren).",
     inputSchema: listShape,
@@ -1396,14 +1402,14 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       });
       return ok(trimList(result.data, SUMMARY_FIELDS, args.full ?? false));
     },
-  };
+  });
 
   const createShape = {
     contact_type: z.enum(["debtor", "creditor"]),
     contacts: z.array(z.object(contactFieldsShape)).min(1),
   };
 
-  const createContacts: ToolDef<typeof createShape> = {
+  const createContacts = defineTool({
     name: "create_contacts",
     description: "Create one or more debtors or creditors in a single batch call.",
     inputSchema: createShape,
@@ -1413,7 +1419,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call(endpointKey, { [payloadKey]: args.contacts });
       return ok(result);
     },
-  };
+  });
 
   const updateShape = {
     contact_type: z.enum(["debtor", "creditor"]),
@@ -1432,7 +1438,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     due_in_days: z.number().int().optional(),
   };
 
-  const updateContact: ToolDef<typeof updateShape> = {
+  const updateContact = defineTool({
     name: "update_contact",
     description: "Update an existing debtor or creditor, identified by postingaccount_number.",
     inputSchema: updateShape,
@@ -1442,7 +1448,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call(endpointKey, fields);
       return ok(result);
     },
-  };
+  });
 
   return [listContacts, createContacts, updateContact];
 }
@@ -1550,7 +1556,7 @@ Expected: FAIL — `Cannot find module './posting-accounts.js'`
 ```ts
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef] {
   const listShape = {
@@ -1562,7 +1568,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     exclude_debtors: z.boolean().optional(),
   };
 
-  const listPostingAccounts: ToolDef<typeof listShape> = {
+  const listPostingAccounts = defineTool({
     name: "list_posting_accounts",
     description: "List posting accounts (Buchungskonten / SKR chart of accounts entries).",
     inputSchema: listShape,
@@ -1570,7 +1576,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
       const result = await client.call("settingsGetPostingaccounts", args);
       return ok(result);
     },
-  };
+  });
 
   const manageShape = {
     action: z.enum(["create", "update"]),
@@ -1579,7 +1585,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     parent_postingaccount_number: z.number().int().optional(),
   };
 
-  const managePostingAccount: ToolDef<typeof manageShape> = {
+  const managePostingAccount = defineTool({
     name: "manage_posting_account",
     description:
       "Create or update a posting account. parent_postingaccount_number is required for create, ignored for update.",
@@ -1602,7 +1608,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
       });
       return ok(result);
     },
-  };
+  });
 
   return [listPostingAccounts, managePostingAccount];
 }
@@ -1791,7 +1797,7 @@ Expected: FAIL — `Cannot find module './receipts.js'`
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = [
   "id_by_customer",
@@ -1819,7 +1825,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     full: z.boolean().default(false),
   };
 
-  const listReceipts: ToolDef<typeof listShape> = {
+  const listReceipts = defineTool({
     name: "list_receipts",
     description: "List receipts (Belege), inbound or outbound, with optional filters.",
     inputSchema: listShape,
@@ -1832,14 +1838,14 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       });
       return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
     },
-  };
+  });
 
   const getShape = {
     id_by_customer: z.number().int(),
     get_file: z.boolean().optional(),
   };
 
-  const getReceipt: ToolDef<typeof getShape> = {
+  const getReceipt = defineTool({
     name: "get_receipt",
     description: "Get a single receipt by its id_by_customer.",
     inputSchema: getShape,
@@ -1848,7 +1854,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call("receiptsGetIdByCustomer", rest, { idSuffix: id_by_customer });
       return ok(result);
     },
-  };
+  });
 
   const receiptEntryShape = z.object({
     type: RECEIPT_TYPE,
@@ -1870,7 +1876,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     receipts: z.array(receiptEntryShape).min(1).max(50),
   };
 
-  const createReceipts: ToolDef<typeof createShape> = {
+  const createReceipts = defineTool({
     name: "create_receipts",
     description: "Create one or more receipts in a single batch call (up to 50).",
     inputSchema: createShape,
@@ -1878,7 +1884,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call("receiptsAddBatch", { receipts: args.receipts });
       return ok(result);
     },
-  };
+  });
 
   const uploadShape = {
     file: z.string(),
@@ -1898,7 +1904,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     link_to_receipt_id_by_customer: z.number().int().optional(),
   };
 
-  const uploadReceipt: ToolDef<typeof uploadShape> = {
+  const uploadReceipt = defineTool({
     name: "upload_receipt",
     description:
       "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata.",
@@ -1907,14 +1913,14 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call("receiptsUpload", args);
       return ok(result);
     },
-  };
+  });
 
   const setDeletedShape = {
     id_by_customer: z.number().int(),
     deleted: z.boolean(),
   };
 
-  const setReceiptDeleted: ToolDef<typeof setDeletedShape> = {
+  const setReceiptDeleted = defineTool({
     name: "set_receipt_deleted",
     description: "Mark a receipt as deleted (deleted: true) or restore it (deleted: false).",
     inputSchema: setDeletedShape,
@@ -1923,14 +1929,14 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call(endpointKey, {}, { idSuffix: args.id_by_customer });
       return ok(result);
     },
-  };
+  });
 
   const assignedShape = {
     receipt_id_by_customer: z.number().int(),
     confirmed_only: z.boolean().optional(),
   };
 
-  const getReceiptTransactions: ToolDef<typeof assignedShape> = {
+  const getReceiptTransactions = defineTool({
     name: "get_receipt_transactions",
     description: "Get all transactions assigned to a specific receipt.",
     inputSchema: assignedShape,
@@ -1938,7 +1944,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const result = await client.call("receiptsAssignedTransactionsGet", args);
       return ok(result);
     },
-  };
+  });
 
   return [listReceipts, getReceipt, createReceipts, uploadReceipt, setReceiptDeleted, getReceiptTransactions];
 }
@@ -2083,7 +2089,7 @@ Expected: FAIL — `Cannot find module './transactions.js'`
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["id_by_customer", "to_from", "amount", "booking_date", "purpose"] as const;
 
@@ -2102,7 +2108,7 @@ export function createTransactionsTools(
     full: z.boolean().default(false),
   };
 
-  const listTransactions: ToolDef<typeof listShape> = {
+  const listTransactions = defineTool({
     name: "list_transactions",
     description: "List bank/cash transactions, with optional filters.",
     inputSchema: listShape,
@@ -2115,11 +2121,11 @@ export function createTransactionsTools(
       });
       return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
     },
-  };
+  });
 
   const getShape = { id_by_customer: z.number().int() };
 
-  const getTransaction: ToolDef<typeof getShape> = {
+  const getTransaction = defineTool({
     name: "get_transaction",
     description: "Get a single transaction by its id_by_customer.",
     inputSchema: getShape,
@@ -2127,7 +2133,7 @@ export function createTransactionsTools(
       const result = await client.call("transactionsGetIdByCustomer", {}, { idSuffix: args.id_by_customer });
       return ok(result);
     },
-  };
+  });
 
   const transactionEntryShape = z.object({
     account: z.number().int(),
@@ -2149,7 +2155,7 @@ export function createTransactionsTools(
     transactions: z.array(transactionEntryShape).min(1).max(50),
   };
 
-  const createTransactions: ToolDef<typeof createShape> = {
+  const createTransactions = defineTool({
     name: "create_transactions",
     description: "Add one or more transactions to a payment account in a single batch call (up to 50).",
     inputSchema: createShape,
@@ -2157,7 +2163,7 @@ export function createTransactionsTools(
       const result = await client.call("transactionsAddBatch", { transactions: args.transactions });
       return ok(result);
     },
-  };
+  });
 
   const assignmentShape = z.object({
     transaction_id_by_customer: z.number().int(),
@@ -2168,7 +2174,7 @@ export function createTransactionsTools(
     assignments: z.array(assignmentShape).min(1).max(50),
   };
 
-  const assignReceiptsToTransactions: ToolDef<typeof assignShape> = {
+  const assignReceiptsToTransactions = defineTool({
     name: "assign_receipts_to_transactions",
     description: "Assign one or more receipts to transactions in a single batch call (up to 50).",
     inputSchema: assignShape,
@@ -2178,14 +2184,14 @@ export function createTransactionsTools(
       });
       return ok(result);
     },
-  };
+  });
 
   const unassignShape = {
     transaction_id_by_customer: z.number().int(),
     receipt_id_by_customer: z.number().int(),
   };
 
-  const unassignReceipt: ToolDef<typeof unassignShape> = {
+  const unassignReceipt = defineTool({
     name: "unassign_receipt",
     description: "Remove the assignment of a specific receipt from a transaction.",
     inputSchema: unassignShape,
@@ -2193,14 +2199,14 @@ export function createTransactionsTools(
       const result = await client.call("transactionsUnassignReceipt", args);
       return ok(result);
     },
-  };
+  });
 
   const assignedShape = {
     transaction_id_by_customer: z.number().int(),
     confirmed_only: z.boolean().optional(),
   };
 
-  const getTransactionReceipts: ToolDef<typeof assignedShape> = {
+  const getTransactionReceipts = defineTool({
     name: "get_transaction_receipts",
     description: "Get all receipts assigned to a specific transaction.",
     inputSchema: assignedShape,
@@ -2208,7 +2214,7 @@ export function createTransactionsTools(
       const result = await client.call("transactionsAssignedReceiptsGet", args);
       return ok(result);
     },
-  };
+  });
 
   return [
     listTransactions,
@@ -2417,7 +2423,7 @@ Expected: FAIL — `Cannot find module './postings.js'`
 ```ts
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 const splitShape = z.object({
   postingaccount: z.number().int(),
@@ -2467,7 +2473,7 @@ export function createPostingsTools(
     offset: z.number().int().default(0),
   };
 
-  const listPostings: ToolDef<typeof listShape> = {
+  const listPostings = defineTool({
     name: "list_postings",
     description: "List postings (Buchungen) within a required date range, with optional filters.",
     inputSchema: listShape,
@@ -2479,7 +2485,7 @@ export function createPostingsTools(
       });
       return ok(result);
     },
-  };
+  });
 
   const receiptPostingEntryShape = z.object({
     receipt_id_by_customer: z.number().int(),
@@ -2492,7 +2498,7 @@ export function createPostingsTools(
     receipts: z.array(receiptPostingEntryShape).min(1),
   };
 
-  const addReceiptPostings: ToolDef<typeof addReceiptPostingsShape> = {
+  const addReceiptPostings = defineTool({
     name: "add_receipt_postings",
     description: "Book one or more receipts onto posting accounts in a single batch call.",
     inputSchema: addReceiptPostingsShape,
@@ -2501,7 +2507,7 @@ export function createPostingsTools(
       const result = await client.call("postingsAddBatchReceipts", { receipts });
       return ok(result);
     },
-  };
+  });
 
   const transactionPostingEntryShape = z.object({
     transaction_id_by_customer: z.number().int(),
@@ -2513,7 +2519,7 @@ export function createPostingsTools(
     transactions: z.array(transactionPostingEntryShape).min(1),
   };
 
-  const addTransactionPostings: ToolDef<typeof addTransactionPostingsShape> = {
+  const addTransactionPostings = defineTool({
     name: "add_transaction_postings",
     description: "Book one or more transactions onto posting accounts in a single batch call.",
     inputSchema: addTransactionPostingsShape,
@@ -2522,7 +2528,7 @@ export function createPostingsTools(
       const result = await client.call("postingsAddBatchTransactions", { transactions });
       return ok(result);
     },
-  };
+  });
 
   const freePostingEntryShape = z.object({
     date: z.string(),
@@ -2539,7 +2545,7 @@ export function createPostingsTools(
     free_postings: z.array(freePostingEntryShape).min(1),
   };
 
-  const addFreePostings: ToolDef<typeof addFreePostingsShape> = {
+  const addFreePostings = defineTool({
     name: "add_free_postings",
     description: "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch call.",
     inputSchema: addFreePostingsShape,
@@ -2547,14 +2553,14 @@ export function createPostingsTools(
       const result = await client.call("postingsAddBatchFree", { free_postings: args.free_postings });
       return ok(result);
     },
-  };
+  });
 
   const unconfirmShape = {
     type: z.enum(["transaction", "receipt", "free"]),
     id_by_customer: z.number().int(),
   };
 
-  const unconfirmPosting: ToolDef<typeof unconfirmShape> = {
+  const unconfirmPosting = defineTool({
     name: "unconfirm_posting",
     description: "Unconfirm a fixed posting so it can be edited again. type selects which kind of posting.",
     inputSchema: unconfirmShape,
@@ -2574,14 +2580,14 @@ export function createPostingsTools(
       const result = await client.call("postingsUnconfirmFree", { posting_id_by_customer: args.id_by_customer });
       return ok(result);
     },
-  };
+  });
 
   const assignShape = {
     receipt_id_by_customer: z.number().int(),
     posting_id_by_customer: z.number().int(),
   };
 
-  const assignReceiptToFreePosting: ToolDef<typeof assignShape> = {
+  const assignReceiptToFreePosting = defineTool({
     name: "assign_receipt_to_free_posting",
     description: "Assign a receipt to an existing free posting.",
     inputSchema: assignShape,
@@ -2589,7 +2595,7 @@ export function createPostingsTools(
       const result = await client.call("postingsAssignReceiptToFreePosting", args);
       return ok(result);
     },
-  };
+  });
 
   return [
     listPostings,
@@ -2743,7 +2749,7 @@ Expected: FAIL — `Cannot find module './invoices.js'`
 ```ts
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 const invoiceItemShape = z.object({
   name: z.string(),
@@ -2809,7 +2815,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     items: z.array(invoiceItemShape).min(1),
   };
 
-  const createInvoice: ToolDef<typeof createInvoiceShape> = {
+  const createInvoice = defineTool({
     name: "create_invoice",
     description:
       "Create an invoice, credit note, or offer (type selects which). draft: true saves it as a draft instead of finalizing it.",
@@ -2821,7 +2827,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call(endpointKey, payload);
       return ok(result);
     },
-  };
+  });
 
   const createEInvoiceShape = {
     ...baseInvoiceFields,
@@ -2834,7 +2840,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     items: z.array(eInvoiceItemShape).min(1),
   };
 
-  const createEInvoice: ToolDef<typeof createEInvoiceShape> = {
+  const createEInvoice = defineTool({
     name: "create_einvoice",
     description: "Create a structured e-invoice (e.g. XRechnung/ZUGFeRD) with tax-type/tax-amount line items.",
     inputSchema: createEInvoiceShape,
@@ -2850,7 +2856,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call("invoicesCreateEInvoice", payload);
       return ok(result);
     },
-  };
+  });
 
   return [createInvoice, createEInvoice];
 }
