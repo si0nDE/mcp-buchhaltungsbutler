@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import type { BBListResult } from "../bb-client/client.js";
-import { ok, type ToolDef } from "./types.js";
+import { defineTool, ok, type ToolDef } from "./types.js";
 
 export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
-  const listAccounts: ToolDef = {
+  const listAccounts = defineTool({
     name: "list_accounts",
     description: "List all basic accounts (cash, bank, other) configured in BuchhaltungsButler.",
     inputSchema: {},
@@ -12,7 +12,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call<BBListResult>("accountsGet", {});
       return ok(result.data);
     },
-  };
+  });
 
   const createAccountShape = {
     type: z.enum(["cash", "bank/institution", "other"]),
@@ -22,7 +22,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
     is_revision_safe: z.boolean().optional(),
   };
 
-  const createAccount: ToolDef<typeof createAccountShape> = {
+  const createAccount = defineTool({
     name: "create_account",
     description: "Create a new basic account (cash register, bank account, or other).",
     inputSchema: createAccountShape,
@@ -30,7 +30,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
       const result = await client.call("accountsAdd", args);
       return ok(result);
     },
-  };
+  });
 
-  return [listAccounts, createAccount as unknown as ToolDef];
+  return [listAccounts, createAccount];
 }

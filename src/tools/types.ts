@@ -15,3 +15,7 @@ export interface ToolDef<Shape extends ZodRawShape = ZodRawShape> {
 export function ok(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
+
+export function defineTool<Shape extends ZodRawShape>(tool: ToolDef<Shape>): ToolDef {
+  return tool as unknown as ToolDef;
+}
