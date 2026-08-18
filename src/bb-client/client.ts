@@ -56,22 +56,32 @@ export function createClient(config: Config, fetchImpl: typeof fetch = fetch): B
         body: JSON.stringify({ ...params, api_key: config.apiKey }),
       });
 
-      const json = await response.json();
+      const responseText = await response.text();
+      let body: unknown;
+      try {
+        body = responseText ? JSON.parse(responseText) : undefined;
+      } catch {
+        body = responseText;
+      }
 
       if (response.status === 429) {
-        throw new BuchhaltungsButlerRateLimitError(endpoint.path, json);
+        throw new BuchhaltungsButlerRateLimitError(endpoint.path, body);
       }
 
       if (!response.ok) {
+        const bbMessage =
+          body !== null && typeof body === "object" && "message" in body && typeof (body as { message: unknown }).message === "string"
+            ? (body as { message: string }).message
+            : undefined;
         throw new BuchhaltungsButlerApiError(
-          `BuchhaltungsButler API error on ${endpointKey}: HTTP ${response.status}`,
+          `BuchhaltungsButler API error on ${endpointKey}: HTTP ${response.status}${bbMessage ? ` — ${bbMessage}` : ""}`,
           response.status,
           endpoint.path,
-          json
+          body
         );
       }
 
-      return json as T;
+      return body as T;
     },
   };
 }
