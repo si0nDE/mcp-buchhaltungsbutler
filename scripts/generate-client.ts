@@ -85,9 +85,9 @@ export interface EndpointDef {
   params: EndpointParam[];
 }
 
-export const ENDPOINTS: readonly EndpointDef[] = [
+export const ENDPOINTS = [
 ${entries}
-] as const;
+] as const satisfies readonly EndpointDef[];
 
 export type EndpointKey = (typeof ENDPOINTS)[number]["key"];
 `;
