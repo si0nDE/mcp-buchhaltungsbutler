@@ -1264,7 +1264,7 @@ git commit -m "feat: add list_cost_locations and manage_cost_location MCP tools"
 **Acceptance Criteria:**
 - [ ] `list_contacts` with `contact_type: "debtor"` calls `settingsGetDebtors`; with `"creditor"` calls `settingsGetCreditors`; both pass through `limit`/`offset` and default `limit` to 20
 - [ ] `create_contacts` with `contact_type: "debtor"` calls `settingsAddBatchDebtors` with `{debtors: [...]}`; with `"creditor"` calls `settingsAddBatchCreditors` with `{creditors: [...]}`; both require a non-empty array of `{name, postingaccount_number?, contact_person_name?, street?, additional_address_line?, zip?, city?, country?, sales_tax_id?, email?, iban?, bic?, customer_number?, due_in_days?}` entries
-- [ ] `update_contact` with `contact_type: "debtor"` calls `settingsUpdateDebtor`; with `"creditor"` calls `settingsUpdateCreditor`; both require `postingaccount_number`
+- [ ] `update_contact` with `contact_type: "debtor"` calls `settingsUpdateDebtor`; with `"creditor"` calls `settingsUpdateCreditor`; both require `postingaccount_number`. `customer_number` (debtor-only per spec) is forwarded only on the debtor branch; `due_in_days` (creditor-only per spec) is forwarded only on the creditor branch — neither is sent to the endpoint that doesn't support it
 
 **Verify:** `npm test -- src/tools/contacts.test.ts` → all pass
 
@@ -1435,17 +1435,28 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     email: z.string().optional(),
     iban: z.string().optional(),
     bic: z.string().optional(),
+    customer_number: z.string().optional(),
     due_in_days: z.number().int().optional(),
   };
 
   const updateContact = defineTool({
     name: "update_contact",
-    description: "Update an existing debtor or creditor, identified by postingaccount_number.",
+    description:
+      "Update an existing debtor or creditor, identified by postingaccount_number. customer_number only applies to debtors, due_in_days only applies to creditors — the other is dropped from the request depending on contact_type.",
     inputSchema: updateShape,
     async handler(args) {
-      const { contact_type, ...fields } = args;
-      const endpointKey = contact_type === "debtor" ? "settingsUpdateDebtor" : "settingsUpdateCreditor";
-      const result = await client.call(endpointKey, fields);
+      const { contact_type, customer_number, due_in_days, ...fields } = args;
+      if (contact_type === "debtor") {
+        const result = await client.call("settingsUpdateDebtor", {
+          ...fields,
+          ...(customer_number !== undefined ? { customer_number } : {}),
+        });
+        return ok(result);
+      }
+      const result = await client.call("settingsUpdateCreditor", {
+        ...fields,
+        ...(due_in_days !== undefined ? { due_in_days } : {}),
+      });
       return ok(result);
     },
   });
