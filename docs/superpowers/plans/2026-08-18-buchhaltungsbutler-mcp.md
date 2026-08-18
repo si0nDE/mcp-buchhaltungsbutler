@@ -1116,7 +1116,7 @@ git commit -m "feat: add add_comment MCP tool"
 - [ ] `list_cost_locations` calls `costLocationsGet` and returns trimmed `{code, name}` records by default, full records when `full: true`
 - [ ] `manage_cost_location` with `action: "create"` calls `costLocationsAdd` with `{code, name}`
 - [ ] `manage_cost_location` with `action: "update"` calls `costLocationsUpdate` with `{code, name}`
-- [ ] `manage_cost_location` with `action: "delete"` calls `costLocationsDelete` with `{code}` only (rejects `name` via Zod discriminated union if provided for delete)
+- [ ] `manage_cost_location` with `action: "delete"` calls `costLocationsDelete` with `{code}` only, ignoring `name` even if the caller passed it (runtime action-branch, not a Zod discriminated union — `name` is a plain optional field, same pattern as `manage_posting_account` in Task 10 and `unconfirm_posting` in Task 13, kept consistent across every action-parameterized tool in this codebase rather than special-cased here)
 
 **Verify:** `npm test -- src/tools/cost-locations.test.ts` → all pass
 
