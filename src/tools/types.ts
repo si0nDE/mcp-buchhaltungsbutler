@@ -3,6 +3,10 @@ import type { z, ZodRawShape } from "zod";
 export interface CallToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  // The MCP SDK's CallToolResult (from CallToolResultSchema) allows arbitrary
+  // extra properties; without this index signature, TS rejects assigning our
+  // handlers to `server.registerTool`'s callback parameter.
+  [x: string]: unknown;
 }
 
 export interface ToolDef<Shape extends ZodRawShape = ZodRawShape> {
