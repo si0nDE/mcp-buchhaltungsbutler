@@ -13,7 +13,7 @@ export interface EndpointDef {
   params: EndpointParam[];
 }
 
-export const ENDPOINTS: readonly EndpointDef[] = [
+export const ENDPOINTS = [
   { key: "accountsAdd", path: "/accounts/add", params: [{ name: "api_key", required: true, type: "string" }, { name: "type", required: true, type: "string" }, { name: "name", required: true, type: "string" }, { name: "postingaccount_number", required: true, type: "integer" }, { name: "receipt_creates_transaction", required: false, type: "boolean" }, { name: "is_revision_safe", required: false, type: "boolean" }] },
   { key: "accountsGet", path: "/accounts/get", params: [{ name: "api_key", required: true, type: "string" }] },
   { key: "commentsAdd", path: "/comments/add", params: [{ name: "api_key", required: true, type: "string" }, { name: "comment_text", required: true, type: "string" }, { name: "transaction_id_by_customer", required: false, type: "integer" }, { name: "receipt_id_by_customer", required: false, type: "integer" }] },
@@ -62,6 +62,6 @@ export const ENDPOINTS: readonly EndpointDef[] = [
   { key: "transactionsGet", path: "/transactions/get", params: [{ name: "api_key", required: true, type: "string" }, { name: "id_by_customer_from", required: false, type: "integer" }, { name: "id_by_customer_to", required: false, type: "integer" }, { name: "date_from", required: false, type: "string" }, { name: "date_to", required: false, type: "string" }, { name: "account", required: false, type: "integer" }, { name: "to_from", required: false, type: "string" }, { name: "limit", required: false, type: "integer" }, { name: "offset", required: false, type: "integer" }] },
   { key: "transactionsGetIdByCustomer", path: "/transactions/get/id_by_customer", params: [{ name: "api_key", required: true, type: "string" }] },
   { key: "transactionsUnassignReceipt", path: "/transactions/unassign/receipt", params: [{ name: "api_key", required: true, type: "string" }, { name: "transaction_id_by_customer", required: true, type: "integer" }, { name: "receipt_id_by_customer", required: true, type: "integer" }] },
-] as const;
+] as const satisfies readonly EndpointDef[];
 
 export type EndpointKey = (typeof ENDPOINTS)[number]["key"];
