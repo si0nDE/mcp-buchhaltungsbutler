@@ -10,7 +10,7 @@ export function trimList<T extends Record<string, unknown>>(
     const out: Partial<T> = {};
     for (const field of fields) {
       if (field in record) {
-        out[field as keyof T] = record[field];
+        out[field as keyof T] = record[field as keyof T];
       }
     }
     return out;
