@@ -53,7 +53,7 @@ export function createClient(config: Config, fetchImpl: typeof fetch = fetch): B
           Authorization: `Basic ${auth}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ api_key: config.apiKey, ...params }),
+        body: JSON.stringify({ ...params, api_key: config.apiKey }),
       });
 
       const json = await response.json();
