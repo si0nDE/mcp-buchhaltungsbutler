@@ -21,15 +21,15 @@ function flattenSplits(splits: Split[]): {
   cost_locations?: string[];
   cost_locations_two?: string[];
 } {
-  const costLocations = splits.map((s) => s.cost_location);
-  const costLocationsTwo = splits.map((s) => s.cost_location_two);
+  const hasCostLocation = splits.some((s) => s.cost_location !== undefined);
+  const hasCostLocationTwo = splits.some((s) => s.cost_location_two !== undefined);
   return {
     postingaccounts: splits.map((s) => s.postingaccount),
     postingtexts: splits.map((s) => s.postingtext),
     vats: splits.map((s) => s.vat),
     amounts: splits.map((s) => s.amount),
-    ...(costLocations.some((c) => c !== undefined) ? { cost_locations: costLocations as string[] } : {}),
-    ...(costLocationsTwo.some((c) => c !== undefined) ? { cost_locations_two: costLocationsTwo as string[] } : {}),
+    ...(hasCostLocation ? { cost_locations: splits.map((s) => s.cost_location ?? "") } : {}),
+    ...(hasCostLocationTwo ? { cost_locations_two: splits.map((s) => s.cost_location_two ?? "") } : {}),
   };
 }
 

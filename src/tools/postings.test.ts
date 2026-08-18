@@ -54,6 +54,36 @@ describe("postings tools", () => {
     });
   });
 
+  it("add_receipt_postings fills missing cost_location with empty string in mixed-presence batches", async () => {
+    const client = mockClient({ success: true });
+    const [, addReceiptPostings] = createPostingsTools(client);
+
+    await addReceiptPostings.handler({
+      receipts: [
+        {
+          receipt_id_by_customer: 42,
+          creditor: 70001,
+          debtor: 10001,
+          splits: [
+            { postingaccount: 6815, postingtext: "Büromaterial", vat: "19", amount: "100.00", cost_location: "CL1" },
+            { postingaccount: 6816, postingtext: "Porto", vat: "19", amount: "5.00" },
+          ],
+        },
+      ],
+    });
+
+    expect(client.call).toHaveBeenCalledWith(
+      "postingsAddBatchReceipts",
+      expect.objectContaining({
+        receipts: [
+          expect.objectContaining({
+            cost_locations: ["CL1", ""],
+          }),
+        ],
+      })
+    );
+  });
+
   it("add_transaction_postings flattens splits into parallel arrays", async () => {
     const client = mockClient({ success: true });
     const [, , addTransactionPostings] = createPostingsTools(client);
