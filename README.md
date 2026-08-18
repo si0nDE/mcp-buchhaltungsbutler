@@ -10,6 +10,28 @@ MCP server exposing the BuchhaltungsButler API (v1) as curated, token-efficient 
 4. `npm test`
 5. `npm run build && npm start` — or `npm run dev` for a quick local run without building.
 
+## Using with an MCP client
+
+The `.env` file only covers local `npm run dev`/`npm start` runs. A real MCP client (e.g. Claude Desktop) launches the server itself and does not read `.env`, so pass credentials via the client's `env` config instead. Example `claude_desktop_config.json` entry:
+
+```json
+{
+  "mcpServers": {
+    "buchhaltungsbutler": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-buchhaltungsbutler/dist/index.js"],
+      "env": {
+        "BB_API_CLIENT": "your-api-client",
+        "BB_API_SECRET": "your-api-secret",
+        "BB_API_KEY": "your-customer-api-key"
+      }
+    }
+  }
+}
+```
+
+Run `npm run build` first so `dist/index.js` exists.
+
 ## Tools
 
 **Accounts:** `list_accounts`, `create_account`
