@@ -75,6 +75,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     email: z.string().optional(),
     iban: z.string().optional(),
     bic: z.string().optional(),
+    customer_number: z.string().optional(),
     due_in_days: z.number().int().optional(),
   };
 
@@ -83,9 +84,18 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     description: "Update an existing debtor or creditor, identified by postingaccount_number.",
     inputSchema: updateShape,
     async handler(args) {
-      const { contact_type, ...fields } = args;
-      const endpointKey = contact_type === "debtor" ? "settingsUpdateDebtor" : "settingsUpdateCreditor";
-      const result = await client.call(endpointKey, fields);
+      const { contact_type, customer_number, due_in_days, ...fields } = args;
+      if (contact_type === "debtor") {
+        const result = await client.call("settingsUpdateDebtor", {
+          ...fields,
+          ...(customer_number !== undefined ? { customer_number } : {}),
+        });
+        return ok(result);
+      }
+      const result = await client.call("settingsUpdateCreditor", {
+        ...fields,
+        ...(due_in_days !== undefined ? { due_in_days } : {}),
+      });
       return ok(result);
     },
   });
