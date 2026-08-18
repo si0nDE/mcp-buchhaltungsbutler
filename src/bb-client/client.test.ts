@@ -93,6 +93,37 @@ describe("createClient", () => {
     expect((error as InstanceType<typeof BuchhaltungsButlerApiError>).endpoint).toBe("/accounts/get");
   });
 
+  it("surfaces BuchhaltungsButler's own error message in the thrown error's message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(400, { success: false, message: "invalid counterparty specified" })
+    );
+    const client = createClient(config, fetchMock as unknown as typeof fetch);
+
+    const error = await client.call("accountsGet", {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BuchhaltungsButlerApiError);
+    expect((error as Error).message).toContain("invalid counterparty specified");
+  });
+
+  it("throws a BuchhaltungsButlerApiError (not a raw SyntaxError) when the error body is non-JSON text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("Internal Server Error", { status: 500, headers: { "Content-Type": "text/plain" } })
+    );
+    const client = createClient(config, fetchMock as unknown as typeof fetch);
+
+    const error = await client.call("accountsGet", {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BuchhaltungsButlerApiError);
+    expect((error as InstanceType<typeof BuchhaltungsButlerApiError>).responseBody).toBe("Internal Server Error");
+  });
+
+  it("throws a BuchhaltungsButlerApiError (not a raw SyntaxError) when the error body is empty", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
+    const client = createClient(config, fetchMock as unknown as typeof fetch);
+
+    const error = await client.call("accountsGet", {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BuchhaltungsButlerApiError);
+    expect((error as InstanceType<typeof BuchhaltungsButlerApiError>).responseBody).toBeUndefined();
+  });
+
   it("throws synchronously for an unknown endpoint key", async () => {
     const fetchMock = vi.fn();
     const client = createClient(config, fetchMock as unknown as typeof fetch);
