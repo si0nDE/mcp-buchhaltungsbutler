@@ -36,6 +36,20 @@ describe("createClient", () => {
     );
   });
 
+  it("does not let params.api_key override the configured api_key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true, rows: 0, data: [] }));
+    const client = createClient(config, fetchMock as unknown as typeof fetch);
+
+    await client.call("accountsGet", { api_key: "attacker-supplied-key" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://webapp.buchhaltungsbutler.de/api/v1/accounts/get",
+      expect.objectContaining({
+        body: JSON.stringify({ api_key: "customer-key" }),
+      })
+    );
+  });
+
   it("throws before calling fetch when a required field is missing", async () => {
     const fetchMock = vi.fn();
     const client = createClient(config, fetchMock as unknown as typeof fetch);
