@@ -1278,13 +1278,13 @@ function mockClient(result: unknown): BBClient {
 }
 
 describe("contacts tools", () => {
-  it("list_contacts routes debtor to settingsGetDebtors with limit default", async () => {
+  it("list_contacts routes debtor to settingsGetDebtors with limit/offset defaults", async () => {
     const client = mockClient({ success: true, rows: 0, data: [] });
     const [listContacts] = createContactsTools(client);
 
     await listContacts.handler({ contact_type: "debtor" });
 
-    expect(client.call).toHaveBeenCalledWith("settingsGetDebtors", { limit: 20 });
+    expect(client.call).toHaveBeenCalledWith("settingsGetDebtors", { limit: 20, offset: 0 });
   });
 
   it("list_contacts routes creditor to settingsGetCreditors", async () => {
@@ -1391,10 +1391,10 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     async handler(args) {
       const endpointKey = args.contact_type === "debtor" ? "settingsGetDebtors" : "settingsGetCreditors";
       const result = await client.call<BBListResult>(endpointKey, {
-        limit: args.limit,
-        offset: args.offset,
+        limit: args.limit ?? 20,
+        offset: args.offset ?? 0,
       });
-      return ok(trimList(result.data, SUMMARY_FIELDS, args.full));
+      return ok(trimList(result.data, SUMMARY_FIELDS, args.full ?? false));
     },
   };
 
@@ -1678,7 +1678,11 @@ describe("receipts tools", () => {
 
     const result = await listReceipts.handler({ list_direction: "inbound" });
 
-    expect(client.call).toHaveBeenCalledWith("receiptsGet", { list_direction: "inbound", limit: 20 });
+    expect(client.call).toHaveBeenCalledWith("receiptsGet", {
+      list_direction: "inbound",
+      limit: 20,
+      offset: 0,
+    });
     expect(JSON.parse(result.content[0].text)).toEqual([
       {
         id_by_customer: "1",
@@ -1820,9 +1824,13 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     description: "List receipts (Belege), inbound or outbound, with optional filters.",
     inputSchema: listShape,
     async handler(args) {
-      const { full, ...filters } = args;
-      const result = await client.call<BBListResult>("receiptsGet", filters);
-      return ok(trimList(result.data, SUMMARY_FIELDS, full));
+      const { full, limit, offset, ...filters } = args;
+      const result = await client.call<BBListResult>("receiptsGet", {
+        ...filters,
+        limit: limit ?? 20,
+        offset: offset ?? 0,
+      });
+      return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
     },
   };
 
@@ -1996,7 +2004,7 @@ describe("transactions tools", () => {
 
     const result = await listTransactions.handler({});
 
-    expect(client.call).toHaveBeenCalledWith("transactionsGet", { limit: 20 });
+    expect(client.call).toHaveBeenCalledWith("transactionsGet", { limit: 20, offset: 0 });
     expect(JSON.parse(result.content[0].text)).toEqual([
       { id_by_customer: "1", to_from: "ACME", amount: "-10.00", booking_date: "2026-01-01", purpose: "Miete" },
     ]);
@@ -2099,9 +2107,13 @@ export function createTransactionsTools(
     description: "List bank/cash transactions, with optional filters.",
     inputSchema: listShape,
     async handler(args) {
-      const { full, ...filters } = args;
-      const result = await client.call<BBListResult>("transactionsGet", filters);
-      return ok(trimList(result.data, SUMMARY_FIELDS, full));
+      const { full, limit, offset, ...filters } = args;
+      const result = await client.call<BBListResult>("transactionsGet", {
+        ...filters,
+        limit: limit ?? 20,
+        offset: offset ?? 0,
+      });
+      return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
     },
   };
 
@@ -2267,6 +2279,7 @@ describe("postings tools", () => {
       date_from: "2026-01-01",
       date_to: "2026-01-31",
       limit: 20,
+      offset: 0,
     });
   });
 
@@ -2459,7 +2472,11 @@ export function createPostingsTools(
     description: "List postings (Buchungen) within a required date range, with optional filters.",
     inputSchema: listShape,
     async handler(args) {
-      const result = await client.call("postingsGet", args);
+      const result = await client.call("postingsGet", {
+        ...args,
+        limit: args.limit ?? 20,
+        offset: args.offset ?? 0,
+      });
       return ok(result);
     },
   };
