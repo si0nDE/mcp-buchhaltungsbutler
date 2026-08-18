@@ -68,4 +68,38 @@ describe("contacts tools", () => {
       city: "Berlin",
     });
   });
+
+  it("update_contact forwards customer_number for debtor but drops due_in_days", async () => {
+    const client = mockClient({ success: true });
+    const [, , updateContact] = createContactsTools(client);
+
+    await updateContact.handler({
+      contact_type: "debtor",
+      postingaccount_number: 10001,
+      customer_number: "K-100",
+      due_in_days: 30,
+    });
+
+    expect(client.call).toHaveBeenCalledWith("settingsUpdateDebtor", {
+      postingaccount_number: 10001,
+      customer_number: "K-100",
+    });
+  });
+
+  it("update_contact forwards due_in_days for creditor but drops customer_number", async () => {
+    const client = mockClient({ success: true });
+    const [, , updateContact] = createContactsTools(client);
+
+    await updateContact.handler({
+      contact_type: "creditor",
+      postingaccount_number: 20001,
+      due_in_days: 14,
+      customer_number: "K-100",
+    });
+
+    expect(client.call).toHaveBeenCalledWith("settingsUpdateCreditor", {
+      postingaccount_number: 20001,
+      due_in_days: 14,
+    });
+  });
 });
