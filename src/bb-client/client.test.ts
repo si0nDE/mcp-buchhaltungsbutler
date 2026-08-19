@@ -30,8 +30,9 @@ describe("createClient", () => {
         method: "POST",
         headers: expect.objectContaining({
           Authorization: `Basic ${Buffer.from("app-client:app-secret").toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
         }),
-        body: JSON.stringify({ api_key: "customer-key" }),
+        body: "api_key=customer-key",
       })
     );
   });
@@ -45,7 +46,24 @@ describe("createClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://webapp.buchhaltungsbutler.de/api/v1/accounts/get",
       expect.objectContaining({
-        body: JSON.stringify({ api_key: "customer-key" }),
+        body: "api_key=customer-key",
+      })
+    );
+  });
+
+  it("form-encodes nested arrays and objects with bracket notation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true }));
+    const client = createClient(config, fetchMock as unknown as typeof fetch);
+
+    await client.call("receiptsAddBatch", {
+      receipts: [{ type: "invoice inbound", counterparty: "ACME & Co" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body:
+          "receipts%5B0%5D%5Btype%5D=invoice%20inbound&receipts%5B0%5D%5Bcounterparty%5D=ACME%20%26%20Co&api_key=customer-key",
       })
     );
   });
