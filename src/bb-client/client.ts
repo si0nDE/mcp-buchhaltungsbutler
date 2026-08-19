@@ -29,6 +29,42 @@ export interface BBClient {
 
 const endpointByKey = new Map(ENDPOINTS.map((e) => [e.key, e]));
 
+function encodeFormValue(key: string, value: unknown, parts: string[]): void {
+  if (value === undefined || value === null) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => {
+      if (item !== null && typeof item === "object") {
+        for (const [k, v] of Object.entries(item as Record<string, unknown>)) {
+          encodeFormValue(`${key}[${i}][${k}]`, v, parts);
+        }
+      } else {
+        encodeFormValue(`${key}[${i}]`, item, parts);
+      }
+    });
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      encodeFormValue(`${key}[${k}]`, v, parts);
+    }
+    return;
+  }
+  parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+}
+
+// BuchhaltungsButler's backend reads the request body as classic PHP $_POST,
+// not JSON, despite the Swagger spec modeling every field as "in: body" —
+// confirmed by the spec's own error code 23 ("no post and files content
+// received or declined"), which is the exact symptom of an empty $_POST
+// caused by a non-form-encoded body.
+function encodeFormBody(payload: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(payload)) {
+    encodeFormValue(key, value, parts);
+  }
+  return parts.join("&");
+}
+
 export function createClient(config: Config, fetchImpl: typeof fetch = fetch): BBClient {
   return {
     async call<T>(endpointKey: EndpointKey, params: Record<string, unknown>, options?: CallOptions) {
@@ -51,9 +87,9 @@ export function createClient(config: Config, fetchImpl: typeof fetch = fetch): B
         method: "POST",
         headers: {
           Authorization: `Basic ${auth}`,
-          "Content-Type": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: JSON.stringify({ ...params, api_key: config.apiKey }),
+        body: encodeFormBody({ ...params, api_key: config.apiKey }),
       });
 
       const responseText = await response.text();
