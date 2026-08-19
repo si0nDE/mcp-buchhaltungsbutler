@@ -11,7 +11,7 @@ export function createServer(client: BBClient): McpServer {
   for (const tool of createAllTools(client)) {
     server.registerTool(
       tool.name,
-      { description: tool.description, inputSchema: tool.inputSchema },
+      { description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations },
       tool.handler
     );
   }

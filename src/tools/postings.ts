@@ -53,6 +53,7 @@ export function createPostingsTools(
   const listPostings = defineTool({
     name: "list_postings",
     description: "List postings (Buchungen) within a required date range, with optional filters.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
       const result = await client.call("postingsGet", {
@@ -78,6 +79,7 @@ export function createPostingsTools(
   const addReceiptPostings = defineTool({
     name: "add_receipt_postings",
     description: "Book one or more receipts onto posting accounts in a single batch call.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: addReceiptPostingsShape,
     async handler(args) {
       const receipts = args.receipts.map(({ splits, ...rest }) => ({ ...rest, ...flattenSplits(splits) }));
@@ -99,6 +101,7 @@ export function createPostingsTools(
   const addTransactionPostings = defineTool({
     name: "add_transaction_postings",
     description: "Book one or more transactions onto posting accounts in a single batch call.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: addTransactionPostingsShape,
     async handler(args) {
       const transactions = args.transactions.map(({ splits, ...rest }) => ({ ...rest, ...flattenSplits(splits) }));
@@ -125,6 +128,7 @@ export function createPostingsTools(
   const addFreePostings = defineTool({
     name: "add_free_postings",
     description: "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch call.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: addFreePostingsShape,
     async handler(args) {
       const result = await client.call("postingsAddBatchFree", { free_postings: args.free_postings });
@@ -140,6 +144,7 @@ export function createPostingsTools(
   const unconfirmPosting = defineTool({
     name: "unconfirm_posting",
     description: "Unconfirm a fixed posting so it can be edited again. type selects which kind of posting.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: unconfirmShape,
     async handler(args) {
       if (args.type === "transaction") {
@@ -167,6 +172,7 @@ export function createPostingsTools(
   const assignReceiptToFreePosting = defineTool({
     name: "assign_receipt_to_free_posting",
     description: "Assign a receipt to an existing free posting.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: assignShape,
     async handler(args) {
       const result = await client.call("postingsAssignReceiptToFreePosting", args);

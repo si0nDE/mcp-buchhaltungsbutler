@@ -28,4 +28,44 @@ describe("createServer", () => {
     expect(client.call).toHaveBeenCalledWith("accountsGet", {});
     expect(JSON.parse(result.content[0].text)).toEqual([{ name: "Kasse", postingaccount_number: "1000" }]);
   });
+
+  it("every registered tool has explicit readOnlyHint and destructiveHint annotations", () => {
+    const server = createServer(mockClient({}));
+    const registeredTools = (
+      server as unknown as {
+        _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }>;
+      }
+    )._registeredTools;
+
+    for (const [name, tool] of Object.entries(registeredTools)) {
+      expect(typeof tool.annotations?.readOnlyHint, `${name} readOnlyHint`).toBe("boolean");
+      expect(typeof tool.annotations?.destructiveHint, `${name} destructiveHint`).toBe("boolean");
+    }
+  });
+
+  it("marks read tools as readOnlyHint and non-destructive", () => {
+    const server = createServer(mockClient({}));
+    const registeredTools = (
+      server as unknown as {
+        _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }>;
+      }
+    )._registeredTools;
+
+    for (const name of ["list_accounts", "list_receipts", "get_receipt", "list_postings"]) {
+      expect(registeredTools[name].annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
+    }
+  });
+
+  it("marks the two delete-capable tools as destructiveHint", () => {
+    const server = createServer(mockClient({}));
+    const registeredTools = (
+      server as unknown as {
+        _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }>;
+      }
+    )._registeredTools;
+
+    for (const name of ["manage_cost_location", "set_receipt_deleted"]) {
+      expect(registeredTools[name].annotations).toEqual({ readOnlyHint: false, destructiveHint: true });
+    }
+  });
 });

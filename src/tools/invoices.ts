@@ -85,6 +85,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       "Create an invoice, credit note, or offer (type selects which). draft: true saves it as a draft " +
       "(invoicesCreateDraft) instead of finalizing it (invoicesCreate); draft mode does not support " +
       "invoicenumber, due_days, or payment_reference.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: createInvoiceShape,
     async handler(args) {
       const { draft, items, invoicenumber, due_days, payment_reference, ...fields } = args;
@@ -127,6 +128,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     description:
       "Create a structured e-invoice (e.g. XRechnung/ZUGFeRD) with tax-type/tax-amount line items. " +
       "Requires the full postal address and email in addition to the base invoice fields.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: createEInvoiceShape,
     async handler(args) {
       const { items, ...fields } = args;

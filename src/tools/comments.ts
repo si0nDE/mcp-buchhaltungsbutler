@@ -12,6 +12,7 @@ export function createCommentsTools(client: BBClient): [ToolDef] {
   const addComment = defineTool({
     name: "add_comment",
     description: "Add a comment to a transaction or a receipt (provide the matching id).",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: addCommentShape,
     async handler(args) {
       const result = await client.call("commentsAdd", args);

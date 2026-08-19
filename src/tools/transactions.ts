@@ -23,6 +23,7 @@ export function createTransactionsTools(
   const listTransactions = defineTool({
     name: "list_transactions",
     description: "List bank/cash transactions, with optional filters.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
       const { full, limit, offset, ...filters } = args;
@@ -40,6 +41,7 @@ export function createTransactionsTools(
   const getTransaction = defineTool({
     name: "get_transaction",
     description: "Get a single transaction by its id_by_customer.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: getShape,
     async handler(args) {
       const result = await client.call("transactionsGetIdByCustomer", {}, { idSuffix: args.id_by_customer });
@@ -70,6 +72,7 @@ export function createTransactionsTools(
   const createTransactions = defineTool({
     name: "create_transactions",
     description: "Add one or more transactions to a payment account in a single batch call (up to 50).",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: createShape,
     async handler(args) {
       const result = await client.call("transactionsAddBatch", { transactions: args.transactions });
@@ -89,6 +92,7 @@ export function createTransactionsTools(
   const assignReceiptsToTransactions = defineTool({
     name: "assign_receipts_to_transactions",
     description: "Assign one or more receipts to transactions in a single batch call (up to 50).",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: assignShape,
     async handler(args) {
       const result = await client.call("transactionsAssignBatchReceipt", {
@@ -106,6 +110,7 @@ export function createTransactionsTools(
   const unassignReceipt = defineTool({
     name: "unassign_receipt",
     description: "Remove the assignment of a specific receipt from a transaction.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: unassignShape,
     async handler(args) {
       const result = await client.call("transactionsUnassignReceipt", args);
@@ -121,6 +126,7 @@ export function createTransactionsTools(
   const getTransactionReceipts = defineTool({
     name: "get_transaction_receipts",
     description: "Get all receipts assigned to a specific transaction.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: assignedShape,
     async handler(args) {
       const result = await client.call("transactionsAssignedReceiptsGet", args);

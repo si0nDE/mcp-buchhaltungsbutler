@@ -13,6 +13,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
   const listCostLocations = defineTool({
     name: "list_cost_locations",
     description: "List all cost locations (Kostenstellen).",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
       const result = await client.call<BBListResult>("costLocationsGet", {});
@@ -30,6 +31,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
     name: "manage_cost_location",
     description:
       "Create, update, or delete a cost location. 'name' is required for create/update and ignored for delete.",
+    annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: manageShape,
     async handler(args) {
       if (args.action === "delete") {

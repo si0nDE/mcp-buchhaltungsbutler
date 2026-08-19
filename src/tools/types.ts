@@ -1,3 +1,4 @@
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import type { z, ZodRawShape } from "zod";
 
 export interface CallToolResult {
@@ -13,6 +14,11 @@ export interface ToolDef<Shape extends ZodRawShape = ZodRawShape> {
   name: string;
   description: string;
   inputSchema: Shape;
+  // Every tool sets readOnlyHint/destructiveHint explicitly (never left
+  // unset) because the MCP spec's own defaults for an unannotated tool are
+  // readOnlyHint: false, destructiveHint: true — silence here would make
+  // every non-read tool look destructive to a spec-compliant host.
+  annotations: Pick<ToolAnnotations, "readOnlyHint" | "destructiveHint">;
   handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>;
 }
 
