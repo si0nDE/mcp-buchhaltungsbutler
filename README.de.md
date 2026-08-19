@@ -86,3 +86,7 @@ npm install
 npm test           # vitest run
 npm run build       # tsc, strict mode
 ```
+
+## Lizenz
+
+[MIT](LICENSE) + [Commons Clause](https://commonsclause.com/) — frei nutzbar (auch geschäftlich, z. B. für die eigene Buchhaltung), frei änderbar, Beiträge willkommen. Nicht erlaubt ist lediglich der Weiterverkauf dieser Software oder das Anbieten als bezahlter Hosting-/Managed-Service. Wenn's dir hilft, unterstütz gerne [die Entwicklung](https://ko-fi.com/simonfieber), statt eine eigene Spendenseite drumherum zu bauen.
