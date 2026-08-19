@@ -6,16 +6,12 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 > Inoffizielles Community-Projekt. Nicht verbunden mit oder unterstützt von BuchhaltungsButler.
 
-## Warum kuratiert statt 1:1
+## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-Die BuchhaltungsButler-API hat 48 Endpoints. Jeden davon 1:1 als MCP-Tool zu spiegeln würde funktionieren, bläht aber die Tool-Liste jeder Konversation auf und verbrennt Tokens für redundante List-/Batch-/Einzel-Varianten. Dieser Server bündelt sie stattdessen in **30 Tools**:
-
-- Batch-first: jedes anlegende Tool nimmt nativ ein Array — kein separates Paar aus Einzel- und Batch-Endpoint.
-- Verwandte Aktionen teilen sich ein Tool mit `action`/`type`-Parameter (z. B. `manage_cost_location`, `unconfirm_posting`) statt ein Tool pro Verb.
-- List-Tools liefern standardmäßig getrimmte, LLM-freundliche Felder; mit `full: true` gibt's den kompletten Datensatz.
-- Die parallelen Arrays der API (z. B. Rechnungspositionen, Buchungs-Splits) werden zu normalen Objekt-Arrays normalisiert und intern wieder abgeflacht — das Modell muss nie mehrere Arrays synchron halten.
-
-Die Endpoint-Metadaten selbst (Pfade, Pflicht-/optionale Felder) werden per `npm run generate` aus BuchhaltungsButlers offizieller Swagger-Spec generiert, statt von Hand gepflegt — bei einem Spec-Update reicht ein Neu-Lauf.
+- **30 Tools decken alle 48 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
+- **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
+- **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
 
 ## Einrichtung
 
