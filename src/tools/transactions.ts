@@ -110,7 +110,7 @@ export function createTransactionsTools(
   const unassignReceipt = defineTool({
     name: "unassign_receipt",
     description: "Remove the assignment of a specific receipt from a transaction.",
-    annotations: { readOnlyHint: false, destructiveHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: unassignShape,
     async handler(args) {
       const result = await client.call("transactionsUnassignReceipt", args);

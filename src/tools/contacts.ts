@@ -84,7 +84,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const updateContact = defineTool({
     name: "update_contact",
     description: "Update an existing debtor or creditor, identified by postingaccount_number.",
-    annotations: { readOnlyHint: false, destructiveHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: updateShape,
     async handler(args) {
       const { contact_type, customer_number, due_in_days, ...fields } = args;

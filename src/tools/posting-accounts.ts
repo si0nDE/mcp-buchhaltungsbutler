@@ -34,7 +34,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     name: "manage_posting_account",
     description:
       "Create or update a posting account. parent_postingaccount_number is required for create, ignored for update.",
-    annotations: { readOnlyHint: false, destructiveHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: manageShape,
     async handler(args) {
       if (args.action === "create") {
