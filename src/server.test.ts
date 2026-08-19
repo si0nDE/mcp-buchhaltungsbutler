@@ -56,7 +56,10 @@ describe("createServer", () => {
     }
   });
 
-  it("marks the two delete-capable tools as destructiveHint", () => {
+  it("marks non-additive-update tools as destructiveHint", () => {
+    // destructiveHint means "non-additive update" per the MCP spec, not just
+    // "deletes data" — overwriting existing fields or removing an existing
+    // relationship both qualify, not only outright deletion.
     const server = createServer(mockClient({}));
     const registeredTools = (
       server as unknown as {
@@ -64,8 +67,14 @@ describe("createServer", () => {
       }
     )._registeredTools;
 
-    for (const name of ["manage_cost_location", "set_receipt_deleted"]) {
-      expect(registeredTools[name].annotations).toEqual({ readOnlyHint: false, destructiveHint: true });
+    for (const name of [
+      "manage_cost_location", // can delete
+      "set_receipt_deleted", // can delete
+      "update_contact", // overwrites existing debtor/creditor fields
+      "manage_posting_account", // update branch overwrites existing name
+      "unassign_receipt", // removes an existing assignment
+    ]) {
+      expect(registeredTools[name].annotations, name).toEqual({ readOnlyHint: false, destructiveHint: true });
     }
   });
 });
