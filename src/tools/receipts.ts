@@ -32,6 +32,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const listReceipts = defineTool({
     name: "list_receipts",
     description: "List receipts (Belege), inbound or outbound, with optional filters.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
       const { full, limit, offset, ...filters } = args;
@@ -52,6 +53,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const getReceipt = defineTool({
     name: "get_receipt",
     description: "Get a single receipt by its id_by_customer.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: getShape,
     async handler(args) {
       const { id_by_customer, ...rest } = args;
@@ -83,6 +85,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const createReceipts = defineTool({
     name: "create_receipts",
     description: "Create one or more receipts in a single batch call (up to 50).",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: createShape,
     async handler(args) {
       const result = await client.call("receiptsAddBatch", { receipts: args.receipts });
@@ -112,6 +115,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "upload_receipt",
     description:
       "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: uploadShape,
     async handler(args) {
       const result = await client.call("receiptsUpload", args);
@@ -127,6 +131,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const setReceiptDeleted = defineTool({
     name: "set_receipt_deleted",
     description: "Mark a receipt as deleted (deleted: true) or restore it (deleted: false).",
+    annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: setDeletedShape,
     async handler(args) {
       const endpointKey = args.deleted ? "receiptsDeleteIdByCustomer" : "receiptsRestoreIdByCustomer";
@@ -143,6 +148,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const getReceiptTransactions = defineTool({
     name: "get_receipt_transactions",
     description: "Get all transactions assigned to a specific receipt.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: assignedShape,
     async handler(args) {
       const result = await client.call("receiptsAssignedTransactionsGet", args);

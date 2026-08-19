@@ -33,6 +33,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const listContacts = defineTool({
     name: "list_contacts",
     description: "List debtors (Debitoren) or creditors (Kreditoren).",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
       const endpointKey = args.contact_type === "debtor" ? "settingsGetDebtors" : "settingsGetCreditors";
@@ -52,6 +53,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const createContacts = defineTool({
     name: "create_contacts",
     description: "Create one or more debtors or creditors in a single batch call.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: createShape,
     async handler(args) {
       const endpointKey = args.contact_type === "debtor" ? "settingsAddBatchDebtors" : "settingsAddBatchCreditors";
@@ -82,6 +84,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const updateContact = defineTool({
     name: "update_contact",
     description: "Update an existing debtor or creditor, identified by postingaccount_number.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: updateShape,
     async handler(args) {
       const { contact_type, customer_number, due_in_days, ...fields } = args;

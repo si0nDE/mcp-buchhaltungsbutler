@@ -15,6 +15,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
   const listPostingAccounts = defineTool({
     name: "list_posting_accounts",
     description: "List posting accounts (Buchungskonten / SKR chart of accounts entries).",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
       const result = await client.call("settingsGetPostingaccounts", args);
@@ -33,6 +34,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     name: "manage_posting_account",
     description:
       "Create or update a posting account. parent_postingaccount_number is required for create, ignored for update.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: manageShape,
     async handler(args) {
       if (args.action === "create") {

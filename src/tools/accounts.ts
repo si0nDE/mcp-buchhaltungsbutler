@@ -7,6 +7,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
   const listAccounts = defineTool({
     name: "list_accounts",
     description: "List all basic accounts (cash, bank, other) configured in BuchhaltungsButler.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: {},
     async handler() {
       const result = await client.call<BBListResult>("accountsGet", {});
@@ -25,6 +26,7 @@ export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
   const createAccount = defineTool({
     name: "create_account",
     description: "Create a new basic account (cash register, bank account, or other).",
+    annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: createAccountShape,
     async handler(args) {
       const result = await client.call("accountsAdd", args);
