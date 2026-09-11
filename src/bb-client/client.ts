@@ -1,5 +1,5 @@
 import type { Config } from "../config.js";
-import { ENDPOINTS, type EndpointKey } from "./generated/endpoints.js";
+import { ENDPOINTS, type EndpointDef, type EndpointKey } from "./generated/endpoints.js";
 import { BuchhaltungsButlerApiError, BuchhaltungsButlerRateLimitError } from "./errors.js";
 
 export interface BBListResult<T = Record<string, unknown>> {
@@ -27,8 +27,16 @@ export interface BBClient {
   ): Promise<T>;
 }
 
-const endpointByKey = new Map(ENDPOINTS.map((e) => [e.key, e]));
+// Typed explicitly as EndpointDef (rather than inferred from the `as const
+// satisfies` literal union in generated/endpoints.ts) so that accessing the
+// optional `bodyFormat` field below type-checks for every endpoint, not just
+// the ones whose literal type happens to include it.
+const endpointByKey = new Map<string, EndpointDef>(ENDPOINTS.map((e) => [e.key, e]));
 
+// Only used for bodyFormat: "form" — no endpoint currently selects it, but
+// it's kept live (not dead code) for the one BuchhaltungsButler endpoint
+// that might one day prove to need PHP-style $_POST bracket notation for
+// nested arrays/objects instead of JSON.
 function encodeFormValue(key: string, value: unknown, parts: string[]): void {
   if (value === undefined || value === null) return;
   if (Array.isArray(value)) {
@@ -52,17 +60,41 @@ function encodeFormValue(key: string, value: unknown, parts: string[]): void {
   parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
 }
 
-// BuchhaltungsButler's backend reads the request body as classic PHP $_POST,
-// not JSON, despite the Swagger spec modeling every field as "in: body" —
-// confirmed by the spec's own error code 23 ("no post and files content
-// received or declined"), which is the exact symptom of an empty $_POST
-// caused by a non-form-encoded body.
 function encodeFormBody(payload: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(payload)) {
     encodeFormValue(key, value, parts);
   }
   return parts.join("&");
+}
+
+// receiptsUpload is the only endpoint expected to need multipart (it
+// transmits a file). Its params are flat (file, type, file_name, ...), so a
+// one-level FormData append is sufficient — this isn't a general nested-array
+// multipart encoder.
+function buildMultipartBody(payload: Record<string, unknown>): FormData {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === undefined || value === null) continue;
+    form.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+  }
+  return form;
+}
+
+function buildRequestBody(
+  bodyFormat: "json" | "form" | "multipart",
+  payload: Record<string, unknown>
+): { body: BodyInit; headers?: Record<string, string> } {
+  if (bodyFormat === "multipart") {
+    // No explicit Content-Type here — fetch sets it (with the boundary) from
+    // the FormData instance itself; setting it manually would drop the
+    // boundary parameter and break parsing on the receiving end.
+    return { body: buildMultipartBody(payload) };
+  }
+  if (bodyFormat === "form") {
+    return { body: encodeFormBody(payload), headers: { "Content-Type": "application/x-www-form-urlencoded" } };
+  }
+  return { body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } };
 }
 
 export function createClient(config: Config, fetchImpl: typeof fetch = fetch): BBClient {
@@ -82,42 +114,43 @@ export function createClient(config: Config, fetchImpl: typeof fetch = fetch): B
 
       const url = `${config.baseUrl}${endpoint.path}${options?.idSuffix !== undefined ? `/${options.idSuffix}` : ""}`;
       const auth = Buffer.from(`${config.apiClient}:${config.apiSecret}`).toString("base64");
+      const { body, headers } = buildRequestBody(endpoint.bodyFormat ?? "json", { ...params, api_key: config.apiKey });
 
       const response = await fetchImpl(url, {
         method: "POST",
-        headers: {
-          Authorization: `Basic ${auth}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: encodeFormBody({ ...params, api_key: config.apiKey }),
+        headers: { Authorization: `Basic ${auth}`, ...headers },
+        body,
       });
 
       const responseText = await response.text();
-      let body: unknown;
+      let responseBody: unknown;
       try {
-        body = responseText ? JSON.parse(responseText) : undefined;
+        responseBody = responseText ? JSON.parse(responseText) : undefined;
       } catch {
-        body = responseText;
+        responseBody = responseText;
       }
 
       if (response.status === 429) {
-        throw new BuchhaltungsButlerRateLimitError(endpoint.path, body);
+        throw new BuchhaltungsButlerRateLimitError(endpoint.path, responseBody);
       }
 
       if (!response.ok) {
         const bbMessage =
-          body !== null && typeof body === "object" && "message" in body && typeof (body as { message: unknown }).message === "string"
-            ? (body as { message: string }).message
+          responseBody !== null &&
+          typeof responseBody === "object" &&
+          "message" in responseBody &&
+          typeof (responseBody as { message: unknown }).message === "string"
+            ? (responseBody as { message: string }).message
             : undefined;
         throw new BuchhaltungsButlerApiError(
           `BuchhaltungsButler API error on ${endpointKey}: HTTP ${response.status}${bbMessage ? ` — ${bbMessage}` : ""}`,
           response.status,
           endpoint.path,
-          body
+          responseBody
         );
       }
 
-      return body as T;
+      return responseBody as T;
     },
   };
 }

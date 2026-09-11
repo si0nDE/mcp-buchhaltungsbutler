@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createClient } from "./client.js";
 import { BuchhaltungsButlerApiError, BuchhaltungsButlerRateLimitError } from "./errors.js";
@@ -18,7 +19,7 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe("createClient", () => {
-  it("sends Basic Auth and injects api_key", async () => {
+  it("sends Basic Auth and injects api_key as a JSON body", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true, rows: 0, data: [] }));
     const client = createClient(config, fetchMock as unknown as typeof fetch);
 
@@ -30,9 +31,9 @@ describe("createClient", () => {
         method: "POST",
         headers: expect.objectContaining({
           Authorization: `Basic ${Buffer.from("app-client:app-secret").toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Type": "application/json",
         }),
-        body: "api_key=customer-key",
+        body: JSON.stringify({ api_key: "customer-key" }),
       })
     );
   });
@@ -46,12 +47,12 @@ describe("createClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://webapp.buchhaltungsbutler.de/api/v1/accounts/get",
       expect.objectContaining({
-        body: "api_key=customer-key",
+        body: JSON.stringify({ api_key: "customer-key" }),
       })
     );
   });
 
-  it("form-encodes nested arrays and objects with bracket notation", async () => {
+  it("sends nested arrays and objects as native JSON, not bracket notation", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true }));
     const client = createClient(config, fetchMock as unknown as typeof fetch);
 
@@ -62,8 +63,10 @@ describe("createClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        body:
-          "receipts%5B0%5D%5Btype%5D=invoice%20inbound&receipts%5B0%5D%5Bcounterparty%5D=ACME%20%26%20Co&api_key=customer-key",
+        body: JSON.stringify({
+          receipts: [{ type: "invoice inbound", counterparty: "ACME & Co" }],
+          api_key: "customer-key",
+        }),
       })
     );
   });
@@ -149,5 +152,37 @@ describe("createClient", () => {
     await expect(
       client.call("doesNotExist" as Parameters<typeof client.call>[0], {})
     ).rejects.toThrow(/doesNotExist/);
+  });
+
+  it("sends receiptsUpload as multipart/form-data with a real boundary", async () => {
+    let receivedContentType: string | undefined;
+    let receivedBody = "";
+    const server = createServer((req, res) => {
+      receivedContentType = req.headers["content-type"];
+      req.on("data", (chunk: Buffer) => {
+        receivedBody += chunk.toString("utf-8");
+      });
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, message: "" }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected the test server to bind a TCP port");
+    }
+
+    const localConfig: Config = { ...config, baseUrl: `http://127.0.0.1:${address.port}` };
+    const client = createClient(localConfig); // no fetchImpl override — uses the real global fetch
+
+    await client.call("receiptsUpload", { file: "ZmFrZQ==", type: "invoice inbound", file_name: "test.pdf" });
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    expect(receivedContentType).toMatch(/^multipart\/form-data; boundary=/);
+    expect(receivedBody).toContain('name="file"');
+    expect(receivedBody).toContain("ZmFrZQ==");
+    expect(receivedBody).toContain('name="type"');
   });
 });
