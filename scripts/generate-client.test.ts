@@ -44,4 +44,12 @@ describe("extractEndpoints", () => {
     expect(receiptsGet.params).toContainEqual({ name: "api_key", required: true, type: "string" });
     expect(receiptsGet.params).toContainEqual({ name: "limit", required: false, type: "integer" });
   });
+
+  it("sets bodyFormat: multipart on receiptsUpload only", () => {
+    const receiptsUpload = endpoints.find((e) => e.key === "receiptsUpload")!;
+    expect(receiptsUpload.bodyFormat).toBe("multipart");
+
+    const withoutOverride = endpoints.filter((e) => e.key !== "receiptsUpload");
+    expect(withoutOverride.every((e) => e.bodyFormat === undefined)).toBe(true);
+  });
 });

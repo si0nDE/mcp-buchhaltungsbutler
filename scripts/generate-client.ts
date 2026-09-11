@@ -25,7 +25,18 @@ export interface EndpointDef {
   key: string;
   path: string;
   params: EndpointParam[];
+  bodyFormat?: "json" | "form" | "multipart";
 }
+
+// BuchhaltungsButler's Swagger spec models every endpoint as JSON ("in: body")
+// but says nothing about wire format for file uploads. receipts/upload is the
+// one endpoint that transmits a file and is expected to need multipart —
+// everything else defaults to JSON at call time (see client.ts). Add an
+// entry here only once live testing confirms a real exception; "form" exists
+// as a value for that same reason, not because anything uses it yet.
+const BODY_FORMAT_OVERRIDES: Partial<Record<string, "form" | "multipart">> = {
+  receiptsUpload: "multipart",
+};
 
 function toCamelSegment(segment: string): string {
   return segment
@@ -56,7 +67,9 @@ export function extractEndpoints(spec: SwaggerSpec): EndpointDef[] {
         required: p.required ?? false,
         type: p.type ?? "object",
       }));
-      return { key: pathToKey(apiPath), path: apiPath, params };
+      const key = pathToKey(apiPath);
+      const bodyFormat = BODY_FORMAT_OVERRIDES[key];
+      return { key, path: apiPath, params, ...(bodyFormat ? { bodyFormat } : {}) };
     });
 }
 
@@ -66,7 +79,8 @@ function render(endpoints: EndpointDef[]): string {
       const params = e.params
         .map((p) => `{ name: ${JSON.stringify(p.name)}, required: ${p.required}, type: ${JSON.stringify(p.type)} }`)
         .join(", ");
-      return `  { key: ${JSON.stringify(e.key)}, path: ${JSON.stringify(e.path)}, params: [${params}] },`;
+      const bodyFormat = e.bodyFormat ? `, bodyFormat: ${JSON.stringify(e.bodyFormat)}` : "";
+      return `  { key: ${JSON.stringify(e.key)}, path: ${JSON.stringify(e.path)}, params: [${params}]${bodyFormat} },`;
     })
     .join("\n");
 
@@ -83,6 +97,7 @@ export interface EndpointDef {
   key: string;
   path: string;
   params: EndpointParam[];
+  bodyFormat?: "json" | "form" | "multipart";
 }
 
 export const ENDPOINTS = [
