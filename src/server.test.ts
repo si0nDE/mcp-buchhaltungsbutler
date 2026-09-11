@@ -1,6 +1,16 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "./server.js";
 import type { BBClient } from "./bb-client/client.js";
+
+async function connectedClient(client: BBClient) {
+  const server = createServer(client);
+  const mcpClient = new Client({ name: "test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
+  return mcpClient;
+}
 
 function mockClient(result: unknown): BBClient {
   return { call: vi.fn().mockResolvedValue(result) };
@@ -77,5 +87,30 @@ describe("createServer", () => {
     ]) {
       expect(registeredTools[name].annotations, name).toEqual({ readOnlyHint: false, destructiveHint: true });
     }
+  });
+
+  it("passes the real MCP SDK's output-schema validation for a list tool", async () => {
+    const client = mockClient({ success: true, rows: 1, data: [{ name: "Kasse", postingaccount_number: "1000" }] });
+    const mcpClient = await connectedClient(client);
+
+    const result = await mcpClient.callTool({ name: "list_accounts", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      data: [{ name: "Kasse", postingaccount_number: "1000" }],
+    });
+  });
+
+  it("passes the real MCP SDK's output-schema validation for an object-returning tool", async () => {
+    const client = mockClient({ success: true, message: "" });
+    const mcpClient = await connectedClient(client);
+
+    const result = await mcpClient.callTool({
+      name: "add_comment",
+      arguments: { comment_text: "note", receipt_id_by_customer: 1 },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({ data: { success: true, message: "" } });
   });
 });

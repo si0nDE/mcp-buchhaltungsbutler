@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { defineTool, ok, type ToolDef } from "./types.js";
+import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = [
   "id_by_customer",
@@ -33,6 +33,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "list_receipts",
     description: "List receipts (Belege), inbound or outbound, with optional filters.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
       const { full, limit, offset, ...filters } = args;
@@ -54,6 +55,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "get_receipt",
     description: "Get a single receipt by its id_by_customer.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: getShape,
     async handler(args) {
       const { id_by_customer, ...rest } = args;
@@ -84,8 +86,11 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
 
   const createReceipts = defineTool({
     name: "create_receipts",
-    description: "Create one or more receipts in a single batch call (up to 50).",
+    description:
+      "Create one or more receipts in a single batch call (up to 50). Not idempotent — calling again " +
+      "with the same details creates duplicates.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createShape,
     async handler(args) {
       const result = await client.call("receiptsAddBatch", { receipts: args.receipts });
@@ -116,6 +121,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     description:
       "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
     async handler(args) {
       const result = await client.call("receiptsUpload", args);
@@ -132,6 +138,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "set_receipt_deleted",
     description: "Mark a receipt as deleted (deleted: true) or restore it (deleted: false).",
     annotations: { readOnlyHint: false, destructiveHint: true },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: setDeletedShape,
     async handler(args) {
       const endpointKey = args.deleted ? "receiptsDeleteIdByCustomer" : "receiptsRestoreIdByCustomer";
@@ -147,8 +154,11 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
 
   const getReceiptTransactions = defineTool({
     name: "get_receipt_transactions",
-    description: "Get all transactions assigned to a specific receipt.",
+    description:
+      "Get all transactions assigned to a specific receipt. For the reverse lookup (transactions -> " +
+      "their assigned receipts), use get_transaction_receipts instead.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: assignedShape,
     async handler(args) {
       const result = await client.call("receiptsAssignedTransactionsGet", args);

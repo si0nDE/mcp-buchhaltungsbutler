@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { defineTool, ok, type ToolDef } from "./types.js";
+import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["code", "name"] as const;
 
@@ -14,6 +14,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
     name: "list_cost_locations",
     description: "List all cost locations (Kostenstellen).",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
       const result = await client.call<BBListResult>("costLocationsGet", {});
@@ -32,6 +33,7 @@ export function createCostLocationsTools(client: BBClient): [ToolDef, ToolDef] {
     description:
       "Create, update, or delete a cost location. 'name' is required for create/update and ignored for delete.",
     annotations: { readOnlyHint: false, destructiveHint: true },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: manageShape,
     async handler(args) {
       if (args.action === "delete") {

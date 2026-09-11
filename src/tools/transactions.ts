@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { defineTool, ok, type ToolDef } from "./types.js";
+import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["id_by_customer", "to_from", "amount", "booking_date", "purpose"] as const;
 
@@ -24,6 +24,7 @@ export function createTransactionsTools(
     name: "list_transactions",
     description: "List bank/cash transactions, with optional filters.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
       const { full, limit, offset, ...filters } = args;
@@ -42,6 +43,7 @@ export function createTransactionsTools(
     name: "get_transaction",
     description: "Get a single transaction by its id_by_customer.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: getShape,
     async handler(args) {
       const result = await client.call("transactionsGetIdByCustomer", {}, { idSuffix: args.id_by_customer });
@@ -71,8 +73,11 @@ export function createTransactionsTools(
 
   const createTransactions = defineTool({
     name: "create_transactions",
-    description: "Add one or more transactions to a payment account in a single batch call (up to 50).",
+    description:
+      "Add one or more transactions to a payment account in a single batch call (up to 50). Not " +
+      "idempotent — calling again with the same details creates duplicates.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createShape,
     async handler(args) {
       const result = await client.call("transactionsAddBatch", { transactions: args.transactions });
@@ -93,6 +98,7 @@ export function createTransactionsTools(
     name: "assign_receipts_to_transactions",
     description: "Assign one or more receipts to transactions in a single batch call (up to 50).",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: assignShape,
     async handler(args) {
       const result = await client.call("transactionsAssignBatchReceipt", {
@@ -111,6 +117,7 @@ export function createTransactionsTools(
     name: "unassign_receipt",
     description: "Remove the assignment of a specific receipt from a transaction.",
     annotations: { readOnlyHint: false, destructiveHint: true },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: unassignShape,
     async handler(args) {
       const result = await client.call("transactionsUnassignReceipt", args);
@@ -125,8 +132,11 @@ export function createTransactionsTools(
 
   const getTransactionReceipts = defineTool({
     name: "get_transaction_receipts",
-    description: "Get all receipts assigned to a specific transaction.",
+    description:
+      "Get all receipts assigned to a specific transaction. For the reverse lookup (a receipt -> its " +
+      "assigned transactions), use get_receipt_transactions instead.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: assignedShape,
     async handler(args) {
       const result = await client.call("transactionsAssignedReceiptsGet", args);
