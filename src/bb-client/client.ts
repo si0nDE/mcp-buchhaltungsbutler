@@ -112,7 +112,17 @@ export function createClient(config: Config, fetchImpl: typeof fetch = fetch): B
         throw new Error(`Missing required field(s) for ${endpointKey}: ${missing.join(", ")}`);
       }
 
-      const url = `${config.baseUrl}${endpoint.path}${options?.idSuffix !== undefined ? `/${options.idSuffix}` : ""}`;
+      // BuchhaltungsButler's spec renders these endpoints' path parameter as
+      // a literal trailing segment (e.g. ".../id_by_customer") instead of a
+      // real templated parameter. The live API substitutes the id for that
+      // segment (POST /receipts/get/16) rather than appending after it
+      // (POST /receipts/get/id_by_customer/16, which 404s) — confirmed live
+      // for receipts/get, receipts/delete, and transactions/get.
+      const path =
+        options?.idSuffix !== undefined
+          ? endpoint.path.replace(/\/[^/]+$/, `/${options.idSuffix}`)
+          : endpoint.path;
+      const url = `${config.baseUrl}${path}`;
       const auth = Buffer.from(`${config.apiClient}:${config.apiSecret}`).toString("base64");
       const { body, headers } = buildRequestBody(endpoint.bodyFormat ?? "json", { ...params, api_key: config.apiKey });
 
