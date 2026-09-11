@@ -7,13 +7,70 @@ function mockClient(result: unknown): BBClient {
 }
 
 describe("posting accounts tools", () => {
-  it("list_posting_accounts calls settingsGetPostingaccounts without params (API rejects any filter param)", async () => {
+  it("list_posting_accounts fetches the full catalog via a single paginated page when short", async () => {
     const client = mockClient({ success: true, rows: 0, data: [] });
     const [listPostingAccounts] = createPostingAccountsTools(client);
 
     await listPostingAccounts.handler({ limit: 20, offset: 0, exclude_debtors: true });
 
-    expect(client.call).toHaveBeenCalledWith("settingsGetPostingaccounts", {});
+    expect(client.call).toHaveBeenCalledWith("settingsGetPostingaccounts", { limit: 1000, offset: 0 });
+  });
+
+  it("list_posting_accounts pages through settingsGetPostingaccounts until a short page ends the catalog", async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({
+      postingaccount_number: String(1000 + i),
+      name: `Konto ${i}`,
+    }));
+    const page2 = Array.from({ length: 371 }, (_, i) => ({
+      postingaccount_number: String(8000 + i),
+      name: `Konto zwei ${i}`,
+    }));
+    // Include the real, actively-booked account (4964) that lives on page 2.
+    page2.push({ postingaccount_number: "4964", name: "Aktiv gebuchtes Konto" });
+
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, rows: page1.length, data: page1 })
+      .mockResolvedValueOnce({ success: true, rows: page2.length, data: page2 });
+    const client: BBClient = { call };
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    const result = await listPostingAccounts.handler({
+      limit: 20,
+      offset: 0,
+      search: "aktiv gebuchtes konto",
+    });
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenNthCalledWith(1, "settingsGetPostingaccounts", { limit: 1000, offset: 0 });
+    expect(call).toHaveBeenNthCalledWith(2, "settingsGetPostingaccounts", { limit: 1000, offset: 1000 });
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      { postingaccount_number: "4964", name: "Aktiv gebuchtes Konto" },
+    ]);
+  });
+
+  it("list_posting_accounts stops after one page when the first page is already short", async () => {
+    const data = [{ postingaccount_number: "1", name: "A" }];
+    const client = mockClient({ success: true, rows: data.length, data });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+    expect(client.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("list_posting_accounts caps the pagination loop at FULL_CATALOG_MAX_PAGES full pages", async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+      postingaccount_number: String(i),
+      name: `Konto ${i}`,
+    }));
+    const call = vi.fn().mockResolvedValue({ success: true, rows: fullPage.length, data: fullPage });
+    const client: BBClient = { call };
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+    expect(call).toHaveBeenCalledTimes(20);
   });
 
   it("list_posting_accounts applies exclude_* filters and limit/offset client-side", async () => {

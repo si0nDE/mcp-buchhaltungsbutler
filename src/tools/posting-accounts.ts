@@ -6,6 +6,8 @@ import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } 
 
 const SUMMARY_FIELDS = ["postingaccount_number", "name"] as const;
 const FULL_CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+const FULL_CATALOG_PAGE_SIZE = 1000;
+const FULL_CATALOG_MAX_PAGES = 20;
 
 // Parses a postingaccount_number ("1000", "6815", ...) for range comparison.
 // Returns undefined for non-numeric values so callers can exclude them from
@@ -15,18 +17,31 @@ function parseAccountNumber(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// The BuchhaltungsButler API now supports limit/offset on this endpoint
+// under the client's JSON-body request format (form-encoded requests used to
+// have these silently rejected). This pages through the full catalog in
+// FULL_CATALOG_PAGE_SIZE-row batches, starting at offset 0 and stopping as
+// soon as a page comes back short (fewer rows than the page size signals the
+// end of data), so the accumulated result really is the complete catalog —
+// not just its first page — with a FULL_CATALOG_MAX_PAGES safety cap in case
+// the API ever behaves unexpectedly.
+async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
+  const allRows: Record<string, unknown>[] = [];
+  for (let page = 0; page < FULL_CATALOG_MAX_PAGES; page++) {
+    const offset = page * FULL_CATALOG_PAGE_SIZE;
+    const result = await client.call<BBListResult>("settingsGetPostingaccounts", {
+      limit: FULL_CATALOG_PAGE_SIZE,
+      offset,
+    });
+    allRows.push(...result.data);
+    if (result.data.length < FULL_CATALOG_PAGE_SIZE) break;
+  }
+  return { success: true, message: "", rows: allRows.length, data: allRows };
+}
+
 export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef] {
-  // The BuchhaltungsButler API rejects every optional query parameter on this
-  // endpoint (limit/offset/order/exclude_*) with HTTP 400, despite its swagger
-  // spec declaring them all valid — confirmed by direct testing. A bare
-  // api_key request returns the full catalog (1000 rows for this account's
-  // SKR03 setup) in one call, so it's cached and all filtering/pagination
-  // happens client-side below. Note: since the API also rejects `offset`,
-  // there's no way to confirm from here whether 1000 rows is the complete
-  // catalog or a server-side cap — if BuchhaltungsButler's account count
-  // ever needs verifying, that has to happen on their end.
   const fullCatalog: TtlCache<BBListResult> = createTtlCache(FULL_CATALOG_TTL_MS, () =>
-    client.call<BBListResult>("settingsGetPostingaccounts", {})
+    fetchFullCatalog(client)
   );
 
   const listShape = {
