@@ -81,14 +81,20 @@ describe("createClient", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("appends the id as a URL path suffix when idSuffix is given", async () => {
+  it("replaces the endpoint path's trailing placeholder segment with idSuffix", async () => {
+    // BuchhaltungsButler's spec renders these endpoints' path parameter as a
+    // literal path segment ("id_by_customer") instead of a real templated
+    // parameter. The live API confirms the real route substitutes the id for
+    // that segment (e.g. POST /receipts/get/16) — appending after it
+    // (/receipts/get/id_by_customer/16) 404s. Confirmed live for both
+    // receipts/get and transactions/get.
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true, data: {} }));
     const client = createClient(config, fetchMock as unknown as typeof fetch);
 
     await client.call("receiptsGetIdByCustomer", {}, { idSuffix: 42 });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://webapp.buchhaltungsbutler.de/api/v1/receipts/get/id_by_customer/42",
+      "https://webapp.buchhaltungsbutler.de/api/v1/receipts/get/42",
       expect.anything()
     );
   });
