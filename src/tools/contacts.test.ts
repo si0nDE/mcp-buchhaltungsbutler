@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { createContactsTools } from "./contacts.js";
 
@@ -23,6 +24,29 @@ describe("contacts tools", () => {
     await listContacts.handler({ contact_type: "creditor", limit: 5, offset: 10 });
 
     expect(client.call).toHaveBeenCalledWith("settingsGetCreditors", { limit: 5, offset: 10 });
+  });
+
+  it("list_contacts returns full records when full: true", async () => {
+    const client = mockClient({
+      success: true,
+      rows: 1,
+      data: [{ postingaccount_number: "10001", name: "Kunde GmbH", email: "a@b.de", city: "Berlin", iban: "DE00" }],
+    });
+    const [listContacts] = createContactsTools(client);
+
+    const result = await listContacts.handler({ contact_type: "debtor", full: true });
+
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      { postingaccount_number: "10001", name: "Kunde GmbH", email: "a@b.de", city: "Berlin", iban: "DE00" },
+    ]);
+  });
+
+  it("create_contacts rejects an empty contacts array via its Zod schema", () => {
+    const [, createContacts] = createContactsTools(mockClient({}));
+
+    expect(() =>
+      z.object(createContacts.inputSchema).parse({ contact_type: "debtor", contacts: [] })
+    ).toThrow();
   });
 
   it("create_contacts routes debtor batch to settingsAddBatchDebtors", async () => {

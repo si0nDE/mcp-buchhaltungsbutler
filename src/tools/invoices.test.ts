@@ -51,6 +51,49 @@ describe("invoices tools", () => {
     );
   });
 
+  it("create_invoice forwards invoicenumber/due_days/payment_reference for non-draft", async () => {
+    const client = mockClient({ success: true });
+    const [createInvoice] = createInvoicesTools(client);
+
+    await createInvoice.handler({
+      type: "invoice",
+      show_prices_type: "net",
+      company_name: "ACME GmbH",
+      date: "2026-01-01",
+      invoicenumber: "R-42",
+      due_days: "14",
+      payment_reference: "REF-1",
+      items: [{ name: "Beratung", amount: "1", unit: "Std.", vat: "19", single_price: "50.00" }],
+    });
+
+    expect(client.call).toHaveBeenCalledWith(
+      "invoicesCreate",
+      expect.objectContaining({ invoicenumber: "R-42", due_days: "14", payment_reference: "REF-1" })
+    );
+  });
+
+  it("create_invoice strips invoicenumber/due_days/payment_reference when draft is true", async () => {
+    const client = mockClient({ success: true });
+    const [createInvoice] = createInvoicesTools(client);
+
+    await createInvoice.handler({
+      type: "invoice",
+      show_prices_type: "net",
+      company_name: "ACME GmbH",
+      date: "2026-01-01",
+      draft: true,
+      invoicenumber: "R-42",
+      due_days: "14",
+      payment_reference: "REF-1",
+      items: [{ name: "Beratung", amount: "1", unit: "Std.", vat: "19", single_price: "50.00" }],
+    });
+
+    const [, payload] = (client.call as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(payload).not.toHaveProperty("invoicenumber");
+    expect(payload).not.toHaveProperty("due_days");
+    expect(payload).not.toHaveProperty("payment_reference");
+  });
+
   it("create_einvoice calls invoicesCreateEInvoice with tax fields flattened", async () => {
     const client = mockClient({ success: true });
     const [, createEInvoice] = createInvoicesTools(client);
