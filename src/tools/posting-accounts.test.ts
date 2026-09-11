@@ -73,6 +73,48 @@ describe("posting accounts tools", () => {
     expect(call).toHaveBeenCalledTimes(20);
   });
 
+  it("list_posting_accounts warns via console.error when the page cap is hit", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+        postingaccount_number: String(i),
+        name: `Konto ${i}`,
+      }));
+      const call = vi.fn().mockResolvedValue({ success: true, rows: fullPage.length, data: fullPage });
+      const client: BBClient = { call };
+      const [listPostingAccounts] = createPostingAccountsTools(client);
+
+      await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("list_posting_accounts does not warn via console.error on a normal, complete fetch", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const page1 = Array.from({ length: 1000 }, (_, i) => ({
+        postingaccount_number: String(i),
+        name: `Konto ${i}`,
+      }));
+      const page2 = [{ postingaccount_number: "1000", name: "Konto 1000" }];
+      const call = vi
+        .fn()
+        .mockResolvedValueOnce({ success: true, rows: page1.length, data: page1 })
+        .mockResolvedValueOnce({ success: true, rows: page2.length, data: page2 });
+      const client: BBClient = { call };
+      const [listPostingAccounts] = createPostingAccountsTools(client);
+
+      await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it("list_posting_accounts applies exclude_* filters and limit/offset client-side", async () => {
     const client = mockClient({
       success: true,

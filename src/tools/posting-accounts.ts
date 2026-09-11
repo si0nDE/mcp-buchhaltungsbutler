@@ -27,6 +27,7 @@ function parseAccountNumber(value: unknown): number | undefined {
 // the API ever behaves unexpectedly.
 async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
   const allRows: Record<string, unknown>[] = [];
+  let lastPageWasFull = false;
   for (let page = 0; page < FULL_CATALOG_MAX_PAGES; page++) {
     const offset = page * FULL_CATALOG_PAGE_SIZE;
     const result = await client.call<BBListResult>("settingsGetPostingaccounts", {
@@ -34,7 +35,15 @@ async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
       offset,
     });
     allRows.push(...result.data);
-    if (result.data.length < FULL_CATALOG_PAGE_SIZE) break;
+    lastPageWasFull = result.data.length >= FULL_CATALOG_PAGE_SIZE;
+    if (!lastPageWasFull) break;
+  }
+  if (lastPageWasFull) {
+    console.error(
+      `list_posting_accounts: fetchFullCatalog hit its ${FULL_CATALOG_MAX_PAGES}-page safety cap ` +
+        `(${allRows.length} rows fetched) while the last page was still full — the cached catalog may be ` +
+        "incomplete. Investigate whether FULL_CATALOG_MAX_PAGES needs raising."
+    );
   }
   return { success: true, message: "", rows: allRows.length, data: allRows };
 }
@@ -64,9 +73,9 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
       "List posting accounts (Buchungskonten / SKR chart of accounts entries). Returns the full SKR " +
       "chart-of-accounts template, not just accounts actually booked against by this client — use " +
       "postingaccount_number_from/to or search to narrow down, or full: true for raw records including " +
-      "type/parent_postingaccount_number. The BuchhaltungsButler API rejects any query parameter on this " +
-      "endpoint, so the full list is fetched once, cached for 24h, and all filtering/pagination happens " +
-      "client-side — pass refresh: true to bypass the cache after an account was added elsewhere.",
+      "type/parent_postingaccount_number. The full catalog is paged in (1000 rows per request) and cached " +
+      "for 24h; filtering (range, search, exclude_*) and pagination happen client-side against that cached, " +
+      "complete catalog — pass refresh: true to bypass the cache after an account was added or renamed elsewhere.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
