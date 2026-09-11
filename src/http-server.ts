@@ -11,21 +11,13 @@ function sha256(value: string): Buffer {
   return createHash("sha256").update(value).digest();
 }
 
-function fingerprint(value: string): string {
-  return sha256(value).toString("hex").slice(0, 8);
-}
-
 export function requireBearerToken(token: string) {
   const expected = sha256(token);
-  console.log(`MCP_AUTH_TOKEN fingerprint: ${fingerprint(token)} (length ${token.length})`);
   return (req: Request, res: Response, next: NextFunction) => {
     const header = req.headers.authorization ?? "";
     const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
     const actual = sha256(provided);
     if (!timingSafeEqual(actual, expected)) {
-      console.log(
-        `Rejected token fingerprint: ${fingerprint(provided)} (length ${provided.length}), header started with "Bearer ": ${header.startsWith("Bearer ")}`
-      );
       res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" }, id: null });
       return;
     }
