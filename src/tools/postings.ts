@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { defineTool, ok, type ToolDef } from "./types.js";
+import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const splitShape = z.object({
   postingaccount: z.number().int(),
@@ -54,6 +54,7 @@ export function createPostingsTools(
     name: "list_postings",
     description: "List postings (Buchungen) within a required date range, with optional filters.",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
       const result = await client.call("postingsGet", {
@@ -78,8 +79,13 @@ export function createPostingsTools(
 
   const addReceiptPostings = defineTool({
     name: "add_receipt_postings",
-    description: "Book one or more receipts onto posting accounts in a single batch call.",
+    description:
+      "Book one or more receipts onto posting accounts in a single batch call. Use this when the " +
+      "posting is backed by a receipt/invoice document; for a bank transaction use " +
+      "add_transaction_postings, and for entries with no receipt or transaction (e.g. depreciation, " +
+      "opening balances) use add_free_postings.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addReceiptPostingsShape,
     async handler(args) {
       const receipts = args.receipts.map(({ splits, ...rest }) => ({ ...rest, ...flattenSplits(splits) }));
@@ -100,8 +106,12 @@ export function createPostingsTools(
 
   const addTransactionPostings = defineTool({
     name: "add_transaction_postings",
-    description: "Book one or more transactions onto posting accounts in a single batch call.",
+    description:
+      "Book one or more transactions onto posting accounts in a single batch call. Use this for a bank " +
+      "transaction; for a receipt/invoice use add_receipt_postings, and for entries with no receipt or " +
+      "transaction use add_free_postings.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addTransactionPostingsShape,
     async handler(args) {
       const transactions = args.transactions.map(({ splits, ...rest }) => ({ ...rest, ...flattenSplits(splits) }));
@@ -127,8 +137,12 @@ export function createPostingsTools(
 
   const addFreePostings = defineTool({
     name: "add_free_postings",
-    description: "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch call.",
+    description:
+      "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch " +
+      "call, e.g. depreciation or opening balances. For a receipt or bank transaction, use " +
+      "add_receipt_postings or add_transaction_postings instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addFreePostingsShape,
     async handler(args) {
       const result = await client.call("postingsAddBatchFree", { free_postings: args.free_postings });
@@ -148,6 +162,7 @@ export function createPostingsTools(
     // state change, same class as update_contact/manage_posting_account/
     // unassign_receipt, so destructiveHint follows them for consistency.
     annotations: { readOnlyHint: false, destructiveHint: true },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: unconfirmShape,
     async handler(args) {
       if (args.type === "transaction") {
@@ -174,8 +189,11 @@ export function createPostingsTools(
 
   const assignReceiptToFreePosting = defineTool({
     name: "assign_receipt_to_free_posting",
-    description: "Assign a receipt to an existing free posting.",
+    description:
+      "Assign a receipt to an existing free posting. Not for transactions — to assign a receipt to a " +
+      "transaction, use assign_receipts_to_transactions instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: assignShape,
     async handler(args) {
       const result = await client.call("postingsAssignReceiptToFreePosting", args);

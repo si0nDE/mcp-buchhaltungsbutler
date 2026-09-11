@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { defineTool, ok, type ToolDef } from "./types.js";
+import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const invoiceItemShape = z.object({
   name: z.string(),
@@ -84,8 +84,10 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     description:
       "Create an invoice, credit note, or offer (type selects which). draft: true saves it as a draft " +
       "(invoicesCreateDraft) instead of finalizing it (invoicesCreate); draft mode does not support " +
-      "invoicenumber, due_days, or payment_reference.",
+      "invoicenumber, due_days, or payment_reference. For a structured e-invoice (XRechnung/ZUGFeRD), " +
+      "use create_einvoice instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createInvoiceShape,
     async handler(args) {
       const { draft, items, invoicenumber, due_days, payment_reference, ...fields } = args;
@@ -127,8 +129,10 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     name: "create_einvoice",
     description:
       "Create a structured e-invoice (e.g. XRechnung/ZUGFeRD) with tax-type/tax-amount line items. " +
-      "Requires the full postal address and email in addition to the base invoice fields.",
+      "Requires the full postal address and email in addition to the base invoice fields. For a normal " +
+      "PDF invoice, credit note, or offer, use create_invoice instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createEInvoiceShape,
     async handler(args) {
       const { items, ...fields } = args;

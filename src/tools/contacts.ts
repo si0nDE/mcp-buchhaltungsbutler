@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { defineTool, ok, type ToolDef } from "./types.js";
+import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["postingaccount_number", "name", "email", "city"] as const;
 
@@ -34,6 +34,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "list_contacts",
     description: "List debtors (Debitoren) or creditors (Kreditoren).",
     annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
       const endpointKey = args.contact_type === "debtor" ? "settingsGetDebtors" : "settingsGetCreditors";
@@ -52,8 +53,11 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
 
   const createContacts = defineTool({
     name: "create_contacts",
-    description: "Create one or more debtors or creditors in a single batch call.",
+    description:
+      "Create one or more debtors or creditors in a single batch call. Not idempotent — calling again " +
+      "with the same details creates duplicates; use update_contact to change an existing one instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createShape,
     async handler(args) {
       const endpointKey = args.contact_type === "debtor" ? "settingsAddBatchDebtors" : "settingsAddBatchCreditors";
@@ -85,6 +89,7 @@ export function createContactsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "update_contact",
     description: "Update an existing debtor or creditor, identified by postingaccount_number.",
     annotations: { readOnlyHint: false, destructiveHint: true },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: updateShape,
     async handler(args) {
       const { contact_type, customer_number, due_in_days, ...fields } = args;
