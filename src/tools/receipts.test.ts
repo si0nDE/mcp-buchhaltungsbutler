@@ -48,6 +48,23 @@ describe("receipts tools", () => {
     ]);
   });
 
+  it("list_receipts passes order through to receiptsGet", async () => {
+    const client = mockClient({ success: true, rows: 0, data: [] });
+    const [listReceipts] = createReceiptsTools(client);
+
+    await listReceipts.handler({
+      list_direction: "inbound",
+      order: { date: "ASC", amount: "DESC" },
+    });
+
+    expect(client.call).toHaveBeenCalledWith("receiptsGet", {
+      list_direction: "inbound",
+      order: { date: "ASC", amount: "DESC" },
+      limit: 20,
+      offset: 0,
+    });
+  });
+
   it("get_receipt calls receiptsGetIdByCustomer with idSuffix", async () => {
     const client = mockClient({ success: true, data: { id_by_customer: "42" } });
     const [, getReceipt] = createReceiptsTools(client);

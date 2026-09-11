@@ -27,6 +27,15 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     offset: z.number().int().default(0),
     deleted: z.boolean().optional(),
     full: z.boolean().default(false),
+    order: z
+      .object({
+        date: z.enum(["ASC", "DESC"]).optional(),
+        amount: z.enum(["ASC", "DESC"]).optional(),
+        invoicenumber: z.enum(["ASC", "DESC"]).optional(),
+        invoicingparty: z.enum(["ASC", "DESC"]).optional(),
+      })
+      .optional()
+      .describe('Sort order, e.g. {"date": "ASC"} or {"date": "ASC", "amount": "DESC"}.'),
   };
 
   const listReceipts = defineTool({
