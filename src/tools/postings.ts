@@ -2,10 +2,46 @@ import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
+// BuchhaltungsButler's `vat`/`vats` fields take one of these fixed codes, not a
+// percentage string — e.g. "0_none" for a 0%/no-VAT posting, not "0" or "0.00".
+// Sending a percentage string fails with error_code 19 "Invalid vat specified".
+const VAT_CODES = [
+  "0_none",
+  "19_vat",
+  "7_vat",
+  "19_pre",
+  "7_pre",
+  "19_both_1",
+  "19_both_506",
+  "19_both_6506",
+  "19_both_511",
+  "19_both_6511",
+  "19_both_6501",
+  "19_both_2",
+  "7_both",
+  "19_both_1_no_pre",
+  "19_both_2_no_pre",
+  "7_both_no_pre",
+  "19_pre_app",
+  "7_pre_app",
+  "19_both_app_1",
+  "19_both_app_506",
+  "19_both_app_511",
+  "19_both_app_2",
+  "7_both_app",
+] as const;
+
+const vatShape = z
+  .enum(VAT_CODES)
+  .describe(
+    "VAT code, not a percentage. Common: 0_none (keine USt.), 19_vat (19% USt.), 7_vat (7% USt.), " +
+      "19_pre/7_pre (Vorsteuer). See BuchhaltungsButler API docs for the §13b/i.g.E. reverse-charge codes."
+  );
+
 const splitShape = z.object({
   postingaccount: z.number().int(),
   postingtext: z.string(),
-  vat: z.string(),
+  vat: vatShape,
   amount: z.string(),
   cost_location: z.string().optional(),
   cost_location_two: z.string().optional(),
@@ -45,7 +81,17 @@ export function createPostingsTools(
     postingaccount: z.string().optional(),
     posting_status: z.enum(["all", "fixed", "unfixed"]).optional(),
     cost_location: z.string().optional(),
-    order: z.string().optional(),
+    order: z
+      .enum([
+        "default",
+        "date ASC",
+        "date DESC",
+        "date_last_action ASC",
+        "date_last_action DESC",
+        "id_by_customer ASC",
+        "id_by_customer DESC",
+      ])
+      .optional(),
     limit: z.number().int().max(1000).default(20),
     offset: z.number().int().default(0),
   };
@@ -126,7 +172,7 @@ export function createPostingsTools(
     amount: z.string(),
     postingaccount_debit: z.number().int(),
     postingaccount_credit: z.number().int(),
-    vat: z.string(),
+    vat: vatShape,
     cost_location: z.string().optional(),
     cost_location_two: z.string().optional(),
   });

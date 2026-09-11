@@ -21,6 +21,21 @@ describe("postings tools", () => {
     });
   });
 
+  it("list_postings passes a valid order value through to postingsGet", async () => {
+    const client = mockClient({ success: true, rows: 0, data: [] });
+    const [listPostings] = createPostingsTools(client);
+
+    await listPostings.handler({ date_from: "2026-01-01", date_to: "2026-01-31", order: "date DESC" });
+
+    expect(client.call).toHaveBeenCalledWith("postingsGet", {
+      date_from: "2026-01-01",
+      date_to: "2026-01-31",
+      order: "date DESC",
+      limit: 20,
+      offset: 0,
+    });
+  });
+
   it("add_receipt_postings flattens splits into parallel arrays", async () => {
     const client = mockClient({ success: true });
     const [, addReceiptPostings] = createPostingsTools(client);
@@ -32,7 +47,7 @@ describe("postings tools", () => {
           creditor: 70001,
           debtor: 10001,
           splits: [
-            { postingaccount: 6815, postingtext: "Büromaterial", vat: "19", amount: "100.00", cost_location: "CL1" },
+            { postingaccount: 6815, postingtext: "Büromaterial", vat: "19_vat", amount: "100.00", cost_location: "CL1" },
           ],
         },
       ],
@@ -46,7 +61,7 @@ describe("postings tools", () => {
           debtor: 10001,
           postingaccounts: [6815],
           postingtexts: ["Büromaterial"],
-          vats: ["19"],
+          vats: ["19_vat"],
           amounts: ["100.00"],
           cost_locations: ["CL1"],
         },
@@ -65,8 +80,8 @@ describe("postings tools", () => {
           creditor: 70001,
           debtor: 10001,
           splits: [
-            { postingaccount: 6815, postingtext: "Büromaterial", vat: "19", amount: "100.00", cost_location: "CL1" },
-            { postingaccount: 6816, postingtext: "Porto", vat: "19", amount: "5.00" },
+            { postingaccount: 6815, postingtext: "Büromaterial", vat: "19_vat", amount: "100.00", cost_location: "CL1" },
+            { postingaccount: 6816, postingtext: "Porto", vat: "19_vat", amount: "5.00" },
           ],
         },
       ],
@@ -93,7 +108,7 @@ describe("postings tools", () => {
         {
           transaction_id_by_customer: 7,
           oi_receipts_ids_by_customer: [42],
-          splits: [{ postingaccount: 6815, postingtext: "Miete", vat: "0", amount: "500.00" }],
+          splits: [{ postingaccount: 6815, postingtext: "Miete", vat: "0_none", amount: "500.00" }],
         },
       ],
     });
@@ -105,7 +120,7 @@ describe("postings tools", () => {
           oi_receipts_ids_by_customer: [42],
           postingaccounts: [6815],
           postingtexts: ["Miete"],
-          vats: ["0"],
+          vats: ["0_none"],
           amounts: ["500.00"],
         },
       ],
@@ -124,7 +139,7 @@ describe("postings tools", () => {
           amount: "50.00",
           postingaccount_debit: 1800,
           postingaccount_credit: 1000,
-          vat: "0",
+          vat: "0_none",
         },
       ],
     });
@@ -137,7 +152,7 @@ describe("postings tools", () => {
           amount: "50.00",
           postingaccount_debit: 1800,
           postingaccount_credit: 1000,
-          vat: "0",
+          vat: "0_none",
         },
       ],
     });
