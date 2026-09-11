@@ -6,6 +6,19 @@ function mockClient(result: unknown): BBClient {
   return { call: vi.fn().mockResolvedValue(result) };
 }
 
+function receipt(id: string, counterparty: string): Record<string, unknown> {
+  return {
+    id_by_customer: id,
+    type: "invoice inbound",
+    date: "2026-01-01",
+    counterparty,
+    amount: "10.00",
+    invoicenumber: `R-${id}`,
+    due_date: null,
+    deleted: "0",
+  };
+}
+
 describe("receipts tools", () => {
   it("list_receipts trims fields and defaults limit to 20", async () => {
     const client = mockClient({
@@ -63,6 +76,67 @@ describe("receipts tools", () => {
       limit: 20,
       offset: 0,
     });
+  });
+
+  it("list_receipts filters counterparty as a case-insensitive substring, client-side", async () => {
+    const client: BBClient = {
+      call: vi.fn().mockResolvedValue({
+        success: true,
+        rows: 2,
+        data: [receipt("1", "Musterfirma GmbH"), receipt("2", "ACME Corp")],
+      }),
+    };
+    const [listReceipts] = createReceiptsTools(client);
+
+    const result = await listReceipts.handler({ list_direction: "inbound", counterparty: "muster" });
+
+    // counterparty must not be sent to the API — it only matches exactly there.
+    expect(client.call).toHaveBeenCalledWith("receiptsGet", {
+      list_direction: "inbound",
+      limit: 500,
+      offset: 0,
+    });
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      expect.objectContaining({ id_by_customer: "1", counterparty: "Musterfirma GmbH" }),
+    ]);
+  });
+
+  it("list_receipts sweeps multiple pages for counterparty and applies limit/offset after filtering", async () => {
+    const page0 = Array.from({ length: 500 }, (_, i) => receipt(`p0-${i}`, "ACME Corp"));
+    const page1 = [receipt("match-1", "Musterfirma GmbH"), receipt("match-2", "Musterfirma GmbH")];
+    const call = vi.fn().mockResolvedValueOnce({ success: true, rows: 500, data: page0 }).mockResolvedValueOnce({
+      success: true,
+      rows: page1.length,
+      data: page1,
+    });
+    const client: BBClient = { call };
+    const [listReceipts] = createReceiptsTools(client);
+
+    const result = await listReceipts.handler({
+      list_direction: "inbound",
+      counterparty: "muster",
+      limit: 1,
+      offset: 1,
+    });
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenNthCalledWith(1, "receiptsGet", { list_direction: "inbound", limit: 500, offset: 0 });
+    expect(call).toHaveBeenNthCalledWith(2, "receiptsGet", { list_direction: "inbound", limit: 500, offset: 500 });
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      expect.objectContaining({ id_by_customer: "match-2" }),
+    ]);
+    expect(result.structuredContent?.truncated).toBeUndefined();
+  });
+
+  it("list_receipts reports truncated when the counterparty sweep hits the page cap", async () => {
+    const fullPage = { success: true, rows: 500, data: Array.from({ length: 500 }, (_, i) => receipt(`x-${i}`, "ACME")) };
+    const client: BBClient = { call: vi.fn().mockResolvedValue(fullPage) };
+    const [listReceipts] = createReceiptsTools(client);
+
+    const result = await listReceipts.handler({ list_direction: "inbound", counterparty: "acme" });
+
+    expect(client.call).toHaveBeenCalledTimes(20);
+    expect(result.structuredContent?.truncated).toBe(true);
   });
 
   it("get_receipt calls receiptsGetIdByCustomer with idSuffix", async () => {

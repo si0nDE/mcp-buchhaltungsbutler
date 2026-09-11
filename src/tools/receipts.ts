@@ -1,7 +1,27 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
-import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+
+// The API's counterparty filter matches exactly, not as a substring, so a
+// caller searching for "Musterfirma" by typing "Muster" gets zero results
+// even though matching receipts exist. When counterparty is given, we instead
+// sweep every page (dropping counterparty from the request), filter locally,
+// and only then apply the caller's limit/offset — otherwise results past the
+// first server-side page would be silently missed.
+const COUNTERPARTY_SWEEP_PAGE_SIZE = 500;
+const COUNTERPARTY_SWEEP_MAX_PAGES = 20;
+
+const LIST_RECEIPTS_OUTPUT_SHAPE = {
+  data: z.array(z.record(z.string(), z.unknown())),
+  truncated: z
+    .boolean()
+    .optional()
+    .describe(
+      `True if the counterparty sweep hit its ${COUNTERPARTY_SWEEP_MAX_PAGES}-page cap before scanning ` +
+        "all receipts in range — matches may have been missed. Narrow date_from/date_to and retry."
+    ),
+};
 
 const SUMMARY_FIELDS = [
   "id_by_customer",
@@ -40,18 +60,45 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
 
   const listReceipts = defineTool({
     name: "list_receipts",
-    description: "List receipts (Belege), inbound or outbound, with optional filters.",
+    description:
+      "List receipts (Belege), inbound or outbound, with optional filters. counterparty matches as a " +
+      "case-insensitive substring (e.g. \"muster\" matches \"Musterfirma GmbH\"), unlike the underlying " +
+      "API's exact match — this sweeps every page internally to filter, so results may take longer for " +
+      "a wide date range.",
     annotations: { readOnlyHint: true, destructiveHint: false },
-    outputSchema: LIST_OUTPUT_SHAPE,
+    outputSchema: LIST_RECEIPTS_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { full, limit, offset, ...filters } = args;
-      const result = await client.call<BBListResult>("receiptsGet", {
-        ...filters,
-        limit: limit ?? 20,
-        offset: offset ?? 0,
-      });
-      return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+      const { full, limit, offset, counterparty, ...filters } = args;
+
+      if (counterparty === undefined) {
+        const result = await client.call<BBListResult>("receiptsGet", {
+          ...filters,
+          limit: limit ?? 20,
+          offset: offset ?? 0,
+        });
+        return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+      }
+
+      const needle = counterparty.toLowerCase();
+      const allRows: Record<string, unknown>[] = [];
+      let truncated = false;
+      for (let page = 0; page < COUNTERPARTY_SWEEP_MAX_PAGES; page++) {
+        const result = await client.call<BBListResult>("receiptsGet", {
+          ...filters,
+          limit: COUNTERPARTY_SWEEP_PAGE_SIZE,
+          offset: page * COUNTERPARTY_SWEEP_PAGE_SIZE,
+        });
+        allRows.push(...result.data);
+        if (result.data.length < COUNTERPARTY_SWEEP_PAGE_SIZE) break;
+        if (page === COUNTERPARTY_SWEEP_MAX_PAGES - 1) truncated = true;
+      }
+
+      const matched = allRows.filter(
+        (r) => typeof r.counterparty === "string" && r.counterparty.toLowerCase().includes(needle)
+      );
+      const paged = matched.slice(offset ?? 0, (offset ?? 0) + (limit ?? 20));
+      return ok(trimList(paged, SUMMARY_FIELDS, full ?? false), truncated ? { truncated } : undefined);
     },
   });
 
