@@ -30,8 +30,18 @@ function methodNotAllowed(_req: Request, res: Response): void {
   res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }));
 }
 
+function logRequests(req: Request, res: Response, next: NextFunction): void {
+  const start = Date.now();
+  res.on("finish", () => {
+    console.log(`${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - start}ms)`);
+  });
+  next();
+}
+
 export function createHttpApp(bbClient: BBClient, authToken: string, allowedHosts?: string[]): Express {
   const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts });
+
+  app.use(logRequests);
 
   app.get("/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
