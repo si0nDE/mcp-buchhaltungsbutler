@@ -6,7 +6,11 @@ import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } 
 export function createAccountsTools(client: BBClient): [ToolDef, ToolDef] {
   const listAccounts = defineTool({
     name: "list_accounts",
-    description: "List all basic accounts (cash, bank, other) configured in BuchhaltungsButler.",
+    description:
+      "List accounts configured in BuchhaltungsButler: cash registers, bank accounts, and \"other\" " +
+      "accounts — this can include non-bank postingaccounts BuchhaltungsButler classifies as \"account\" " +
+      "type, such as shareholder-liability accounts. Not the full SKR chart of accounts; use " +
+      "list_posting_accounts for that.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: {},

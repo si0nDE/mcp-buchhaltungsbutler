@@ -35,12 +35,10 @@ describe("posting accounts tools", () => {
       exclude_creditors: true,
     });
 
-    expect(JSON.parse(result.content[0].text)).toEqual([
-      { postingaccount_number: "1", name: "A", type: "postingaccount" },
-    ]);
+    expect(JSON.parse(result.content[0].text)).toEqual([{ postingaccount_number: "1", name: "A" }]);
   });
 
-  it("list_posting_accounts trims to summary fields by default", async () => {
+  it("list_posting_accounts trims to postingaccount_number/name by default", async () => {
     const client = mockClient({
       success: true,
       rows: 1,
@@ -60,12 +58,7 @@ describe("posting accounts tools", () => {
     const result = await listPostingAccounts.handler({ limit: 20, offset: 0 });
 
     expect(JSON.parse(result.content[0].text)).toEqual([
-      {
-        postingaccount_number: "6815",
-        name: "Büromaterial",
-        type: "expense",
-        parent_postingaccount_number: "6800",
-      },
+      { postingaccount_number: "6815", name: "Büromaterial" },
     ]);
   });
 
@@ -81,6 +74,102 @@ describe("posting accounts tools", () => {
 
     expect(JSON.parse(result.content[0].text)).toEqual([
       { postingaccount_number: "6815", name: "Büromaterial", type: "expense", subtype: "operating" },
+    ]);
+  });
+
+  it("list_posting_accounts caches the full catalog fetch across calls", async () => {
+    const client = mockClient({ success: true, rows: 1, data: [{ postingaccount_number: "1", name: "A" }] });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+    expect(client.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("list_posting_accounts bypasses the cache when refresh: true", async () => {
+    const client = mockClient({ success: true, rows: 1, data: [{ postingaccount_number: "1", name: "A" }] });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+    await listPostingAccounts.handler({ limit: 20, offset: 0, refresh: true });
+
+    expect(client.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("list_posting_accounts pagination reflects the full cached dataset, not just a 20-row slice", async () => {
+    const data = Array.from({ length: 25 }, (_, i) => ({
+      postingaccount_number: String(1000 + i),
+      name: `Konto ${i}`,
+    }));
+    const client = mockClient({ success: true, rows: data.length, data });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    const page1 = await listPostingAccounts.handler({ limit: 20, offset: 0 });
+    const page2 = await listPostingAccounts.handler({ limit: 20, offset: 20 });
+
+    expect(JSON.parse(page1.content[0].text)).toHaveLength(20);
+    expect(JSON.parse(page2.content[0].text)).toHaveLength(5);
+    expect(client.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("list_posting_accounts filters by postingaccount_number range", async () => {
+    const client = mockClient({
+      success: true,
+      rows: 3,
+      data: [
+        { postingaccount_number: "1000", name: "Kasse" },
+        { postingaccount_number: "1400", name: "Forderungen" },
+        { postingaccount_number: "1600", name: "Verbindlichkeiten" },
+      ],
+    });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    const result = await listPostingAccounts.handler({
+      limit: 20,
+      offset: 0,
+      postingaccount_number_from: 1100,
+      postingaccount_number_to: 1500,
+    });
+
+    expect(JSON.parse(result.content[0].text)).toEqual([{ postingaccount_number: "1400", name: "Forderungen" }]);
+  });
+
+  it("list_posting_accounts excludes non-numeric postingaccount_number from range filtering instead of crashing", async () => {
+    const client = mockClient({
+      success: true,
+      rows: 2,
+      data: [
+        { postingaccount_number: "abc", name: "Bogus" },
+        { postingaccount_number: "1000", name: "Kasse" },
+      ],
+    });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    const result = await listPostingAccounts.handler({
+      limit: 20,
+      offset: 0,
+      postingaccount_number_from: 0,
+    });
+
+    expect(JSON.parse(result.content[0].text)).toEqual([{ postingaccount_number: "1000", name: "Kasse" }]);
+  });
+
+  it("list_posting_accounts filters by case-insensitive name search", async () => {
+    const client = mockClient({
+      success: true,
+      rows: 2,
+      data: [
+        { postingaccount_number: "1576", name: "Abziehbare Vorsteuer 19 %" },
+        { postingaccount_number: "1000", name: "Kasse" },
+      ],
+    });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    const result = await listPostingAccounts.handler({ limit: 20, offset: 0, search: "vorsteuer" });
+
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      { postingaccount_number: "1576", name: "Abziehbare Vorsteuer 19 %" },
     ]);
   });
 
@@ -122,5 +211,40 @@ describe("posting accounts tools", () => {
       name: "Büromaterial neu",
       postingaccount_number: 6815,
     });
+  });
+
+  it("manage_posting_account create invalidates the posting-accounts cache", async () => {
+    const listResult = { success: true, rows: 0, data: [] };
+    const client: BBClient = { call: vi.fn().mockResolvedValue(listResult) };
+    const [listPostingAccounts, managePostingAccount] = createPostingAccountsTools(client);
+
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+    await managePostingAccount.handler({
+      action: "create",
+      name: "Büromaterial",
+      postingaccount_number: 6815,
+      parent_postingaccount_number: 6800,
+    });
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+    const listCalls = (client.call as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([key]) => key === "settingsGetPostingaccounts"
+    );
+    expect(listCalls).toHaveLength(2);
+  });
+
+  it("manage_posting_account update invalidates the posting-accounts cache", async () => {
+    const listResult = { success: true, rows: 0, data: [] };
+    const client: BBClient = { call: vi.fn().mockResolvedValue(listResult) };
+    const [listPostingAccounts, managePostingAccount] = createPostingAccountsTools(client);
+
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+    await managePostingAccount.handler({ action: "update", name: "Büromaterial neu", postingaccount_number: 6815 });
+    await listPostingAccounts.handler({ limit: 20, offset: 0 });
+
+    const listCalls = (client.call as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([key]) => key === "settingsGetPostingaccounts"
+    );
+    expect(listCalls).toHaveLength(2);
   });
 });
