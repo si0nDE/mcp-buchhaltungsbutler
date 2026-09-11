@@ -34,6 +34,12 @@ async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
       limit: FULL_CATALOG_PAGE_SIZE,
       offset,
     });
+    if (!Array.isArray(result.data)) {
+      throw new Error(
+        `settingsGetPostingaccounts returned a malformed page (offset ${offset}): ` +
+          "expected an array in `data`."
+      );
+    }
     allRows.push(...result.data);
     lastPageWasFull = result.data.length >= FULL_CATALOG_PAGE_SIZE;
     if (!lastPageWasFull) break;

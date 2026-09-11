@@ -115,6 +115,15 @@ describe("posting accounts tools", () => {
     }
   });
 
+  it("list_posting_accounts throws a clear error when a page's data is not an array", async () => {
+    const client = mockClient({ success: false, message: "internal error", rows: 0 });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    await expect(listPostingAccounts.handler({ limit: 20, offset: 0 })).rejects.toThrow(
+      /settingsGetPostingaccounts.*malformed|malformed.*settingsGetPostingaccounts/i
+    );
+  });
+
   it("list_posting_accounts applies exclude_* filters and limit/offset client-side", async () => {
     const client = mockClient({
       success: true,

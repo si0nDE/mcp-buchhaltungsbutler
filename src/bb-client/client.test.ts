@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { createClient } from "./client.js";
+import { buildRequestBody, createClient } from "./client.js";
 import { BuchhaltungsButlerApiError, BuchhaltungsButlerRateLimitError } from "./errors.js";
 import type { Config } from "../config.js";
 
@@ -182,13 +182,35 @@ describe("createClient", () => {
     const localConfig: Config = { ...config, baseUrl: `http://127.0.0.1:${address.port}` };
     const client = createClient(localConfig); // no fetchImpl override — uses the real global fetch
 
-    await client.call("receiptsUpload", { file: "ZmFrZQ==", type: "invoice inbound", file_name: "test.pdf" });
+    try {
+      await client.call("receiptsUpload", { file: "ZmFrZQ==", type: "invoice inbound", file_name: "test.pdf" });
 
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+      expect(receivedContentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(receivedBody).toContain('name="file"');
+      expect(receivedBody).toContain("ZmFrZQ==");
+      expect(receivedBody).toContain('name="type"');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
 
-    expect(receivedContentType).toMatch(/^multipart\/form-data; boundary=/);
-    expect(receivedBody).toContain('name="file"');
-    expect(receivedBody).toContain("ZmFrZQ==");
-    expect(receivedBody).toContain('name="type"');
+describe("buildRequestBody", () => {
+  it('bodyFormat: "form" form-encodes flat values and bracket-notation nested arrays/objects', () => {
+    const { body, headers } = buildRequestBody("form", {
+      api_key: "customer-key",
+      receipts: [{ type: "invoice inbound", counterparty: "ACME & Co" }],
+    });
+
+    expect(headers).toEqual({ "Content-Type": "application/x-www-form-urlencoded" });
+    expect(body).toBe(
+      "api_key=customer-key&receipts%5B0%5D%5Btype%5D=invoice%20inbound&receipts%5B0%5D%5Bcounterparty%5D=ACME%20%26%20Co"
+    );
+  });
+
+  it('bodyFormat: "form" omits undefined/null values entirely', () => {
+    const { body } = buildRequestBody("form", { api_key: "customer-key", cost_location: undefined, note: null });
+
+    expect(body).toBe("api_key=customer-key");
   });
 });

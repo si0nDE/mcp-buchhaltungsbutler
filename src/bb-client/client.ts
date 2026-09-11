@@ -81,7 +81,11 @@ function buildMultipartBody(payload: Record<string, unknown>): FormData {
   return form;
 }
 
-function buildRequestBody(
+// Exported so bodyFormat: "form" — currently unused by any endpoint, kept
+// as the designated escape hatch for a real future exception — has direct
+// test coverage without needing a synthetic entry in the generated
+// endpoint table.
+export function buildRequestBody(
   bodyFormat: "json" | "form" | "multipart",
   payload: Record<string, unknown>
 ): { body: BodyInit; headers?: Record<string, string> } {
