@@ -1,6 +1,9 @@
 import { z } from "zod";
-import type { BBClient } from "../bb-client/client.js";
+import type { BBClient, BBListResult } from "../bb-client/client.js";
+import { trimList } from "../formatting/trim.js";
 import { defineTool, ok, type ToolDef } from "./types.js";
+
+const SUMMARY_FIELDS = ["postingaccount_number", "name", "type", "parent_postingaccount_number"] as const;
 
 export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef] {
   const listShape = {
@@ -10,6 +13,7 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     exclude_accounts: z.boolean().optional(),
     exclude_creditors: z.boolean().optional(),
     exclude_debtors: z.boolean().optional(),
+    full: z.boolean().default(false),
   };
 
   const listPostingAccounts = defineTool({
@@ -18,8 +22,9 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     annotations: { readOnlyHint: true, destructiveHint: false },
     inputSchema: listShape,
     async handler(args) {
-      const result = await client.call("settingsGetPostingaccounts", args);
-      return ok(result);
+      const { full, ...filters } = args;
+      const result = await client.call<BBListResult>("settingsGetPostingaccounts", filters);
+      return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
     },
   });
 

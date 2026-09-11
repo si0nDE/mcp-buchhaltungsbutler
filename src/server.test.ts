@@ -73,6 +73,7 @@ describe("createServer", () => {
       "update_contact", // overwrites existing debtor/creditor fields
       "manage_posting_account", // update branch overwrites existing name
       "unassign_receipt", // removes an existing assignment
+      "unconfirm_posting", // flips an existing posting's fixed/confirmed status
     ]) {
       expect(registeredTools[name].annotations, name).toEqual({ readOnlyHint: false, destructiveHint: true });
     }

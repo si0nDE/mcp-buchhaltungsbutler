@@ -144,7 +144,10 @@ export function createPostingsTools(
   const unconfirmPosting = defineTool({
     name: "unconfirm_posting",
     description: "Unconfirm a fixed posting so it can be edited again. type selects which kind of posting.",
-    annotations: { readOnlyHint: false, destructiveHint: false },
+    // Flips an existing posting's fixed/confirmed status — a non-additive
+    // state change, same class as update_contact/manage_posting_account/
+    // unassign_receipt, so destructiveHint follows them for consistency.
+    annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: unconfirmShape,
     async handler(args) {
       if (args.type === "transaction") {
