@@ -44,6 +44,31 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 Vorher `npm run build` ausführen, damit `dist/index.js` existiert.
 
+## Remote-Deployment (Docker)
+
+Für Clients, die keinen lokalen Prozess starten können (z. B. Claude auf dem Handy), läuft der Server
+alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
+
+1. Veröffentlichtes Image ziehen: `ghcr.io/<owner>/mcp-buchhaltungsbutler:latest` (automatisch aus `main`
+   gebaut via `.github/workflows/docker-publish.yml`), oder lokal bauen mit `docker build -t mcp-buchhaltungsbutler .`.
+2. Starten mit den üblichen `BB_API_CLIENT`/`BB_API_SECRET`/`BB_API_KEY`, plus:
+   - `MCP_AUTH_TOKEN` (Pflicht) — ein langes Zufalls-Secret; jeder Request braucht `Authorization: Bearer <token>`.
+   - `MCP_ALLOWED_HOSTS` (empfohlen) — kommagetrennte Hostnamen, unter denen der Server erreichbar ist (z. B. deine Reverse-Proxy-Domain), für DNS-Rebinding-Schutz.
+   - `PORT` (optional, Standard `3000`).
+
+   ```bash
+   docker run -d --name mcp-buchhaltungsbutler \
+     -e BB_API_CLIENT=... -e BB_API_SECRET=... -e BB_API_KEY=... \
+     -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.deine-domain.example \
+     -p 3000:3000 \
+     ghcr.io/<owner>/mcp-buchhaltungsbutler:latest
+   ```
+3. Reverse-Proxy davor (Caddy, nginx, Traefik, ...) für TLS — der Container selbst spricht nur reines
+   HTTP. `GET /health` liefert `200 {"status":"ok"}` ohne Auth, für Health-Checks; der MCP-Endpoint ist
+   `POST /mcp` und braucht den Bearer-Token.
+4. In Claude als Remote-/Custom-Connector eintragen mit `https://mcp.deine-domain.example/mcp` und
+   `Authorization: Bearer <token>` — dadurch auch von Claude auf iOS/iPadOS erreichbar, nicht nur Desktop.
+
 ## Tools
 
 | Kategorie | Tools |
@@ -69,14 +94,19 @@ src/
   formatting/trim.ts       # trimmt List-Antworten auf LLM-freundliche Felder
   tools/                   # eine Datei pro Kategorie, kuratierte MCP-Tools auf dem Client
   server.ts, index.ts      # MCP-Server-Bootstrap (stdio)
+  http-server.ts           # MCP-Server-Bootstrap (Streamable HTTP, Bearer-Auth) — für Remote-/Docker-Deployment
 scripts/generate-client.ts # parst spec/buchhaltungsbutler-v1.json nach src/bb-client/generated/
 ```
 
-Nur Single-Tenant, lokaler stdio-Transport — kein Remote-Hosting, kein Multi-Tenant-Betrieb, kein OAuth. Zugangsdaten erreichen nie das Modell; der Client-Layer injiziert sie aus Env-Variablen direkt in die Requests.
+Nur Single-Tenant, kein Multi-Tenant-Betrieb, kein OAuth. Zugangsdaten erreichen nie das Modell; der
+Client-Layer injiziert sie aus Env-Variablen direkt in die Requests. Läuft lokal über stdio (Claude
+Desktop) oder als Streamable-HTTP-Dienst hinter eigenem Reverse-Proxy und Bearer-Token (siehe
+"Remote-Deployment" oben) für Clients, die einen netzwerkerreichbaren Server brauchen.
 
 ## Status
 
-Alle 48 BuchhaltungsButler-Endpoints sind über die 30 Tools oben abgedeckt, getestet gegen gemockte HTTP-Antworten. Noch nicht gegen einen echten Account verifiziert — bei unerwarteten Fehlern, besonders bei den vier `*_id_by_customer`-Endpoints (`get_receipt`, `set_receipt_deleted`, `get_transaction`) oder bei `add_receipt_postings`/`add_transaction_postings` mit gemischt befüllten Kostenstellen im Batch, bitte ein Issue öffnen.
+Alle 48 BuchhaltungsButler-Endpoints sind über die 30 Tools oben abgedeckt. Gegen einen echten Account
+verifiziert (sowohl ein Lese-Aufruf als auch ein Create+Delete-Roundtrip).
 
 ## Entwicklung
 
