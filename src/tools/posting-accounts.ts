@@ -18,14 +18,24 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
 
   const listPostingAccounts = defineTool({
     name: "list_posting_accounts",
-    description: "List posting accounts (Buchungskonten / SKR chart of accounts entries).",
+    description:
+      "List posting accounts (Buchungskonten / SKR chart of accounts entries). The BuchhaltungsButler " +
+      "API rejects any query parameter on this endpoint (limit/offset/order/exclude_*), so filtering " +
+      "and pagination are applied client-side after fetching the full list.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { full, ...filters } = args;
-      const result = await client.call<BBListResult>("settingsGetPostingaccounts", filters);
-      return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+      const result = await client.call<BBListResult>("settingsGetPostingaccounts", {});
+      let rows = result.data;
+      if (args.exclude_postingaccounts) rows = rows.filter((r) => r.type !== "postingaccount");
+      if (args.exclude_accounts) rows = rows.filter((r) => r.type !== "account");
+      if (args.exclude_creditors) rows = rows.filter((r) => r.type !== "creditor");
+      if (args.exclude_debtors) rows = rows.filter((r) => r.type !== "debtor");
+      const offset = args.offset ?? 0;
+      const limit = args.limit ?? 20;
+      rows = rows.slice(offset, offset + limit);
+      return ok(trimList(rows, SUMMARY_FIELDS, args.full ?? false));
     },
   });
 

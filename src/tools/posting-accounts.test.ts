@@ -7,17 +7,37 @@ function mockClient(result: unknown): BBClient {
 }
 
 describe("posting accounts tools", () => {
-  it("list_posting_accounts calls settingsGetPostingaccounts with filters", async () => {
+  it("list_posting_accounts calls settingsGetPostingaccounts without params (API rejects any filter param)", async () => {
     const client = mockClient({ success: true, rows: 0, data: [] });
     const [listPostingAccounts] = createPostingAccountsTools(client);
 
     await listPostingAccounts.handler({ limit: 20, offset: 0, exclude_debtors: true });
 
-    expect(client.call).toHaveBeenCalledWith("settingsGetPostingaccounts", {
+    expect(client.call).toHaveBeenCalledWith("settingsGetPostingaccounts", {});
+  });
+
+  it("list_posting_accounts applies exclude_* filters and limit/offset client-side", async () => {
+    const client = mockClient({
+      success: true,
+      rows: 3,
+      data: [
+        { postingaccount_number: "1", name: "A", type: "postingaccount" },
+        { postingaccount_number: "2", name: "B", type: "debtor" },
+        { postingaccount_number: "3", name: "C", type: "creditor" },
+      ],
+    });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+
+    const result = await listPostingAccounts.handler({
       limit: 20,
       offset: 0,
       exclude_debtors: true,
+      exclude_creditors: true,
     });
+
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      { postingaccount_number: "1", name: "A", type: "postingaccount" },
+    ]);
   });
 
   it("list_posting_accounts trims to summary fields by default", async () => {
