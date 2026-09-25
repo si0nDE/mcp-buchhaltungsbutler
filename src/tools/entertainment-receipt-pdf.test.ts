@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { assertOccasionIsConcrete, computeAmounts } from "./entertainment-receipt-pdf.js";
+import { PDFDocument } from "pdf-lib";
+import {
+  assertOccasionIsConcrete,
+  computeAmounts,
+  mergeWithBillFile,
+  renderEntertainmentReceiptCover,
+} from "./entertainment-receipt-pdf.js";
 
 describe("assertOccasionIsConcrete", () => {
   it("accepts a concrete, detailed occasion", () => {
@@ -55,5 +61,73 @@ describe("computeAmounts", () => {
     expect(result.deductibleBase).toBeCloseTo(84.5, 2);
     expect(result.deductible).toBeCloseTo(59.15, 2);
     expect(result.nonDeductible).toBeCloseTo(25.35, 2);
+  });
+});
+
+const fields = {
+  date: "24.09.2026",
+  location: "Restaurant Zur Alten Post, München",
+  occasion: "Vertragsverhandlung Rahmenvertrag IT-Sicherheitsaudits 2026/2027 mit Kunde GmbH",
+  participants: "Nena Tempel (mainsec UG), Max Mustermann (Kunde GmbH)",
+  hostName: "Nena Tempel",
+  hostRole: "Geschäftsführung",
+  companyName: "mainsec UG (haftungsbeschränkt)",
+  companyAddress: "Strüthweg 2, 97222 Rimpar",
+  receiptNumber: "BA-2026-0142",
+  billReference: "4471",
+};
+
+const amounts = {
+  grossTotal: 84.5,
+  vatTotal: 9.5,
+  deductibleBase: 75.0,
+  deductible: 52.5,
+  nonDeductible: 22.5,
+};
+
+describe("renderEntertainmentReceiptCover", () => {
+  it("produces a loadable single-page A4 PDF", async () => {
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+    const page = doc.getPage(0);
+    expect(page.getSize()).toEqual({ width: 595.28, height: 841.89 });
+  });
+
+  it("renders successfully with kleinunternehmer: true (Vorsteuer line omitted - verified visually in Step 5, not here)", async () => {
+    // Structural smoke test only - full text-content assertions would need
+    // an OCR/text-extraction dependency this project doesn't otherwise need.
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: true });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+  });
+});
+
+// A minimal valid single-page PDF, base64-encoded, for merge tests that
+// don't need real invoice content - just a second document to append.
+const MINIMAL_PDF_BASE64 = await (async () => {
+  const doc = await PDFDocument.create();
+  doc.addPage([200, 200]);
+  const bytes = await doc.save();
+  return Buffer.from(bytes).toString("base64");
+})();
+
+// A 1x1 transparent PNG, base64-encoded.
+const MINIMAL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+describe("mergeWithBillFile", () => {
+  it("appends all pages of a PDF bill after the cover page", async () => {
+    const cover = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false });
+    const merged = await mergeWithBillFile(cover, MINIMAL_PDF_BASE64, "pdf");
+    const doc = await PDFDocument.load(merged);
+    expect(doc.getPageCount()).toBe(2);
+  });
+
+  it("embeds a PNG bill as a second full page", async () => {
+    const cover = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false });
+    const merged = await mergeWithBillFile(cover, MINIMAL_PNG_BASE64, "png");
+    const doc = await PDFDocument.load(merged);
+    expect(doc.getPageCount()).toBe(2);
   });
 });
