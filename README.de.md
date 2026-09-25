@@ -8,7 +8,7 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 ## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-- **30 Tools decken alle 48 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **31 Tools decken alle 48 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
 - **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
 - **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
 - **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
@@ -80,7 +80,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 | Buchungskonten | `list_posting_accounts`, `manage_posting_account` |
 | Belege | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions` |
 | Transaktionen | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
-| Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting` |
+| Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_einvoice` |
 
 ## Architektur
@@ -105,7 +105,7 @@ Desktop) oder als Streamable-HTTP-Dienst hinter eigenem Reverse-Proxy und Bearer
 
 ## Status
 
-Alle 48 BuchhaltungsButler-Endpoints sind über die 30 Tools oben abgedeckt. Gegen einen echten Account
+Alle 48 BuchhaltungsButler-Endpoints sind über die 31 Tools oben abgedeckt. Gegen einen echten Account
 verifiziert (sowohl ein Lese-Aufruf als auch ein Create+Delete-Roundtrip).
 
 ## Entwicklung

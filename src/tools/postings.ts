@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { assertEntertainmentExpenseFields, formatEntertainmentExpenseNote } from "./entertainment-expense.js";
+import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -85,7 +86,7 @@ function flattenSplits(splits: Split[]): {
 
 export function createPostingsTools(
   client: BBClient
-): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
+): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
   const listShape = {
     date_from: z.string(),
     date_to: z.string(),
@@ -384,6 +385,92 @@ export function createPostingsTools(
     },
   });
 
+  const confirmPaymentShape = {
+    receipt_id_by_customer: z.number().int(),
+    transaction_id_by_customer: z.number().int(),
+    posting_account: z
+      .number()
+      .int()
+      .describe(
+        "The creditor/debtor posting account the receipt was originally booked against (the same account " +
+          "passed as creditor/debtor to add_receipt_postings). Not auto-discovered — the BuchhaltungsButler " +
+          "API has no way to look up which account a given receipt was booked against, so pass the account " +
+          "you already used or can look up with a single list_postings call."
+      ),
+    postingtext: z.string().optional(),
+  };
+
+  const confirmPayment = defineTool({
+    name: "confirm_payment",
+    description:
+      "Close out a receipt against a matching bank transaction: assigning a receipt to a transaction " +
+      "(assign_receipts_to_transactions) creates no posting and leaves the creditor/debtor balance " +
+      "untouched by itself — a booking against posting_account is still required to actually settle it. " +
+      "This tool does both in the right order and reports which of them actually completed, so a caller " +
+      "can't mistake 'assigned' for 'paid'. Rejects with an error if the receipt's and transaction's " +
+      "amounts don't match (no silent partial settlement). Does not set or ask about the fixed/festgeschrieben " +
+      "state — that has no equivalent in the BuchhaltungsButler API and is a client-specific policy decision, " +
+      "not something this connector can or should decide.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: confirmPaymentShape,
+    async handler(args) {
+      const receipt = await client.call<{ data: { amount: string; invoicenumber?: string; counterparty?: string } }>(
+        "receiptsGetIdByCustomer",
+        {},
+        { idSuffix: args.receipt_id_by_customer }
+      );
+      const transaction = await client.call<{ data: { amount: string } }>(
+        "transactionsGetIdByCustomer",
+        {},
+        { idSuffix: args.transaction_id_by_customer }
+      );
+
+      if (!amountsMatch(receipt.data.amount, transaction.data.amount)) {
+        throw new Error(
+          `Receipt ${args.receipt_id_by_customer} amount (${receipt.data.amount}) does not match transaction ` +
+            `${args.transaction_id_by_customer} amount (${transaction.data.amount}) — refusing to assign or book ` +
+            `a partial settlement. Confirm the correct receipt/transaction pair with the user instead of guessing.`
+        );
+      }
+
+      const assignResult = await client.call("transactionsAssignBatchReceipt", {
+        transactions_to_receipts: [
+          {
+            transaction_id_by_customer: args.transaction_id_by_customer,
+            receipt_id_by_customer: args.receipt_id_by_customer,
+          },
+        ],
+      });
+
+      const amount = Math.abs(Number(receipt.data.amount)).toFixed(2);
+      const postingtext = args.postingtext ?? buildSettlementPostingText(receipt.data, args.receipt_id_by_customer);
+
+      try {
+        const postingResult = await client.call("postingsAddBatchTransactions", {
+          transactions: [
+            {
+              transaction_id_by_customer: args.transaction_id_by_customer,
+              oi_receipts_ids_by_customer: [args.receipt_id_by_customer],
+              postingaccounts: [args.posting_account],
+              postingtexts: [postingtext],
+              vats: ["0_none"],
+              amounts: [amount],
+            },
+          ],
+        });
+        return ok({ status: "booked", amount, assign: assignResult, posting: postingResult });
+      } catch (err) {
+        return ok({
+          status: "assigned_only",
+          amount,
+          assign: assignResult,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  });
+
   return [
     listPostings,
     addReceiptPostings,
@@ -391,5 +478,6 @@ export function createPostingsTools(
     addFreePostings,
     unconfirmPosting,
     assignReceiptToFreePosting,
+    confirmPayment,
   ];
 }

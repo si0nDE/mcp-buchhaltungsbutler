@@ -6,6 +6,16 @@ function mockClient(result: unknown): BBClient {
   return { call: vi.fn().mockResolvedValue(result) };
 }
 
+function keyedMockClient(responses: Record<string, unknown>): BBClient {
+  return {
+    call: vi.fn((key: string) => {
+      if (!(key in responses)) throw new Error(`unexpected call: ${key}`);
+      const value = responses[key];
+      return value instanceof Error ? Promise.reject(value) : Promise.resolve(value);
+    }) as BBClient["call"],
+  };
+}
+
 describe("postings tools", () => {
   it("list_postings calls postingsGet with required date range and default limit", async () => {
     const client = mockClient({ success: true, rows: 0, data: [] });
@@ -621,6 +631,129 @@ describe("postings tools", () => {
         transaction_id_by_customer: 7,
         comment_text: expect.stringMatching(/Person A, Person B.*Kundengespräch/s),
       });
+    });
+  });
+
+  describe("confirm_payment", () => {
+    it("rejects a receipt/transaction amount mismatch without assigning or booking", async () => {
+      const client = keyedMockClient({
+        receiptsGetIdByCustomer: {
+          success: true,
+          data: { amount: "123.45", invoicenumber: "RE-2026-0042", counterparty: "Musterfirma GmbH" },
+        },
+        transactionsGetIdByCustomer: { success: true, data: { amount: "-100.00" } },
+      });
+      const [, , , , , , confirmPayment] = createPostingsTools(client);
+
+      await expect(
+        confirmPayment.handler({
+          receipt_id_by_customer: 1111,
+          transaction_id_by_customer: 2222,
+          posting_account: 70999,
+        })
+      ).rejects.toThrow(/123.45.*100.00/s);
+
+      expect(client.call).not.toHaveBeenCalledWith("transactionsAssignBatchReceipt", expect.anything());
+      expect(client.call).not.toHaveBeenCalledWith("postingsAddBatchTransactions", expect.anything());
+    });
+
+    it("assigns and books the settlement posting when amounts match, reporting status booked", async () => {
+      const client = keyedMockClient({
+        receiptsGetIdByCustomer: {
+          success: true,
+          data: { amount: "123.45", invoicenumber: "RE-2026-0042", counterparty: "Musterfirma GmbH" },
+        },
+        transactionsGetIdByCustomer: { success: true, data: { amount: "-123.45" } },
+        transactionsAssignBatchReceipt: { success: true },
+        postingsAddBatchTransactions: { success: true },
+      });
+      const [, , , , , , confirmPayment] = createPostingsTools(client);
+
+      const result = await confirmPayment.handler({
+        receipt_id_by_customer: 1111,
+        transaction_id_by_customer: 2222,
+        posting_account: 70999,
+      });
+
+      expect(client.call).toHaveBeenCalledWith("transactionsAssignBatchReceipt", {
+        transactions_to_receipts: [{ transaction_id_by_customer: 2222, receipt_id_by_customer: 1111 }],
+      });
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchTransactions", {
+        transactions: [
+          {
+            transaction_id_by_customer: 2222,
+            oi_receipts_ids_by_customer: [1111],
+            postingaccounts: [70999],
+            postingtexts: ["Ausgleich Beleg RE-2026-0042 - Musterfirma GmbH"],
+            vats: ["0_none"],
+            amounts: ["123.45"],
+          },
+        ],
+      });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ status: "booked" });
+    });
+
+    it("uses a caller-supplied postingtext instead of the default", async () => {
+      const client = keyedMockClient({
+        receiptsGetIdByCustomer: { success: true, data: { amount: "123.45" } },
+        transactionsGetIdByCustomer: { success: true, data: { amount: "-123.45" } },
+        transactionsAssignBatchReceipt: { success: true },
+        postingsAddBatchTransactions: { success: true },
+      });
+      const [, , , , , , confirmPayment] = createPostingsTools(client);
+
+      await confirmPayment.handler({
+        receipt_id_by_customer: 1111,
+        transaction_id_by_customer: 2222,
+        posting_account: 70999,
+        postingtext: "Custom Ausgleichstext",
+      });
+
+      expect(client.call).toHaveBeenCalledWith(
+        "postingsAddBatchTransactions",
+        expect.objectContaining({
+          transactions: [expect.objectContaining({ postingtexts: ["Custom Ausgleichstext"] })],
+        })
+      );
+    });
+
+    it("reports status assigned_only, without throwing, when booking fails after a successful assignment", async () => {
+      const client = keyedMockClient({
+        receiptsGetIdByCustomer: { success: true, data: { amount: "123.45" } },
+        transactionsGetIdByCustomer: { success: true, data: { amount: "-123.45" } },
+        transactionsAssignBatchReceipt: { success: true },
+        postingsAddBatchTransactions: new Error("posting rejected"),
+      });
+      const [, , , , , , confirmPayment] = createPostingsTools(client);
+
+      const result = await confirmPayment.handler({
+        receipt_id_by_customer: 1111,
+        transaction_id_by_customer: 2222,
+        posting_account: 70999,
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.status).toBe("assigned_only");
+      expect(parsed.error).toMatch(/posting rejected/);
+    });
+
+    it("propagates a failure from the assignment call itself (nothing was booked)", async () => {
+      const client = keyedMockClient({
+        receiptsGetIdByCustomer: { success: true, data: { amount: "123.45" } },
+        transactionsGetIdByCustomer: { success: true, data: { amount: "-123.45" } },
+        transactionsAssignBatchReceipt: new Error("assignment rejected"),
+      });
+      const [, , , , , , confirmPayment] = createPostingsTools(client);
+
+      await expect(
+        confirmPayment.handler({
+          receipt_id_by_customer: 1111,
+          transaction_id_by_customer: 2222,
+          posting_account: 70999,
+        })
+      ).rejects.toThrow(/assignment rejected/);
+
+      expect(client.call).not.toHaveBeenCalledWith("postingsAddBatchTransactions", expect.anything());
     });
   });
 });
