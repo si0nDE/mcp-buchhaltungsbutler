@@ -88,6 +88,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 | Transaktionen | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
 | Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_einvoice` |
+| Bewirtungsbeleg | `generate_entertainment_receipt` |
 
 ## Architektur
 
@@ -111,8 +112,7 @@ Desktop) oder als Streamable-HTTP-Dienst hinter eigenem Reverse-Proxy und Bearer
 
 ## Status
 
-Alle 48 BuchhaltungsButler-Endpoints sind über die 31 Tools oben abgedeckt. Gegen einen echten Account
-verifiziert (sowohl ein Lese-Aufruf als auch ein Create+Delete-Roundtrip).
+Alle 48 BuchhaltungsButler-Endpoints sind über 31 dieser Tools abgedeckt; `generate_entertainment_receipt` ist ein client-seitiger PDF-Generator ohne eigene BuchhaltungsButler-API-Aufrufe (siehe [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Gegen einen echten Account verifiziert (sowohl ein Lese-Aufruf als auch ein Create+Delete-Roundtrip).
 
 ## Entwicklung
 
