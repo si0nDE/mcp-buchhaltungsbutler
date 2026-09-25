@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **30 tools covering all 48 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **31 tools covering all 48 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.
@@ -81,7 +81,7 @@ Streamable HTTP service instead of stdio, container-ready.
 | Posting Accounts | `list_posting_accounts`, `manage_posting_account` |
 | Receipts | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions` |
 | Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
-| Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting` |
+| Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Invoices | `create_invoice`, `create_einvoice` |
 
 ## Architecture
@@ -106,7 +106,7 @@ for clients that need a network-reachable server.
 
 ## Status
 
-All 48 BuchhaltungsButler endpoints are covered by the 30 tools above. Verified against a live account
+All 48 BuchhaltungsButler endpoints are covered by the 31 tools above. Verified against a live account
 (both a read call and a create+delete round trip).
 
 ## Development
