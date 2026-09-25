@@ -44,6 +44,12 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 Run `npm run build` first so `dist/index.js` exists.
 
+## Bewirtungsbeleg (business entertainment receipts)
+
+`generate_entertainment_receipt` fills the gap between a restaurant bill and a legally complete
+Bewirtungsbeleg (§ 4 Abs. 5 Satz 1 Nr. 2 EStG). See [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)
+for the legal background (German only, since it documents German tax law).
+
 ## Remote deployment (Docker)
 
 For clients that can't launch a local process (e.g. Claude on mobile), the server also runs as a

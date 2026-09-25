@@ -44,6 +44,12 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 Vorher `npm run build` ausführen, damit `dist/index.js` existiert.
 
+## Bewirtungsbeleg
+
+`generate_entertainment_receipt` schließt die Lücke zwischen der Restaurant-Rechnung und einem
+vollständigen Bewirtungsbeleg (§ 4 Abs. 5 Satz 1 Nr. 2 EStG). Rechtlicher Hintergrund:
+[docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md).
+
 ## Remote-Deployment (Docker)
 
 Für Clients, die keinen lokalen Prozess starten können (z. B. Claude auf dem Handy), läuft der Server
