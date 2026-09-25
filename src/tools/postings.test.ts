@@ -117,8 +117,9 @@ describe("postings tools", () => {
       transactions: [
         {
           transaction_id_by_customer: 7,
-          oi_receipts_ids_by_customer: [42],
-          splits: [{ postingaccount: 6815, postingtext: "Miete", vat: "0_none", amount: "500.00" }],
+          splits: [
+            { postingaccount: 6815, postingtext: "Miete", vat: "0_none", amount: "500.00", receipt_id_by_customer: 42 },
+          ],
         },
       ],
     });
@@ -135,6 +136,59 @@ describe("postings tools", () => {
         },
       ],
     });
+  });
+
+  it("add_transaction_postings pads oi_receipts_ids_by_customer with null to match the split count, instead of sending a mismatched-length array (the root cause of a live 'internal error' on every call)", async () => {
+    const client = mockClient({ success: true });
+    const [, , addTransactionPostings] = createPostingsTools(client);
+
+    await addTransactionPostings.handler({
+      transactions: [
+        {
+          transaction_id_by_customer: 1042,
+          splits: [{ postingaccount: 4964, postingtext: "Beispiel-Softwarekosten", vat: "19_both_1", amount: "19.33" }],
+        },
+      ],
+    });
+
+    expect(client.call).toHaveBeenCalledWith("postingsAddBatchTransactions", {
+      transactions: [
+        expect.objectContaining({
+          oi_receipts_ids_by_customer: [null],
+        }),
+      ],
+    });
+  });
+
+  it("add_transaction_postings positionally aligns oi_receipts_ids_by_customer across multiple splits, null where no receipt is given", async () => {
+    const client = mockClient({ success: true });
+    const [, , addTransactionPostings] = createPostingsTools(client);
+
+    await addTransactionPostings.handler({
+      transactions: [
+        {
+          transaction_id_by_customer: 7,
+          splits: [
+            { postingaccount: 6815, postingtext: "Miete", vat: "0_none", amount: "500.00" },
+            {
+              postingaccount: 6816,
+              postingtext: "Nebenkosten",
+              vat: "0_none",
+              amount: "50.00",
+              receipt_id_by_customer: 99,
+            },
+            { postingaccount: 6817, postingtext: "Sonstiges", vat: "0_none", amount: "10.00" },
+          ],
+        },
+      ],
+    });
+
+    expect(client.call).toHaveBeenCalledWith(
+      "postingsAddBatchTransactions",
+      expect.objectContaining({
+        transactions: [expect.objectContaining({ oi_receipts_ids_by_customer: [null, 99, null] })],
+      })
+    );
   });
 
   it("add_free_postings calls postingsAddBatchFree", async () => {
@@ -326,11 +380,12 @@ describe("postings tools", () => {
           transactions: [
             {
               transaction_id_by_customer: 7,
-              oi_receipts_ids_by_customer: [42],
               traveler_name: "Person A",
               traveler_role: "employee",
               business_purpose: "Kundentermin",
-              splits: [{ postingaccount: 4673, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+              splits: [
+                { postingaccount: 4673, postingtext: "Flug", vat: "0_none", amount: "300.00", receipt_id_by_customer: 42 },
+              ],
             },
           ],
         })
@@ -346,11 +401,18 @@ describe("postings tools", () => {
         transactions: [
           {
             transaction_id_by_customer: 7,
-            oi_receipts_ids_by_customer: [42],
             traveler_name: "Person A",
             traveler_role: "employee",
             business_purpose: "Dienstreise Berlin",
-            splits: [{ postingaccount: 4663, postingtext: "Bahnticket", vat: "0_none", amount: "150.00" }],
+            splits: [
+              {
+                postingaccount: 4663,
+                postingtext: "Bahnticket",
+                vat: "0_none",
+                amount: "150.00",
+                receipt_id_by_customer: 42,
+              },
+            ],
           },
         ],
       });
@@ -603,7 +665,6 @@ describe("postings tools", () => {
         transactions: [
           {
             transaction_id_by_customer: 7,
-            oi_receipts_ids_by_customer: [42],
             participants: "Person A, Person B",
             occasion: "Kundengespräch",
             host_confirmed: true,
@@ -619,7 +680,7 @@ describe("postings tools", () => {
         transactions: [
           {
             transaction_id_by_customer: 7,
-            oi_receipts_ids_by_customer: [42],
+            oi_receipts_ids_by_customer: [null, null],
             postingaccounts: [6640, 6644],
             postingtexts: ["Bewirtung", "Bewirtung nicht abz."],
             vats: ["19_vat", "19_vat"],
