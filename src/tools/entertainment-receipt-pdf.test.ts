@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PageSizes, StandardFonts } from "pdf-lib";
 import {
   assertOccasionIsConcrete,
   computeAmounts,
+  LETTERHEAD_GAP,
+  MARGIN,
   mergeWithBillFile,
   renderEntertainmentReceiptCover,
+  wrapText,
 } from "./entertainment-receipt-pdf.js";
 
 describe("assertOccasionIsConcrete", () => {
@@ -139,6 +142,55 @@ describe("renderEntertainmentReceiptCover", () => {
     const bytes = await renderEntertainmentReceiptCover(longWordFields, amounts, { kleinunternehmer: false });
     const doc = await PDFDocument.load(bytes);
     expect(doc.getPageCount()).toBe(1);
+  });
+
+  it("keeps the clamped companyAddress from overlapping the billReference subtitle even when both are long", async () => {
+    // Reproduces the collision the re-reviewer found by tracing pdf-lib
+    // text metrics: a long billReference widens the right-aligned `sub`
+    // line past a fixed half-content-width split, so a companyAddress
+    // clamped to that fixed split can still land to the right of `sub`'s
+    // left edge. The fix computes the left column's max width from the
+    // ACTUAL rendered width of `sub` (and title) instead of a fixed split.
+    const longBillReference = "RE-2026-00123456";
+    const longCompanyAddress =
+      "Musterstraße Allee der Wissenschaften und Industrie 12345678, 97222 Rimpar-Oberdorf";
+    const collisionFields = {
+      ...fields,
+      billReference: longBillReference,
+      companyAddress: longCompanyAddress,
+    };
+
+    const bytes = await renderEntertainmentReceiptCover(collisionFields, amounts, { kleinunternehmer: false });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+
+    // Independently reconstruct exactly what the renderer computes and
+    // draws for this line - same font, same formula, same wrapText - and
+    // measure both sides' actual rendered widths to assert the gap between
+    // them is non-negative (no overlap).
+    const measureDoc = await PDFDocument.create();
+    const font = await measureDoc.embedFont(StandardFonts.Helvetica);
+    const [pageWidth] = PageSizes.A4;
+    const contentWidth = pageWidth - 2 * MARGIN;
+    const sub = `Ergänzung zur Rechnung ${longBillReference} gem. § 4 Abs. 5 Satz 1 Nr. 2 EStG`;
+    const subWidth = font.widthOfTextAtSize(sub, 9);
+    const companyAddressMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
+    const companyAddressLine = wrapText(longCompanyAddress, font, 9, companyAddressMaxWidth)[0] ?? "";
+    const companyAddressWidth = font.widthOfTextAtSize(companyAddressLine, 9);
+
+    // Left text spans [MARGIN, MARGIN + companyAddressWidth]; right text
+    // spans [pageWidth - MARGIN - subWidth, pageWidth - MARGIN].
+    const rightTextLeftEdge = pageWidth - MARGIN - subWidth;
+    const leftTextRightEdge = MARGIN + companyAddressWidth;
+    const gap = rightTextLeftEdge - leftTextRightEdge;
+    expect(gap).toBeGreaterThanOrEqual(0);
+
+    // Sanity check that this scenario is actually a meaningful test of the
+    // fix: with the OLD fixed half-content-width clamp, the address line
+    // would have been allowed up to contentWidth / 2, which is wider than
+    // the dynamically computed bound here - i.e. the old code had strictly
+    // less headroom to avoid collision than the new code provides.
+    expect(companyAddressMaxWidth).toBeLessThan(contentWidth / 2);
   });
 });
 

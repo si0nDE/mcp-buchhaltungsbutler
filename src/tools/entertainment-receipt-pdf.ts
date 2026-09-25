@@ -91,10 +91,15 @@ export interface EntertainmentReceiptFields {
   billReference?: string;
 }
 
-const MARGIN = 56;
+export const MARGIN = 56;
 const BLACK = rgb(0.1, 0.1, 0.1);
 const GRAY = rgb(0.46, 0.46, 0.46);
 const LIGHT_RULE = rgb(0.85, 0.85, 0.85);
+// Minimum horizontal gap, in points, kept between a letterhead line's
+// left-aligned text (companyName/companyAddress) and its right-aligned
+// counterpart (title/sub) once both are measured at their actual rendered
+// width. Exported so tests can reconstruct the same bound independently.
+export const LETTERHEAD_GAP = 16;
 
 // Breaks a single word into the smallest number of substrings that each fit
 // within maxWidth, char by char. Used as a fallback by wrapText for a word
@@ -117,7 +122,10 @@ function breakLongWord(word: string, font: PDFFont, size: number, maxWidth: numb
   return chunks;
 }
 
-function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
+// Exported (in addition to being used internally) so tests can reconstruct
+// exactly what a given letterhead line will render as, using the same
+// pdf-lib font metrics, without duplicating the wrapping logic.
+export function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const words = text.split(" ");
   const lines: string[] = [];
   let current = "";
@@ -166,19 +174,25 @@ export async function renderEntertainmentReceiptCover(
   let y = height - MARGIN;
 
   // Letterhead - companyName/companyAddress sit on the same line as
-  // right-aligned text (title, subtitle) whose position must stay fixed, so
-  // rather than reflowing the page when they're long we clamp each to a
-  // single line that fits half the content width (see task-4 fix report).
-  const letterheadMaxWidth = contentWidth / 2;
-  const companyNameLine = wrapText(fields.companyName ?? "[Firmenname]", bold, 12, letterheadMaxWidth)[0] ?? "";
-  page.drawText(companyNameLine, { x: MARGIN, y, size: 12, font: bold, color: BLACK });
+  // right-aligned text (title, subtitle) whose own width varies with
+  // billReference. A fixed half-content-width split doesn't bound the
+  // right side (a long billReference widens `sub` past that split), so
+  // each left-side line is instead clamped to whatever's left after the
+  // ACTUAL rendered width of that line's right-side text plus a fixed gap
+  // - computed per line, from the same font metrics used to draw it.
   const title = "Bewirtungsangaben";
-  page.drawText(title, { x: width - MARGIN - bold.widthOfTextAtSize(title, 12), y, size: 12, font: bold, color: BLACK });
+  const titleWidth = bold.widthOfTextAtSize(title, 12);
+  const companyNameMaxWidth = Math.max(0, contentWidth - titleWidth - LETTERHEAD_GAP);
+  const companyNameLine = wrapText(fields.companyName ?? "[Firmenname]", bold, 12, companyNameMaxWidth)[0] ?? "";
+  page.drawText(companyNameLine, { x: MARGIN, y, size: 12, font: bold, color: BLACK });
+  page.drawText(title, { x: width - MARGIN - titleWidth, y, size: 12, font: bold, color: BLACK });
   y -= 15;
-  const companyAddressLine = wrapText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", font, 9, letterheadMaxWidth)[0] ?? "";
-  page.drawText(companyAddressLine, { x: MARGIN, y, size: 9, font, color: GRAY });
   const sub = `Ergänzung zur Rechnung ${fields.billReference ?? "-"} gem. § 4 Abs. 5 Satz 1 Nr. 2 EStG`;
-  page.drawText(sub, { x: width - MARGIN - font.widthOfTextAtSize(sub, 9), y, size: 9, font, color: GRAY });
+  const subWidth = font.widthOfTextAtSize(sub, 9);
+  const companyAddressMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
+  const companyAddressLine = wrapText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", font, 9, companyAddressMaxWidth)[0] ?? "";
+  page.drawText(companyAddressLine, { x: MARGIN, y, size: 9, font, color: GRAY });
+  page.drawText(sub, { x: width - MARGIN - subWidth, y, size: 9, font, color: GRAY });
   y -= 12;
   if (fields.receiptNumber) {
     const nr = `Nr. ${fields.receiptNumber}`;
