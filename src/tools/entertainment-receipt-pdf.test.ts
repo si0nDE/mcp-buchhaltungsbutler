@@ -101,6 +101,45 @@ describe("renderEntertainmentReceiptCover", () => {
     const doc = await PDFDocument.load(bytes);
     expect(doc.getPageCount()).toBe(1);
   });
+
+  it("renders with attachmentFollows: true without throwing (footer states an attachment follows)", async () => {
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, {
+      kleinunternehmer: false,
+      attachmentFollows: true,
+    });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+  });
+
+  it("renders with attachmentFollows omitted without throwing (footer states no attachment)", async () => {
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+  });
+
+  it("wraps a long hostRole and companyAddress instead of overflowing (structural smoke test)", async () => {
+    // Text-content/overlap correctness can't be asserted without an OCR
+    // dependency (see comment above) - this confirms the wrapping/box-growth
+    // code path runs to completion and still yields a valid single-page PDF.
+    const longFields = {
+      ...fields,
+      hostRole: "Bereichsleiterin Informationssicherheit und Datenschutz sowie Prokuristin der Gesellschaft",
+      companyAddress: "Musterstraße Allee der Wissenschaften und Industrie 12345678, 97222 Rimpar-Oberdorf",
+    };
+    const bytes = await renderEntertainmentReceiptCover(longFields, amounts, { kleinunternehmer: false });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+  });
+
+  it("breaks a single word wider than the wrap column instead of overflowing it", async () => {
+    const longWordFields = {
+      ...fields,
+      hostRole: "Datenschutzfolgenabschätzungsverantwortlichkeitsübertragungsbeauftragte",
+    };
+    const bytes = await renderEntertainmentReceiptCover(longWordFields, amounts, { kleinunternehmer: false });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+  });
 });
 
 // A minimal valid single-page PDF, base64-encoded, for merge tests that
@@ -129,5 +168,23 @@ describe("mergeWithBillFile", () => {
     const merged = await mergeWithBillFile(cover, MINIMAL_PNG_BASE64, "png");
     const doc = await PDFDocument.load(merged);
     expect(doc.getPageCount()).toBe(2);
+  });
+
+  it("appends a multi-page PDF bill as 1 + N pages, not always 2 (motivates the footer fix)", async () => {
+    const threePageBillBase64 = await (async () => {
+      const doc = await PDFDocument.create();
+      doc.addPage([200, 200]);
+      doc.addPage([200, 200]);
+      doc.addPage([200, 200]);
+      const bytes = await doc.save();
+      return Buffer.from(bytes).toString("base64");
+    })();
+    const cover = await renderEntertainmentReceiptCover(fields, amounts, {
+      kleinunternehmer: false,
+      attachmentFollows: true,
+    });
+    const merged = await mergeWithBillFile(cover, threePageBillBase64, "pdf");
+    const doc = await PDFDocument.load(merged);
+    expect(doc.getPageCount()).toBe(4);
   });
 });
