@@ -31,7 +31,7 @@ const ENTERTAINMENT_ACCOUNTS: Record<number, "deductible" | "non_deductible"> = 
 // Absolute tolerance, not a percentage: a percentage tolerance is too loose
 // on small receipts and too tight on large ones for the same rounding cause.
 const RATIO_TOLERANCE_EUR = 0.02;
-const DEDUCTIBLE_SHARE = 0.7;
+export const DEDUCTIBLE_SHARE = 0.7;
 
 export type EntertainmentKind = "deductible" | "non_deductible";
 
