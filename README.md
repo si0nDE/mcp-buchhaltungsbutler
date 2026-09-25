@@ -89,6 +89,7 @@ Streamable HTTP service instead of stdio, container-ready.
 | Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
 | Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Invoices | `create_invoice`, `create_einvoice` |
+| Bewirtungsbeleg | `generate_entertainment_receipt` |
 
 ## Architecture
 
@@ -112,8 +113,7 @@ for clients that need a network-reachable server.
 
 ## Status
 
-All 48 BuchhaltungsButler endpoints are covered by the 31 tools above. Verified against a live account
-(both a read call and a create+delete round trip).
+All 48 BuchhaltungsButler endpoints are covered by 31 of these tools; `generate_entertainment_receipt` is a client-side PDF generator that makes no BuchhaltungsButler API calls of its own (see [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Verified against a live account (both a read call and a create+delete round trip).
 
 ## Development
 
