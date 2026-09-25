@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
+import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 // BuchhaltungsButler's `vat`/`vats` fields take one of these fixed codes, not a
@@ -37,6 +38,12 @@ const vatShape = z
     "VAT code, not a percentage. Common: 0_none (keine USt.), 19_vat (19% USt.), 7_vat (7% USt.), " +
       "19_pre/7_pre (Vorsteuer). See BuchhaltungsButler API docs for the §13b/i.g.E. reverse-charge codes."
   );
+
+const travelerFieldsShape = {
+  traveler_name: z.string().optional(),
+  traveler_role: z.enum(["employee", "owner_manager", "unclear"]).optional(),
+  business_purpose: z.string().optional(),
+};
 
 const splitShape = z.object({
   postingaccount: z.number().int(),
@@ -117,6 +124,7 @@ export function createPostingsTools(
     creditor: z.number().int(),
     debtor: z.number().int(),
     splits: z.array(splitShape).min(1),
+    ...travelerFieldsShape,
   });
 
   const addReceiptPostingsShape = {
@@ -129,13 +137,40 @@ export function createPostingsTools(
       "Book one or more receipts onto posting accounts in a single batch call. Use this when the " +
       "posting is backed by a receipt/invoice document; for a bank transaction use " +
       "add_transaction_postings, and for entries with no receipt or transaction (e.g. depreciation, " +
-      "opening balances) use add_free_postings.",
+      "opening balances) use add_free_postings. Booking onto a travel-expense account (Reisekosten " +
+      "Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires traveler_name, " +
+      "traveler_role (employee or owner_manager — ask the user if unclear, never infer it from the " +
+      "invoice address or payment method), and business_purpose; these are recorded as a comment on " +
+      "the receipt for the audit trail.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addReceiptPostingsShape,
     async handler(args) {
-      const receipts = args.receipts.map(({ splits, ...rest }) => ({ ...rest, ...flattenSplits(splits) }));
+      const travelMatches = args.receipts.map((entry) =>
+        assertTravelExpenseFields(
+          entry.splits.map((s) => s.postingaccount),
+          entry
+        )
+      );
+      const receipts = args.receipts.map(({ splits, traveler_name, traveler_role, business_purpose, ...rest }) => ({
+        ...rest,
+        ...flattenSplits(splits),
+      }));
       const result = await client.call("postingsAddBatchReceipts", { receipts });
+      await Promise.all(
+        args.receipts.map((entry, i) => {
+          const match = travelMatches[i];
+          if (!match) return undefined;
+          return client.call("commentsAdd", {
+            receipt_id_by_customer: entry.receipt_id_by_customer,
+            comment_text: formatTravelExpenseNote({
+              traveler_name: entry.traveler_name!,
+              traveler_role: match.role,
+              business_purpose: entry.business_purpose!,
+            }),
+          });
+        })
+      );
       return ok(result);
     },
   });
@@ -144,6 +179,7 @@ export function createPostingsTools(
     transaction_id_by_customer: z.number().int(),
     oi_receipts_ids_by_customer: z.array(z.number().int()),
     splits: z.array(splitShape).min(1),
+    ...travelerFieldsShape,
   });
 
   const addTransactionPostingsShape = {
@@ -155,13 +191,42 @@ export function createPostingsTools(
     description:
       "Book one or more transactions onto posting accounts in a single batch call. Use this for a bank " +
       "transaction; for a receipt/invoice use add_receipt_postings, and for entries with no receipt or " +
-      "transaction use add_free_postings.",
+      "transaction use add_free_postings. Booking onto a travel-expense account (Reisekosten " +
+      "Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires traveler_name, " +
+      "traveler_role (employee or owner_manager — ask the user if unclear, never infer it from the " +
+      "invoice address or payment method), and business_purpose; these are recorded as a comment on " +
+      "the transaction for the audit trail.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addTransactionPostingsShape,
     async handler(args) {
-      const transactions = args.transactions.map(({ splits, ...rest }) => ({ ...rest, ...flattenSplits(splits) }));
+      const travelMatches = args.transactions.map((entry) =>
+        assertTravelExpenseFields(
+          entry.splits.map((s) => s.postingaccount),
+          entry
+        )
+      );
+      const transactions = args.transactions.map(
+        ({ splits, traveler_name, traveler_role, business_purpose, ...rest }) => ({
+          ...rest,
+          ...flattenSplits(splits),
+        })
+      );
       const result = await client.call("postingsAddBatchTransactions", { transactions });
+      await Promise.all(
+        args.transactions.map((entry, i) => {
+          const match = travelMatches[i];
+          if (!match) return undefined;
+          return client.call("commentsAdd", {
+            transaction_id_by_customer: entry.transaction_id_by_customer,
+            comment_text: formatTravelExpenseNote({
+              traveler_name: entry.traveler_name!,
+              traveler_role: match.role,
+              business_purpose: entry.business_purpose!,
+            }),
+          });
+        })
+      );
       return ok(result);
     },
   });
@@ -175,6 +240,7 @@ export function createPostingsTools(
     vat: vatShape,
     cost_location: z.string().optional(),
     cost_location_two: z.string().optional(),
+    ...travelerFieldsShape,
   });
 
   const addFreePostingsShape = {
@@ -186,12 +252,32 @@ export function createPostingsTools(
     description:
       "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch " +
       "call, e.g. depreciation or opening balances. For a receipt or bank transaction, use " +
-      "add_receipt_postings or add_transaction_postings instead.",
+      "add_receipt_postings or add_transaction_postings instead. Booking onto a travel-expense account " +
+      "(Reisekosten Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires " +
+      "traveler_name, traveler_role (employee or owner_manager — ask the user if unclear, never infer " +
+      "it from the invoice address or payment method), and business_purpose; these are appended to " +
+      "postingtext for the audit trail (free postings have no id to attach a comment to).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addFreePostingsShape,
     async handler(args) {
-      const result = await client.call("postingsAddBatchFree", { free_postings: args.free_postings });
+      const free_postings = args.free_postings.map(({ traveler_name, traveler_role, business_purpose, ...rest }) => {
+        const match = assertTravelExpenseFields([rest.postingaccount_debit, rest.postingaccount_credit], {
+          traveler_name,
+          traveler_role,
+          business_purpose,
+        });
+        if (!match) return rest;
+        return {
+          ...rest,
+          postingtext: `${rest.postingtext} — ${formatTravelExpenseNote({
+            traveler_name: traveler_name!,
+            traveler_role: match.role,
+            business_purpose: business_purpose!,
+          })}`,
+        };
+      });
+      const result = await client.call("postingsAddBatchFree", { free_postings });
       return ok(result);
     },
   });
