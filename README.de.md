@@ -55,7 +55,7 @@ vollständigen Bewirtungsbeleg (§ 4 Abs. 5 Satz 1 Nr. 2 EStG). Rechtlicher Hint
 Für Clients, die keinen lokalen Prozess starten können (z. B. Claude auf dem Handy), läuft der Server
 alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 
-1. Veröffentlichtes Image ziehen: `ghcr.io/<owner>/mcp-buchhaltungsbutler:latest` (automatisch aus `main`
+1. Veröffentlichtes Image ziehen: `ghcr.io/si0nde/mcp-buchhaltungsbutler:latest` (automatisch aus `main`
    gebaut via `.github/workflows/docker-publish.yml`), oder lokal bauen mit `docker build -t mcp-buchhaltungsbutler .`.
 2. Starten mit den üblichen `BB_API_CLIENT`/`BB_API_SECRET`/`BB_API_KEY`, plus:
    - `MCP_AUTH_TOKEN` (Pflicht) — ein langes Zufalls-Secret; jeder Request braucht `Authorization: Bearer <token>`.
@@ -67,7 +67,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
      -e BB_API_CLIENT=... -e BB_API_SECRET=... -e BB_API_KEY=... \
      -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.deine-domain.example \
      -p 3000:3000 \
-     ghcr.io/<owner>/mcp-buchhaltungsbutler:latest
+     ghcr.io/si0nde/mcp-buchhaltungsbutler:latest
    ```
 3. Reverse-Proxy davor (Caddy, nginx, Traefik, ...) für TLS — der Container selbst spricht nur reines
    HTTP. `GET /health` liefert `200 {"status":"ok"}` ohne Auth, für Health-Checks; der MCP-Endpoint ist
