@@ -84,6 +84,33 @@ function flattenSplits(splits: Split[]): {
   };
 }
 
+// oi_receipts_ids_by_customer only applies to transaction postings (assigning
+// an existing "open item" receipt to one specific split of a bank-transaction
+// posting) — receipt postings have no equivalent concept, so this extends
+// splitShape rather than living on it directly.
+const transactionSplitShape = splitShape.extend({
+  receipt_id_by_customer: z.number().int().optional(),
+});
+
+type TransactionSplit = z.infer<typeof transactionSplitShape>;
+
+// BuchhaltungsButler requires oi_receipts_ids_by_customer to be a *parallel*
+// array — one entry per split, positionally aligned with postingaccounts/
+// postingtexts/vats/amounts, null where a split has no receipt — not a
+// free-standing list of receipt ids for the transaction as a whole. Sending
+// a shorter (or longer) array than the split count causes a generic
+// "error_code 0 / An internal error occurred" on BuchhaltungsButler's side
+// rather than a clear validation error, which is what surfaced this: every
+// add_transaction_postings call failed because the connector previously
+// passed through whatever flat array the caller supplied, unrelated to the
+// actual split count.
+function flattenTransactionSplits(splits: TransactionSplit[]) {
+  return {
+    ...flattenSplits(splits),
+    oi_receipts_ids_by_customer: splits.map((s) => s.receipt_id_by_customer ?? null),
+  };
+}
+
 export function createPostingsTools(
   client: BBClient
 ): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
@@ -207,8 +234,7 @@ export function createPostingsTools(
 
   const transactionPostingEntryShape = z.object({
     transaction_id_by_customer: z.number().int(),
-    oi_receipts_ids_by_customer: z.array(z.number().int()),
-    splits: z.array(splitShape).min(1),
+    splits: z.array(transactionSplitShape).min(1),
     ...travelerFieldsShape,
     ...entertainmentFieldsShape,
   });
@@ -222,7 +248,10 @@ export function createPostingsTools(
     description:
       "Book one or more transactions onto posting accounts in a single batch call. Use this for a bank " +
       "transaction; for a receipt/invoice use add_receipt_postings, and for entries with no receipt or " +
-      "transaction use add_free_postings. Booking onto a travel-expense account (Reisekosten " +
+      "transaction use add_free_postings. Each split may optionally set receipt_id_by_customer to assign " +
+      "an existing 'open item' receipt to that specific split — omit it for splits with no receipt; the " +
+      "connector aligns these into BuchhaltungsButler's required parallel array automatically. Booking " +
+      "onto a travel-expense account (Reisekosten " +
       "Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires traveler_name, " +
       "traveler_role (employee or owner_manager — ask the user if unclear, never infer it from the " +
       "invoice address or payment method), and business_purpose. Booking onto a Bewirtungskosten " +
@@ -247,7 +276,7 @@ export function createPostingsTools(
       const transactions = args.transactions.map(
         ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, ...rest }) => ({
           ...rest,
-          ...flattenSplits(splits),
+          ...flattenTransactionSplits(splits),
         })
       );
       const result = await client.call("postingsAddBatchTransactions", { transactions });
