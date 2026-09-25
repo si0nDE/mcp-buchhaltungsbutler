@@ -185,4 +185,265 @@ describe("postings tools", () => {
       posting_id_by_customer: 99,
     });
   });
+
+  describe("travel expense account validation", () => {
+    it("add_receipt_postings rejects a travel-expense account without traveler_name, without booking", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              splits: [{ postingaccount: 4663, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+            },
+          ],
+        })
+      ).rejects.toThrow(/traveler_name/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings rejects a travel-expense account without traveler_role, without booking", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              traveler_name: "Person A",
+              splits: [{ postingaccount: 4663, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+            },
+          ],
+        })
+      ).rejects.toThrow(/traveler_role/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings rejects traveler_role 'unclear', instructing the caller to ask the user", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              traveler_name: "Person A",
+              traveler_role: "unclear",
+              business_purpose: "Kundentermin",
+              splits: [{ postingaccount: 4663, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+            },
+          ],
+        })
+      ).rejects.toThrow(/ask the user/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings rejects a traveler_role/account-range mismatch, without booking", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              traveler_name: "Person A",
+              traveler_role: "owner_manager",
+              business_purpose: "Kundentermin",
+              splits: [{ postingaccount: 4663, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+            },
+          ],
+        })
+      ).rejects.toThrow(/4670/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings books and records an audit-trail comment when fields are consistent", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await addReceiptPostings.handler({
+        receipts: [
+          {
+            receipt_id_by_customer: 42,
+            creditor: 70001,
+            debtor: 10001,
+            traveler_name: "Person A",
+            traveler_role: "owner_manager",
+            business_purpose: "Kundentermin in München",
+            splits: [{ postingaccount: 4673, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+          },
+        ],
+      });
+
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchReceipts", {
+        receipts: [
+          {
+            receipt_id_by_customer: 42,
+            creditor: 70001,
+            debtor: 10001,
+            postingaccounts: [4673],
+            postingtexts: ["Flug"],
+            vats: ["0_none"],
+            amounts: ["300.00"],
+          },
+        ],
+      });
+      expect(client.call).toHaveBeenCalledWith("commentsAdd", {
+        receipt_id_by_customer: 42,
+        comment_text: expect.stringMatching(/Person A.*Unternehmer.*Kundentermin in München/s),
+      });
+    });
+
+    it("add_transaction_postings rejects a traveler_role/account-range mismatch, without booking", async () => {
+      const client = mockClient({ success: true });
+      const [, , addTransactionPostings] = createPostingsTools(client);
+
+      await expect(
+        addTransactionPostings.handler({
+          transactions: [
+            {
+              transaction_id_by_customer: 7,
+              oi_receipts_ids_by_customer: [42],
+              traveler_name: "Person A",
+              traveler_role: "employee",
+              business_purpose: "Kundentermin",
+              splits: [{ postingaccount: 4673, postingtext: "Flug", vat: "0_none", amount: "300.00" }],
+            },
+          ],
+        })
+      ).rejects.toThrow(/4660/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_transaction_postings books and records an audit-trail comment when fields are consistent", async () => {
+      const client = mockClient({ success: true });
+      const [, , addTransactionPostings] = createPostingsTools(client);
+
+      await addTransactionPostings.handler({
+        transactions: [
+          {
+            transaction_id_by_customer: 7,
+            oi_receipts_ids_by_customer: [42],
+            traveler_name: "Person A",
+            traveler_role: "employee",
+            business_purpose: "Dienstreise Berlin",
+            splits: [{ postingaccount: 4663, postingtext: "Bahnticket", vat: "0_none", amount: "150.00" }],
+          },
+        ],
+      });
+
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchTransactions", {
+        transactions: [
+          {
+            transaction_id_by_customer: 7,
+            oi_receipts_ids_by_customer: [42],
+            postingaccounts: [4663],
+            postingtexts: ["Bahnticket"],
+            vats: ["0_none"],
+            amounts: ["150.00"],
+          },
+        ],
+      });
+      expect(client.call).toHaveBeenCalledWith("commentsAdd", {
+        transaction_id_by_customer: 7,
+        comment_text: expect.stringMatching(/Person A.*Arbeitnehmer.*Dienstreise Berlin/s),
+      });
+    });
+
+    it("add_free_postings rejects a travel-expense account without business_purpose, without booking", async () => {
+      const client = mockClient({ success: true });
+      const [, , , addFreePostings] = createPostingsTools(client);
+
+      await expect(
+        addFreePostings.handler({
+          free_postings: [
+            {
+              date: "2026-01-01",
+              postingtext: "Reisekostenkorrektur",
+              amount: "50.00",
+              postingaccount_debit: 4663,
+              postingaccount_credit: 1000,
+              vat: "0_none",
+              traveler_name: "Person A",
+              traveler_role: "employee",
+            },
+          ],
+        })
+      ).rejects.toThrow(/business_purpose/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_free_postings appends the audit-trail note to postingtext when fields are consistent", async () => {
+      const client = mockClient({ success: true });
+      const [, , , addFreePostings] = createPostingsTools(client);
+
+      await addFreePostings.handler({
+        free_postings: [
+          {
+            date: "2026-01-01",
+            postingtext: "Reisekostenkorrektur",
+            amount: "50.00",
+            postingaccount_debit: 4663,
+            postingaccount_credit: 1000,
+            vat: "0_none",
+            traveler_name: "Person A",
+            traveler_role: "employee",
+            business_purpose: "Dienstreise Berlin",
+          },
+        ],
+      });
+
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchFree", {
+        free_postings: [
+          expect.objectContaining({
+            postingtext: expect.stringMatching(/^Reisekostenkorrektur.*Person A.*Arbeitnehmer.*Dienstreise Berlin/s),
+          }),
+        ],
+      });
+    });
+
+    it("add_free_postings leaves ordinary postings untouched", async () => {
+      const client = mockClient({ success: true });
+      const [, , , addFreePostings] = createPostingsTools(client);
+
+      await addFreePostings.handler({
+        free_postings: [
+          {
+            date: "2026-01-01",
+            postingtext: "Privatentnahme",
+            amount: "50.00",
+            postingaccount_debit: 1800,
+            postingaccount_credit: 1000,
+            vat: "0_none",
+          },
+        ],
+      });
+
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchFree", {
+        free_postings: [
+          {
+            date: "2026-01-01",
+            postingtext: "Privatentnahme",
+            amount: "50.00",
+            postingaccount_debit: 1800,
+            postingaccount_credit: 1000,
+            vat: "0_none",
+          },
+        ],
+      });
+    });
+  });
 });
