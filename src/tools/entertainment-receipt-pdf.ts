@@ -96,11 +96,46 @@ const BLACK = rgb(0.1, 0.1, 0.1);
 const GRAY = rgb(0.46, 0.46, 0.46);
 const LIGHT_RULE = rgb(0.85, 0.85, 0.85);
 
+// Breaks a single word into the smallest number of substrings that each fit
+// within maxWidth, char by char. Used as a fallback by wrapText for a word
+// that alone is wider than the column (plausible with long German compound
+// nouns) - the normal space-based wrapping never flushes such a word on its
+// own, since it only flushes when `current` is already non-empty.
+function breakLongWord(word: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const char of word) {
+    const candidate = current + char;
+    if (font.widthOfTextAtSize(candidate, size) > maxWidth && current) {
+      chunks.push(current);
+      current = char;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const words = text.split(" ");
   const lines: string[] = [];
   let current = "";
   for (const word of words) {
+    if (font.widthOfTextAtSize(word, size) > maxWidth) {
+      // The word alone doesn't fit the column - flush whatever's pending
+      // first, then break the word itself into character-level chunks.
+      if (current) {
+        lines.push(current);
+        current = "";
+      }
+      const chunks = breakLongWord(word, font, size, maxWidth);
+      for (let i = 0; i < chunks.length - 1; i++) {
+        lines.push(chunks[i]);
+      }
+      current = chunks[chunks.length - 1] ?? "";
+      continue;
+    }
     const candidate = current ? `${current} ${word}` : word;
     if (font.widthOfTextAtSize(candidate, size) > maxWidth && current) {
       lines.push(current);
@@ -119,7 +154,7 @@ function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): 
 export async function renderEntertainmentReceiptCover(
   fields: EntertainmentReceiptFields,
   amounts: ComputedAmounts,
-  options: { kleinunternehmer: boolean }
+  options: { kleinunternehmer: boolean; attachmentFollows?: boolean }
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const page = doc.addPage(PageSizes.A4);
@@ -130,12 +165,18 @@ export async function renderEntertainmentReceiptCover(
 
   let y = height - MARGIN;
 
-  // Letterhead
-  page.drawText(fields.companyName ?? "[Firmenname]", { x: MARGIN, y, size: 12, font: bold, color: BLACK });
+  // Letterhead - companyName/companyAddress sit on the same line as
+  // right-aligned text (title, subtitle) whose position must stay fixed, so
+  // rather than reflowing the page when they're long we clamp each to a
+  // single line that fits half the content width (see task-4 fix report).
+  const letterheadMaxWidth = contentWidth / 2;
+  const companyNameLine = wrapText(fields.companyName ?? "[Firmenname]", bold, 12, letterheadMaxWidth)[0] ?? "";
+  page.drawText(companyNameLine, { x: MARGIN, y, size: 12, font: bold, color: BLACK });
   const title = "Bewirtungsangaben";
   page.drawText(title, { x: width - MARGIN - bold.widthOfTextAtSize(title, 12), y, size: 12, font: bold, color: BLACK });
   y -= 15;
-  page.drawText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", { x: MARGIN, y, size: 9, font, color: GRAY });
+  const companyAddressLine = wrapText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", font, 9, letterheadMaxWidth)[0] ?? "";
+  page.drawText(companyAddressLine, { x: MARGIN, y, size: 9, font, color: GRAY });
   const sub = `Ergänzung zur Rechnung ${fields.billReference ?? "-"} gem. § 4 Abs. 5 Satz 1 Nr. 2 EStG`;
   page.drawText(sub, { x: width - MARGIN - font.widthOfTextAtSize(sub, 9), y, size: 9, font, color: GRAY });
   y -= 12;
@@ -181,9 +222,42 @@ export async function renderEntertainmentReceiptCover(
   });
   y -= 24;
 
-  // Aufteilung / Bestätigung boxes
+  // Aufteilung / Bestätigung boxes - the Bestätigung box's hostName/hostRole
+  // line and disclaimer are wrapped instead of drawn unbroken, since a long
+  // hostRole (or a long companyAddress feeding into hostRole-like text) can
+  // otherwise overflow the border. Both boxes always share the taller of
+  // the fixed 78 and whatever the wrapped Bestätigung content needs, so
+  // they keep lining up with each other.
   const boxWidth = (contentWidth - 16) / 2;
-  const boxHeight = 78;
+  const confirmX = MARGIN + boxWidth + 26;
+  const boxInnerWidth = boxWidth - 20;
+
+  const hostLine = `${fields.hostName}${fields.hostRole ? `, ${fields.hostRole}` : ""}`;
+  const hostLines = wrapText(hostLine, font, 10, boxInnerWidth);
+  const disclaimerLines = wrapText(
+    "gem. § 4 Abs. 5 Nr. 2 EStG, BMF v. 30.06.2021 - Unterschrift entbehrlich",
+    font,
+    8,
+    boxInnerWidth
+  );
+
+  const HEADER_OFFSET = 16;
+  const HOST_START_OFFSET = 34;
+  const HOST_LINE_HEIGHT = 13;
+  const CONFIRMED_GAP = 14;
+  const DISCLAIMER_GAP = 12;
+  const DISCLAIMER_LINE_HEIGHT = 10;
+  const BOX_BOTTOM_PADDING = 10;
+
+  const hostLineOffsets = hostLines.map((_, i) => HOST_START_OFFSET + i * HOST_LINE_HEIGHT);
+  const lastHostOffset = hostLineOffsets[hostLineOffsets.length - 1] ?? HOST_START_OFFSET;
+  const confirmedOffset = lastHostOffset + CONFIRMED_GAP;
+  const disclaimerStartOffset = confirmedOffset + DISCLAIMER_GAP;
+  const disclaimerLineOffsets = disclaimerLines.map((_, i) => disclaimerStartOffset + i * DISCLAIMER_LINE_HEIGHT);
+  const lastDisclaimerOffset = disclaimerLineOffsets[disclaimerLineOffsets.length - 1] ?? disclaimerStartOffset;
+  const confirmContentHeight = lastDisclaimerOffset + BOX_BOTTOM_PADDING;
+
+  const boxHeight = Math.max(78, confirmContentHeight);
   const boxTop = y;
   page.drawRectangle({ x: MARGIN, y: boxTop - boxHeight, width: boxWidth, height: boxHeight, borderColor: BLACK, borderWidth: 1 });
   page.drawRectangle({
@@ -194,7 +268,7 @@ export async function renderEntertainmentReceiptCover(
     borderColor: BLACK,
     borderWidth: 1,
   });
-  page.drawText("Steuerliche Aufteilung", { x: MARGIN + 10, y: boxTop - 16, size: 9, font, color: GRAY });
+  page.drawText("Steuerliche Aufteilung", { x: MARGIN + 10, y: boxTop - HEADER_OFFSET, size: 9, font, color: GRAY });
   page.drawText(
     `Abziehbar (70 %${options.kleinunternehmer ? " v. Brutto" : " v. Netto"}): ${amounts.deductible.toFixed(2)} €`,
     { x: MARGIN + 10, y: boxTop - 34, size: 10, font, color: BLACK }
@@ -207,30 +281,28 @@ export async function renderEntertainmentReceiptCover(
     color: BLACK,
   });
 
-  const confirmX = MARGIN + boxWidth + 26;
-  page.drawText("Bestätigung", { x: confirmX, y: boxTop - 16, size: 9, font, color: GRAY });
-  page.drawText(`${fields.hostName}${fields.hostRole ? `, ${fields.hostRole}` : ""}`, {
-    x: confirmX,
-    y: boxTop - 34,
-    size: 10,
-    font,
-    color: BLACK,
+  page.drawText("Bestätigung", { x: confirmX, y: boxTop - HEADER_OFFSET, size: 9, font, color: GRAY });
+  hostLines.forEach((line, i) => {
+    page.drawText(line, { x: confirmX, y: boxTop - hostLineOffsets[i], size: 10, font, color: BLACK });
   });
-  page.drawText(`Elektronisch bestätigt: ${fields.date}`, { x: confirmX, y: boxTop - 48, size: 9, font, color: GRAY });
-  page.drawText("gem. § 4 Abs. 5 Nr. 2 EStG, BMF v. 30.06.2021 - Unterschrift entbehrlich", {
-    x: confirmX,
-    y: boxTop - 60,
-    size: 8,
-    font,
-    color: GRAY,
+  page.drawText(`Elektronisch bestätigt: ${fields.date}`, { x: confirmX, y: boxTop - confirmedOffset, size: 9, font, color: GRAY });
+  disclaimerLines.forEach((line, i) => {
+    page.drawText(line, { x: confirmX, y: boxTop - disclaimerLineOffsets[i], size: 8, font, color: GRAY });
   });
 
   // Footer
   const footerY = MARGIN - 10;
   page.drawLine({ start: { x: MARGIN, y: footerY + 14 }, end: { x: width - MARGIN, y: footerY + 14 }, thickness: 0.5, color: LIGHT_RULE });
   page.drawText(fields.companyName ?? "[Firmenname]", { x: MARGIN, y: footerY, size: 8, font, color: GRAY });
-  const footerRight = "Seite 1 von 2 · Anlage: Originalrechnung";
-  page.drawText(footerRight, { x: width - MARGIN - font.widthOfTextAtSize(footerRight, 8), y: footerY, size: 8, font, color: GRAY });
+  // The cover page can't know its final position in the merged document -
+  // mergeWithBillFile may append any number of pages from a multi-page PDF
+  // bill (not always exactly one more), or none at all in the Fall-B
+  // standalone-page case - so it never claims a specific "Seite X von N";
+  // it only states whether an attachment follows this page at all.
+  if (options.attachmentFollows) {
+    const footerRight = "Anlage: Originalrechnung";
+    page.drawText(footerRight, { x: width - MARGIN - font.widthOfTextAtSize(footerRight, 8), y: footerY, size: 8, font, color: GRAY });
+  }
 
   return doc.save();
 }
