@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
+import { assertEntertainmentExpenseFields, formatEntertainmentExpenseNote } from "./entertainment-expense.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -43,6 +44,12 @@ const travelerFieldsShape = {
   traveler_name: z.string().optional(),
   traveler_role: z.enum(["employee", "owner_manager", "unclear"]).optional(),
   business_purpose: z.string().optional(),
+};
+
+const entertainmentFieldsShape = {
+  participants: z.string().optional(),
+  occasion: z.string().optional(),
+  host_confirmed: z.boolean().optional(),
 };
 
 const splitShape = z.object({
@@ -125,6 +132,7 @@ export function createPostingsTools(
     debtor: z.number().int(),
     splits: z.array(splitShape).min(1),
     ...travelerFieldsShape,
+    ...entertainmentFieldsShape,
   });
 
   const addReceiptPostingsShape = {
@@ -140,8 +148,12 @@ export function createPostingsTools(
       "opening balances) use add_free_postings. Booking onto a travel-expense account (Reisekosten " +
       "Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires traveler_name, " +
       "traveler_role (employee or owner_manager — ask the user if unclear, never infer it from the " +
-      "invoice address or payment method), and business_purpose; these are recorded as a comment on " +
-      "the receipt for the audit trail.",
+      "invoice address or payment method), and business_purpose. Booking onto a Bewirtungskosten " +
+      "(business entertainment) account (SKR03 4650/4654 or SKR04 6640/6644) requires the deductible " +
+      "(4650/6640) and non-deductible (4654/6644) splits to both be present in an approximately 70/30 " +
+      "ratio, plus participants, occasion, and host_confirmed: true (confirming a proper signed " +
+      "Bewirtungsbeleg exists per § 4 Abs. 5 Nr. 2 EStG — ask the user if unsure, don't assume). Both " +
+      "sets of fields are recorded as a comment on the receipt for the audit trail.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addReceiptPostingsShape,
@@ -152,25 +164,42 @@ export function createPostingsTools(
           entry
         )
       );
-      const receipts = args.receipts.map(({ splits, traveler_name, traveler_role, business_purpose, ...rest }) => ({
-        ...rest,
-        ...flattenSplits(splits),
-      }));
-      const result = await client.call("postingsAddBatchReceipts", { receipts });
-      await Promise.all(
-        args.receipts.map((entry, i) => {
-          const match = travelMatches[i];
-          if (!match) return undefined;
-          return client.call("commentsAdd", {
-            receipt_id_by_customer: entry.receipt_id_by_customer,
-            comment_text: formatTravelExpenseNote({
-              traveler_name: entry.traveler_name!,
-              traveler_role: match.role,
-              business_purpose: entry.business_purpose!,
-            }),
-          });
+      const entertainmentMatches = args.receipts.map((entry) => assertEntertainmentExpenseFields(entry.splits, entry));
+      const receipts = args.receipts.map(
+        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, ...rest }) => ({
+          ...rest,
+          ...flattenSplits(splits),
         })
       );
+      const result = await client.call("postingsAddBatchReceipts", { receipts });
+      const comments: Promise<unknown>[] = [];
+      args.receipts.forEach((entry, i) => {
+        const travelMatch = travelMatches[i];
+        if (travelMatch) {
+          comments.push(
+            client.call("commentsAdd", {
+              receipt_id_by_customer: entry.receipt_id_by_customer,
+              comment_text: formatTravelExpenseNote({
+                traveler_name: entry.traveler_name!,
+                traveler_role: travelMatch.role,
+                business_purpose: entry.business_purpose!,
+              }),
+            })
+          );
+        }
+        if (entertainmentMatches[i]) {
+          comments.push(
+            client.call("commentsAdd", {
+              receipt_id_by_customer: entry.receipt_id_by_customer,
+              comment_text: formatEntertainmentExpenseNote({
+                participants: entry.participants!,
+                occasion: entry.occasion!,
+              }),
+            })
+          );
+        }
+      });
+      await Promise.all(comments);
       return ok(result);
     },
   });
@@ -180,6 +209,7 @@ export function createPostingsTools(
     oi_receipts_ids_by_customer: z.array(z.number().int()),
     splits: z.array(splitShape).min(1),
     ...travelerFieldsShape,
+    ...entertainmentFieldsShape,
   });
 
   const addTransactionPostingsShape = {
@@ -194,8 +224,12 @@ export function createPostingsTools(
       "transaction use add_free_postings. Booking onto a travel-expense account (Reisekosten " +
       "Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires traveler_name, " +
       "traveler_role (employee or owner_manager — ask the user if unclear, never infer it from the " +
-      "invoice address or payment method), and business_purpose; these are recorded as a comment on " +
-      "the transaction for the audit trail.",
+      "invoice address or payment method), and business_purpose. Booking onto a Bewirtungskosten " +
+      "(business entertainment) account (SKR03 4650/4654 or SKR04 6640/6644) requires the deductible " +
+      "(4650/6640) and non-deductible (4654/6644) splits to both be present in an approximately 70/30 " +
+      "ratio, plus participants, occasion, and host_confirmed: true (confirming a proper signed " +
+      "Bewirtungsbeleg exists per § 4 Abs. 5 Nr. 2 EStG — ask the user if unsure, don't assume). Both " +
+      "sets of fields are recorded as a comment on the transaction for the audit trail.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addTransactionPostingsShape,
@@ -206,27 +240,44 @@ export function createPostingsTools(
           entry
         )
       );
+      const entertainmentMatches = args.transactions.map((entry) =>
+        assertEntertainmentExpenseFields(entry.splits, entry)
+      );
       const transactions = args.transactions.map(
-        ({ splits, traveler_name, traveler_role, business_purpose, ...rest }) => ({
+        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, ...rest }) => ({
           ...rest,
           ...flattenSplits(splits),
         })
       );
       const result = await client.call("postingsAddBatchTransactions", { transactions });
-      await Promise.all(
-        args.transactions.map((entry, i) => {
-          const match = travelMatches[i];
-          if (!match) return undefined;
-          return client.call("commentsAdd", {
-            transaction_id_by_customer: entry.transaction_id_by_customer,
-            comment_text: formatTravelExpenseNote({
-              traveler_name: entry.traveler_name!,
-              traveler_role: match.role,
-              business_purpose: entry.business_purpose!,
-            }),
-          });
-        })
-      );
+      const comments: Promise<unknown>[] = [];
+      args.transactions.forEach((entry, i) => {
+        const travelMatch = travelMatches[i];
+        if (travelMatch) {
+          comments.push(
+            client.call("commentsAdd", {
+              transaction_id_by_customer: entry.transaction_id_by_customer,
+              comment_text: formatTravelExpenseNote({
+                traveler_name: entry.traveler_name!,
+                traveler_role: travelMatch.role,
+                business_purpose: entry.business_purpose!,
+              }),
+            })
+          );
+        }
+        if (entertainmentMatches[i]) {
+          comments.push(
+            client.call("commentsAdd", {
+              transaction_id_by_customer: entry.transaction_id_by_customer,
+              comment_text: formatEntertainmentExpenseNote({
+                participants: entry.participants!,
+                occasion: entry.occasion!,
+              }),
+            })
+          );
+        }
+      });
+      await Promise.all(comments);
       return ok(result);
     },
   });

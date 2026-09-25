@@ -446,4 +446,181 @@ describe("postings tools", () => {
       });
     });
   });
+
+  describe("entertainment expense (Bewirtungskosten) account validation", () => {
+    it("add_receipt_postings rejects a deductible split without a paired non-deductible split", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              participants: "Person A, Person B",
+              occasion: "Kundengespräch",
+              host_confirmed: true,
+              splits: [{ postingaccount: 4650, postingtext: "Bewirtung", vat: "19_vat", amount: "70.00" }],
+            },
+          ],
+        })
+      ).rejects.toThrow(/4654/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings rejects missing occasion, without booking", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              participants: "Person A, Person B",
+              host_confirmed: true,
+              splits: [
+                { postingaccount: 4650, postingtext: "Bewirtung", vat: "19_vat", amount: "70.00" },
+                { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "19_vat", amount: "30.00" },
+              ],
+            },
+          ],
+        })
+      ).rejects.toThrow(/occasion/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings rejects host_confirmed: false, asking the caller to check with the user", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              participants: "Person A, Person B",
+              occasion: "Kundengespräch",
+              host_confirmed: false,
+              splits: [
+                { postingaccount: 4650, postingtext: "Bewirtung", vat: "19_vat", amount: "70.00" },
+                { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "19_vat", amount: "30.00" },
+              ],
+            },
+          ],
+        })
+      ).rejects.toThrow(/ask the user/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings rejects a split ratio that isn't approximately 70/30", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await expect(
+        addReceiptPostings.handler({
+          receipts: [
+            {
+              receipt_id_by_customer: 42,
+              creditor: 70001,
+              debtor: 10001,
+              participants: "Person A, Person B",
+              occasion: "Kundengespräch",
+              host_confirmed: true,
+              splits: [
+                { postingaccount: 4650, postingtext: "Bewirtung", vat: "19_vat", amount: "50.00" },
+                { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "19_vat", amount: "50.00" },
+              ],
+            },
+          ],
+        })
+      ).rejects.toThrow(/70.*30/);
+      expect(client.call).not.toHaveBeenCalled();
+    });
+
+    it("add_receipt_postings books and records an audit-trail comment when the split and fields are consistent", async () => {
+      const client = mockClient({ success: true });
+      const [, addReceiptPostings] = createPostingsTools(client);
+
+      await addReceiptPostings.handler({
+        receipts: [
+          {
+            receipt_id_by_customer: 42,
+            creditor: 70001,
+            debtor: 10001,
+            participants: "Person A, Person B",
+            occasion: "Kundengespräch",
+            host_confirmed: true,
+            splits: [
+              { postingaccount: 4650, postingtext: "Bewirtung", vat: "19_vat", amount: "70.00" },
+              { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "19_vat", amount: "30.00" },
+              { postingaccount: 1576, postingtext: "Vorsteuer", vat: "19_vat", amount: "19.00" },
+            ],
+          },
+        ],
+      });
+
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchReceipts", {
+        receipts: [
+          {
+            receipt_id_by_customer: 42,
+            creditor: 70001,
+            debtor: 10001,
+            postingaccounts: [4650, 4654, 1576],
+            postingtexts: ["Bewirtung", "Bewirtung nicht abz.", "Vorsteuer"],
+            vats: ["19_vat", "19_vat", "19_vat"],
+            amounts: ["70.00", "30.00", "19.00"],
+          },
+        ],
+      });
+      expect(client.call).toHaveBeenCalledWith("commentsAdd", {
+        receipt_id_by_customer: 42,
+        comment_text: expect.stringMatching(/Person A, Person B.*Kundengespräch/s),
+      });
+    });
+
+    it("add_transaction_postings books and records an audit-trail comment when the split and fields are consistent", async () => {
+      const client = mockClient({ success: true });
+      const [, , addTransactionPostings] = createPostingsTools(client);
+
+      await addTransactionPostings.handler({
+        transactions: [
+          {
+            transaction_id_by_customer: 7,
+            oi_receipts_ids_by_customer: [42],
+            participants: "Person A, Person B",
+            occasion: "Kundengespräch",
+            host_confirmed: true,
+            splits: [
+              { postingaccount: 6640, postingtext: "Bewirtung", vat: "19_vat", amount: "70.00" },
+              { postingaccount: 6644, postingtext: "Bewirtung nicht abz.", vat: "19_vat", amount: "30.00" },
+            ],
+          },
+        ],
+      });
+
+      expect(client.call).toHaveBeenCalledWith("postingsAddBatchTransactions", {
+        transactions: [
+          {
+            transaction_id_by_customer: 7,
+            oi_receipts_ids_by_customer: [42],
+            postingaccounts: [6640, 6644],
+            postingtexts: ["Bewirtung", "Bewirtung nicht abz."],
+            vats: ["19_vat", "19_vat"],
+            amounts: ["70.00", "30.00"],
+          },
+        ],
+      });
+      expect(client.call).toHaveBeenCalledWith("commentsAdd", {
+        transaction_id_by_customer: 7,
+        comment_text: expect.stringMatching(/Person A, Person B.*Kundengespräch/s),
+      });
+    });
+  });
 });
