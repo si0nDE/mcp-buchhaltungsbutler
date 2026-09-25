@@ -55,7 +55,7 @@ for the legal background (German only, since it documents German tax law).
 For clients that can't launch a local process (e.g. Claude on mobile), the server also runs as a
 Streamable HTTP service instead of stdio, container-ready.
 
-1. Pull the published image: `ghcr.io/<owner>/mcp-buchhaltungsbutler:latest` (built automatically from
+1. Pull the published image: `ghcr.io/si0nde/mcp-buchhaltungsbutler:latest` (built automatically from
    `main` by `.github/workflows/docker-publish.yml`), or build locally with `docker build -t mcp-buchhaltungsbutler .`.
 2. Run it with the usual `BB_API_CLIENT`/`BB_API_SECRET`/`BB_API_KEY`, plus:
    - `MCP_AUTH_TOKEN` (required) — a long random secret; every request must send `Authorization: Bearer <token>`.
@@ -67,7 +67,7 @@ Streamable HTTP service instead of stdio, container-ready.
      -e BB_API_CLIENT=... -e BB_API_SECRET=... -e BB_API_KEY=... \
      -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.your-domain.example \
      -p 3000:3000 \
-     ghcr.io/<owner>/mcp-buchhaltungsbutler:latest
+     ghcr.io/si0nde/mcp-buchhaltungsbutler:latest
    ```
 3. Put a reverse proxy (Caddy, nginx, Traefik, ...) in front for TLS — this container only speaks plain
    HTTP. `GET /health` returns `200 {"status":"ok"}` with no auth, for health checks; the MCP endpoint is
