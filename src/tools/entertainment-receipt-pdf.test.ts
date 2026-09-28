@@ -2,11 +2,20 @@ import { describe, expect, it } from "vitest";
 import { PDFDocument, PageSizes, StandardFonts } from "pdf-lib";
 import {
   assertOccasionIsConcrete,
+  buildAmountBreakdownText,
+  buildDeductibleLine,
+  buildHostConfirmationLines,
+  buildLetterheadSubtitle,
+  buildNonDeductibleLine,
   computeAmounts,
+  formatEuro,
   LETTERHEAD_GAP,
   MARGIN,
   mergeWithBillFile,
   renderEntertainmentReceiptCover,
+  TABLE_VALUE_X_OFFSET,
+  tableValueMaxWidth,
+  wrapAddressText,
   wrapText,
 } from "./entertainment-receipt-pdf.js";
 
@@ -67,6 +76,161 @@ describe("computeAmounts", () => {
   });
 });
 
+describe("formatEuro", () => {
+  it("formats with a German decimal comma", () => {
+    expect(formatEuro(50.6)).toBe("50,60 €");
+  });
+
+  it("rounds to two decimal places", () => {
+    expect(formatEuro(4.5)).toBe("4,50 €");
+  });
+});
+
+describe("buildLetterheadSubtitle", () => {
+  it("references the bill without repeating 'Rechnung' or restating the EStG citation", () => {
+    const subtitle = buildLetterheadSubtitle("92119");
+    expect(subtitle).toBe("Ergänzung zu Rechnung 92119");
+  });
+
+  it("falls back to a placeholder dash when no billReference is given", () => {
+    expect(buildLetterheadSubtitle(undefined)).toBe("Ergänzung zu Rechnung -");
+  });
+});
+
+describe("tableValueMaxWidth", () => {
+  it("matches the actual x-offset the table row values are drawn at", () => {
+    const [pageWidth] = PageSizes.A4;
+    const contentWidth = pageWidth - 2 * MARGIN;
+    const valueX = MARGIN + TABLE_VALUE_X_OFFSET;
+    const availableWidth = pageWidth - MARGIN - valueX;
+    expect(tableValueMaxWidth(contentWidth)).toBe(availableWidth);
+  });
+});
+
+describe("wrapAddressText", () => {
+  it("prefers breaking at comma boundaries over mid-clause word wrap (DIN 5008-style)", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const text = "B. Neumann Residenzgaststätten GmbH (Biergarten), Waldkugelweg 5, 97082 Würzburg";
+    // Wide enough for the first two comma-segments together, but not all three.
+    const maxWidth = font.widthOfTextAtSize("B. Neumann Residenzgaststätten GmbH (Biergarten), Waldkugelweg 5,", 9) + 5;
+
+    const lines = wrapAddressText(text, font, 9, maxWidth);
+
+    expect(lines).toEqual(["B. Neumann Residenzgaststätten GmbH (Biergarten), Waldkugelweg 5,", "97082 Würzburg"]);
+  });
+
+  it("never produces a line wider than maxWidth even when a single segment must be word-wrapped", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const text = "Musterstraße Allee der Wissenschaften und Industrie 12345678, 12345 Musterstadt-Oberdorf";
+    const maxWidth = 150;
+
+    const lines = wrapAddressText(text, font, 9, maxWidth);
+
+    for (const line of lines) {
+      expect(font.widthOfTextAtSize(line, 9)).toBeLessThanOrEqual(maxWidth);
+    }
+  });
+
+  it("returns the text unchanged as a single line when it already fits", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const text = "Restaurant Zur Alten Post, München";
+
+    const lines = wrapAddressText(text, font, 9, 400);
+
+    expect(lines).toEqual(["Restaurant Zur Alten Post, München"]);
+  });
+
+  it("never lets an appended trailing comma push a flushed line past maxWidth (regression: the reported real-world case)", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const text = "B. Neumann Residenzgaststätten GmbH (Biergarten), Waldkugelweg 5, 97082 Würzburg";
+    // The exact table-row column width at font size 10 (tableValueMaxWidth
+    // applied to A4's contentWidth) - the width that actually overflowed by
+    // ~1.3pt before this fix, because "<segment>, <segment>" fit but
+    // "<segment>, <segment>," (with the comma this function then appends)
+    // didn't.
+    const maxWidth = tableValueMaxWidth(PageSizes.A4[0] - 2 * MARGIN);
+
+    const lines = wrapAddressText(text, font, 10, maxWidth);
+
+    for (const line of lines) {
+      expect(font.widthOfTextAtSize(line, 10)).toBeLessThanOrEqual(maxWidth);
+    }
+  });
+});
+
+describe("buildAmountBreakdownText", () => {
+  const input = { foodNet: 32.5, foodVat: 2.28, drinksNet: 38.0, drinksVat: 7.22, tip: 4.5 };
+  const computed = computeAmounts({ ...input, kleinunternehmer: false });
+
+  it("itemizes Speisen/Getränke/Trinkgeld with net + USt for Regelbesteuerung", () => {
+    const text = buildAmountBreakdownText(input, computed, false);
+    expect(text).toBe(
+      "Speisen: 32,50 € netto + 2,28 € USt  ·  Getränke: 38,00 € netto + 7,22 € USt  ·  Trinkgeld: 4,50 €  ·  " +
+        "Gesamtbetrag: 84,50 €  ·  davon Vorsteuer (100 % abziehbar): 9,50 €"
+    );
+  });
+
+  it("omits the net/USt split and the Vorsteuer line for Kleinunternehmer", () => {
+    const kuComputed = computeAmounts({ ...input, kleinunternehmer: true });
+    const text = buildAmountBreakdownText(input, kuComputed, true);
+    expect(text).toBe("Speisen: 34,78 €  ·  Getränke: 45,22 €  ·  Trinkgeld: 4,50 €  ·  Gesamtbetrag: 84,50 €");
+  });
+
+  it("omits the Trinkgeld segment entirely when there is no tip", () => {
+    const noTip = { ...input, tip: 0 };
+    const noTipComputed = computeAmounts({ ...noTip, kleinunternehmer: false });
+    const text = buildAmountBreakdownText(noTip, noTipComputed, false);
+    expect(text).not.toContain("Trinkgeld");
+  });
+});
+
+describe("buildDeductibleLine / buildNonDeductibleLine", () => {
+  // Avoids a bare "NN %" immediately next to a Euro amount - a plausible
+  // (unconfirmed) source of confusion for a receiving system's own OCR/VAT-
+  // rate heuristics when this page is uploaded and scanned as if it were an
+  // independent invoice. Cheap to avoid even without proof it's the cause.
+  it("expresses the 70/30 split as a decimal factor, not a bare percentage", () => {
+    expect(buildDeductibleLine(32.23, false)).toBe("Abziehbar (Faktor 0,70 v. Netto): 32,23 €");
+    expect(buildNonDeductibleLine(13.81)).toBe("Nicht abziehbar (Faktor 0,30): 13,81 €");
+  });
+
+  it("labels the Kleinunternehmer basis as Brutto instead of Netto", () => {
+    expect(buildDeductibleLine(59.15, true)).toBe("Abziehbar (Faktor 0,70 v. Brutto): 59,15 €");
+  });
+});
+
+describe("buildHostConfirmationLines", () => {
+  it("always starts hostRole on its own line, even when name and role would fit on one line", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const lines = buildHostConfirmationLines("Max Beispiel", "Geschäftsführender Gesellschafter", font, 10, 400);
+    expect(lines).toEqual(["Max Beispiel", "Geschäftsführender Gesellschafter"]);
+  });
+
+  it("word-wraps a long hostRole across multiple lines, all after the name line", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const longRole = "Bereichsleiterin Informationssicherheit und Datenschutz sowie Prokuristin der Gesellschaft";
+    const lines = buildHostConfirmationLines("Anna Beispiel", longRole, font, 10, 150);
+    expect(lines[0]).toBe("Anna Beispiel");
+    expect(lines.length).toBeGreaterThan(2);
+    for (const line of lines.slice(1)) {
+      expect(font.widthOfTextAtSize(line, 10)).toBeLessThanOrEqual(150);
+    }
+  });
+
+  it("omits role lines entirely when hostRole is undefined", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const lines = buildHostConfirmationLines("Max Beispiel", undefined, font, 10, 400);
+    expect(lines).toEqual(["Max Beispiel"]);
+  });
+});
+
 const fields = {
   date: "24.09.2026",
   location: "Restaurant Zur Alten Post, München",
@@ -78,6 +242,11 @@ const fields = {
   companyAddress: "Musterweg 1, 12345 Musterstadt",
   receiptNumber: "BA-2026-0142",
   billReference: "4471",
+  foodNet: 32.5,
+  foodVat: 2.28,
+  drinksNet: 38.0,
+  drinksVat: 7.22,
+  tip: 4.5,
 };
 
 const amounts = {
@@ -172,7 +341,7 @@ describe("renderEntertainmentReceiptCover", () => {
     const font = await measureDoc.embedFont(StandardFonts.Helvetica);
     const [pageWidth] = PageSizes.A4;
     const contentWidth = pageWidth - 2 * MARGIN;
-    const sub = `Ergänzung zur Rechnung ${longBillReference} gem. § 4 Abs. 5 Satz 1 Nr. 2 EStG`;
+    const sub = buildLetterheadSubtitle(longBillReference);
     const subWidth = font.widthOfTextAtSize(sub, 9);
     const companyAddressMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
     const companyAddressLine = wrapText(longCompanyAddress, font, 9, companyAddressMaxWidth)[0] ?? "";
@@ -184,13 +353,6 @@ describe("renderEntertainmentReceiptCover", () => {
     const leftTextRightEdge = MARGIN + companyAddressWidth;
     const gap = rightTextLeftEdge - leftTextRightEdge;
     expect(gap).toBeGreaterThanOrEqual(0);
-
-    // Sanity check that this scenario is actually a meaningful test of the
-    // fix: with the OLD fixed half-content-width clamp, the address line
-    // would have been allowed up to contentWidth / 2, which is wider than
-    // the dynamically computed bound here - i.e. the old code had strictly
-    // less headroom to avoid collision than the new code provides.
-    expect(companyAddressMaxWidth).toBeLessThan(contentWidth / 2);
   });
 });
 

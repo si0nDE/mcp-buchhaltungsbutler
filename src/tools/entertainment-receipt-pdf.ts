@@ -62,6 +62,54 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+export function formatEuro(value: number): string {
+  return `${value.toFixed(2).replace(".", ",")} €`;
+}
+
+// Itemizes Speisen/Getränke/Trinkgeld instead of only the aggregate total, so
+// the amount is traceable against the original invoice without needing the
+// invoice itself at hand. Regelbesteuerung shows each item's net + USt split
+// (matching how it's printed on the restaurant bill); Kleinunternehmer shows
+// gross-only per item, consistent with computeAmounts splitting on the gross
+// base for them (no separate net/VAT distinction in their own bookkeeping).
+// Expressed as a decimal factor ("Faktor 0,70") rather than "70 %" next to a
+// Euro amount - this page is uploaded and OCR-scanned by the receiving
+// accounting system as if it were an independent invoice, and a bare "NN %"
+// next to a total is a plausible (unconfirmed) source of it misreading the
+// number as a VAT rate. Cheap to avoid even without proof it's the cause.
+export function buildDeductibleLine(deductible: number, kleinunternehmer: boolean): string {
+  return `Abziehbar (Faktor 0,70 v. ${kleinunternehmer ? "Brutto" : "Netto"}): ${formatEuro(deductible)}`;
+}
+
+export function buildNonDeductibleLine(nonDeductible: number): string {
+  return `Nicht abziehbar (Faktor 0,30): ${formatEuro(nonDeductible)}`;
+}
+
+export function buildAmountBreakdownText(
+  input: Pick<EntertainmentReceiptAmounts, "foodNet" | "foodVat" | "drinksNet" | "drinksVat" | "tip">,
+  computed: ComputedAmounts,
+  kleinunternehmer: boolean
+): string {
+  const foodGross = round2(input.foodNet + input.foodVat);
+  const drinksGross = round2(input.drinksNet + input.drinksVat);
+  const parts = [
+    foodGross > 0
+      ? kleinunternehmer
+        ? `Speisen: ${formatEuro(foodGross)}`
+        : `Speisen: ${formatEuro(input.foodNet)} netto + ${formatEuro(input.foodVat)} USt`
+      : "",
+    drinksGross > 0
+      ? kleinunternehmer
+        ? `Getränke: ${formatEuro(drinksGross)}`
+        : `Getränke: ${formatEuro(input.drinksNet)} netto + ${formatEuro(input.drinksVat)} USt`
+      : "",
+    input.tip > 0 ? `Trinkgeld: ${formatEuro(input.tip)}` : "",
+    `Gesamtbetrag: ${formatEuro(computed.grossTotal)}`,
+    kleinunternehmer ? "" : `davon Vorsteuer (100 % abziehbar): ${formatEuro(computed.vatTotal)}`,
+  ];
+  return parts.filter(Boolean).join("  ·  ");
+}
+
 // Only addition happens here - VAT amounts and the two split halves are
 // never computed by multiplying a net figure by a rate (see the module doc
 // comment on entertainment-receipt.ts for why). Regelbesteuerung splits the
@@ -89,6 +137,11 @@ export interface EntertainmentReceiptFields {
   companyAddress?: string;
   receiptNumber?: string;
   billReference?: string;
+  foodNet: number;
+  foodVat: number;
+  drinksNet: number;
+  drinksVat: number;
+  tip: number;
 }
 
 export const MARGIN = 56;
@@ -100,6 +153,16 @@ const LIGHT_RULE = rgb(0.85, 0.85, 0.85);
 // counterpart (title/sub) once both are measured at their actual rendered
 // width. Exported so tests can reconstruct the same bound independently.
 export const LETTERHEAD_GAP = 16;
+
+// Table row values are drawn at MARGIN + TABLE_VALUE_X_OFFSET, so their wrap
+// width must be measured from that same offset to the right content edge -
+// not from a separately-maintained magic number, which previously drifted
+// out of sync and let wrapped lines overflow the right border by ~8pt.
+export const TABLE_VALUE_X_OFFSET = 168;
+export const TABLE_ROW_LINE_HEIGHT = 14;
+export function tableValueMaxWidth(contentWidth: number): number {
+  return contentWidth - TABLE_VALUE_X_OFFSET;
+}
 
 // Breaks a single word into the smallest number of substrings that each fit
 // within maxWidth, char by char. Used as a fallback by wrapText for a word
@@ -156,6 +219,62 @@ export function wrapText(text: string, font: PDFFont, size: number, maxWidth: nu
   return lines;
 }
 
+// Wraps address-like text (name, street + number, PLZ + city) preferring
+// breaks at comma boundaries over the arbitrary mid-clause breaks plain
+// wrapText produces - closer to how a DIN 5008 postal address block reads.
+// Falls back to wrapText for a single segment that alone doesn't fit.
+export function wrapAddressText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  const segments = text.split(",").map((segment) => segment.trim());
+  const lines: string[] = [];
+  let current = "";
+  for (const segment of segments) {
+    const candidate = current ? `${current}, ${segment}` : segment;
+    // Reserve room for the trailing "," a mid-sequence flush appends below -
+    // testing the bare candidate here would accept a line that only fits
+    // without that comma, then overflow by the comma's width once appended.
+    const candidateFlushWidth = font.widthOfTextAtSize(`${candidate},`, size);
+    if (candidateFlushWidth > maxWidth && current) {
+      lines.push(`${current},`);
+      current = segment;
+    } else {
+      current = candidate;
+    }
+    if (font.widthOfTextAtSize(current, size) > maxWidth) {
+      const wrapped = wrapText(current, font, size, maxWidth);
+      lines.push(...wrapped.slice(0, -1));
+      current = wrapped[wrapped.length - 1] ?? "";
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+// Short letterhead reference to the original bill - deliberately excludes
+// the EStG citation (already stated in the Bestätigung box below) so it
+// stays short enough to leave room for the company address on the same
+// line, and doesn't repeat "Rechnung" when billReference already reads
+// like "Rechnung-Nr. 92119" (callers should pass just the number instead,
+// see the bill_reference schema description in entertainment-receipt.ts).
+export function buildLetterheadSubtitle(billReference?: string): string {
+  return `Ergänzung zu Rechnung ${billReference ?? "-"}`;
+}
+
+// Builds the Bestätigung box's name/role lines. hostName and hostRole are
+// wrapped independently and concatenated (rather than joined into one string
+// and wrapped as a unit) so hostRole always starts on its own line, even
+// when both would fit on a single line width-wise.
+export function buildHostConfirmationLines(
+  hostName: string,
+  hostRole: string | undefined,
+  font: PDFFont,
+  size: number,
+  maxWidth: number
+): string[] {
+  const nameLines = wrapText(hostName, font, size, maxWidth);
+  const roleLines = hostRole ? wrapText(hostRole, font, size, maxWidth) : [];
+  return [...nameLines, ...roleLines];
+}
+
 // Renders the Variante-B "Bewirtungsangaben" cover page (letterhead, bordered
 // info table, Aufteilung/Bestätigung boxes, footer) as a standalone one-page
 // A4 PDF - the caller merges or links it with the original bill afterwards.
@@ -187,43 +306,34 @@ export async function renderEntertainmentReceiptCover(
   page.drawText(companyNameLine, { x: MARGIN, y, size: 12, font: bold, color: BLACK });
   page.drawText(title, { x: width - MARGIN - titleWidth, y, size: 12, font: bold, color: BLACK });
   y -= 15;
-  const sub = `Ergänzung zur Rechnung ${fields.billReference ?? "-"} gem. § 4 Abs. 5 Satz 1 Nr. 2 EStG`;
+  const sub = buildLetterheadSubtitle(fields.billReference);
   const subWidth = font.widthOfTextAtSize(sub, 9);
   const companyAddressMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
   const companyAddressLine = wrapText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", font, 9, companyAddressMaxWidth)[0] ?? "";
   page.drawText(companyAddressLine, { x: MARGIN, y, size: 9, font, color: GRAY });
   page.drawText(sub, { x: width - MARGIN - subWidth, y, size: 9, font, color: GRAY });
-  y -= 12;
-  if (fields.receiptNumber) {
-    const nr = `Nr. ${fields.receiptNumber}`;
-    page.drawText(nr, { x: width - MARGIN - font.widthOfTextAtSize(nr, 9), y, size: 9, font, color: GRAY });
-  }
-  y -= 14;
+  y -= 26;
   page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 1.5, color: BLACK });
   y -= 22;
 
   // Bordered info table
-  const amountText = [
-    `Gesamtbetrag: ${amounts.grossTotal.toFixed(2)} €`,
-    options.kleinunternehmer ? "" : `davon Vorsteuer (100 % abziehbar): ${amounts.vatTotal.toFixed(2)} €`,
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
-  const rows: Array<[string, string]> = [
+  const amountText = buildAmountBreakdownText(fields, amounts, options.kleinunternehmer);
+  const rows: Array<[string, string, boolean?]> = [
     ["Datum", fields.date],
-    ["Ort der Bewirtung", fields.location],
+    ["Ort der Bewirtung", fields.location, true],
     ["Anlass", fields.occasion],
     ["Teilnehmer", fields.participants],
     ["Rechnungsbetrag", amountText],
   ];
   const tableTop = y;
-  for (const [label, value] of rows) {
-    const lines = wrapText(value, font, 10, contentWidth - 160);
+  for (const [label, value, isAddress] of rows) {
+    const maxWidth = tableValueMaxWidth(contentWidth);
+    const lines = isAddress ? wrapAddressText(value, font, 10, maxWidth) : wrapText(value, font, 10, maxWidth);
     page.drawText(label, { x: MARGIN + 8, y, size: 9, font, color: GRAY });
     lines.forEach((line, i) => {
-      page.drawText(line, { x: MARGIN + 168, y: y - i * 13, size: 10, font, color: BLACK });
+      page.drawText(line, { x: MARGIN + TABLE_VALUE_X_OFFSET, y: y - i * TABLE_ROW_LINE_HEIGHT, size: 10, font, color: BLACK });
     });
-    y -= Math.max(26, lines.length * 13 + 12);
+    y -= Math.max(26, lines.length * TABLE_ROW_LINE_HEIGHT + 12);
     page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 0.5, color: LIGHT_RULE });
   }
   page.drawRectangle({
@@ -246,8 +356,7 @@ export async function renderEntertainmentReceiptCover(
   const confirmX = MARGIN + boxWidth + 26;
   const boxInnerWidth = boxWidth - 20;
 
-  const hostLine = `${fields.hostName}${fields.hostRole ? `, ${fields.hostRole}` : ""}`;
-  const hostLines = wrapText(hostLine, font, 10, boxInnerWidth);
+  const hostLines = buildHostConfirmationLines(fields.hostName, fields.hostRole, font, 10, boxInnerWidth);
   const disclaimerLines = wrapText(
     "gem. § 4 Abs. 5 Nr. 2 EStG, BMF v. 30.06.2021 - Unterschrift entbehrlich",
     font,
@@ -283,11 +392,14 @@ export async function renderEntertainmentReceiptCover(
     borderWidth: 1,
   });
   page.drawText("Steuerliche Aufteilung", { x: MARGIN + 10, y: boxTop - HEADER_OFFSET, size: 9, font, color: GRAY });
-  page.drawText(
-    `Abziehbar (70 %${options.kleinunternehmer ? " v. Brutto" : " v. Netto"}): ${amounts.deductible.toFixed(2)} €`,
-    { x: MARGIN + 10, y: boxTop - 34, size: 10, font, color: BLACK }
-  );
-  page.drawText(`Nicht abziehbar (30 %): ${amounts.nonDeductible.toFixed(2)} €`, {
+  page.drawText(buildDeductibleLine(amounts.deductible, options.kleinunternehmer), {
+    x: MARGIN + 10,
+    y: boxTop - 34,
+    size: 10,
+    font,
+    color: BLACK,
+  });
+  page.drawText(buildNonDeductibleLine(amounts.nonDeductible), {
     x: MARGIN + 10,
     y: boxTop - 48,
     size: 10,

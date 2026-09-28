@@ -17,7 +17,7 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createCommentsTools(client),
     ...createCostLocationsTools(client),
     ...createContactsTools(client),
-    ...createEntertainmentReceiptTools(),
+    ...createEntertainmentReceiptTools(client),
     ...createPostingAccountsTools(client),
     ...createReceiptsTools(client),
     ...createTransactionsTools(client),
