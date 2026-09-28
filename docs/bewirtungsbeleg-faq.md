@@ -25,12 +25,31 @@ bestehenden Beleg angehängt, statt beide Dateien zu einem PDF zu verschmelzen (
 Rechnung noch nicht hochgeladen ist). Rechtlich zulässig, da das BMF-Schreiben neben dem
 Zusammenführen ausdrücklich auch die Verbindung "durch gegenseitigen Verweis" erlaubt.
 
+## Warum sieht der neue Beleg in BuchhaltungsButler wie ein Duplikat aus?
+
+BuchhaltungsButler dedupliziert Belege nicht automatisch nach Rechnungsnummer. Wird ein Beleg erneut
+importiert oder eine Bewirtungsangaben-Seite per `generate_and_upload_entertainment_receipt` bzw.
+`upload_receipt` mit `link_to_receipt_id_by_customer` zu einem bestehenden Beleg hochgeladen (z. B. weil
+der ursprüngliche Versand fehlschlug oder ein Anhang verloren ging), entsteht ein neuer, eigenständiger
+Beleg-Datensatz mit identischer Rechnungsnummer, Gegenpartei und Betrag wie das Original — nur verknüpft,
+nicht strukturell als Anlage erkennbar. Nach jedem erneuten Versand/Upload deshalb per `list_receipts`
+(gefiltert nach Gegenpartei und Datum) auf Duplikate prüfen und überzählige mit `set_receipt_deleted`
+entfernen, bevor der Beleg weiterverarbeitet wird.
+
 ## Woher kommt die Aufteilung 70 % / 30 %?
 
 § 4 Abs. 5 Satz 1 Nr. 2 EStG. Bei vorsteuerabzugsberechtigten Unternehmen (Regelbesteuerung, Default)
 wird sie auf den Nettobetrag (inkl. Trinkgeld, da ohne Umsatzsteuer) angewendet; die Vorsteuer bleibt
 davon unabhängig zu 100 % abziehbar (§ 15 UStG). Bei Kleinunternehmern (§ 19 UStG,
 `kleinunternehmer: true`) auf den Bruttobetrag, da keine separate Vorsteuerbuchung existiert.
+
+## Wer gehört auf die Teilnehmerliste?
+
+§ 4 Abs. 5 Satz 1 Nr. 2 Satz 3 EStG verlangt Angaben zu den "Teilnehmern ... der Bewirtung" — nicht zu den
+Teilnehmern einer größeren umgebenden Veranstaltung. Maßgeblich ist der Personenkreis, der tatsächlich an der
+Bewirtung selbst teilgenommen hat, typischerweise: wer mit am Tisch saß bzw. mitgegessen hat. Das schließt die
+eigenen Mitarbeitenden ein, unabhängig davon, ob mit jeder einzelnen Person gesprochen wurde. Personen, die nur
+am Rand der Gesamtveranstaltung anwesend waren, aber nicht mit bewirtet wurden, gehören nicht auf die Liste.
 
 ## Warum lehnt das Tool manche Anlass-Angaben ab?
 

@@ -4,3 +4,4 @@ dist/
 docs/superpowers/
 .claude/
 .DS_Store
+.superpowers/

@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **31 tools covering all 48 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **32 tools covering all 48 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.
@@ -47,8 +47,11 @@ Run `npm run build` first so `dist/index.js` exists.
 ## Bewirtungsbeleg (business entertainment receipts)
 
 `generate_entertainment_receipt` fills the gap between a restaurant bill and a legally complete
-Bewirtungsbeleg (§ 4 Abs. 5 Satz 1 Nr. 2 EStG). See [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)
-for the legal background (German only, since it documents German tax law).
+Bewirtungsbeleg (§ 4 Abs. 5 Satz 1 Nr. 2 EStG). `generate_and_upload_entertainment_receipt` does the
+same and uploads the result via the same endpoint `upload_receipt` calls, so the full base64 PDF
+doesn't have to round-trip through the model twice. See
+[docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md) for the legal background (German only, since
+it documents German tax law).
 
 ## Remote deployment (Docker)
 
@@ -89,7 +92,7 @@ Streamable HTTP service instead of stdio, container-ready.
 | Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
 | Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Invoices | `create_invoice`, `create_einvoice` |
-| Bewirtungsbeleg | `generate_entertainment_receipt` |
+| Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
 
 ## Architecture
 
@@ -113,7 +116,7 @@ for clients that need a network-reachable server.
 
 ## Status
 
-All 48 BuchhaltungsButler endpoints are covered by 31 of these tools; `generate_entertainment_receipt` is a client-side PDF generator that makes no BuchhaltungsButler API calls of its own (see [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Verified against a live account (both a read call and a create+delete round trip).
+All 48 BuchhaltungsButler endpoints are covered by 32 of these tools; `generate_entertainment_receipt` is a client-side PDF generator that makes no BuchhaltungsButler API calls of its own, while `generate_and_upload_entertainment_receipt` reuses the same `receiptsUpload` endpoint `upload_receipt` already covers rather than adding a 49th one (see [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Verified against a live account (both a read call and a create+delete round trip).
 
 ## Development
 

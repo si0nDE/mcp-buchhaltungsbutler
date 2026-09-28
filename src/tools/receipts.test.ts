@@ -1,3 +1,4 @@
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { createReceiptsTools } from "./receipts.js";
@@ -146,6 +147,71 @@ describe("receipts tools", () => {
     await getReceipt.handler({ id_by_customer: 42 });
 
     expect(client.call).toHaveBeenCalledWith("receiptsGetIdByCustomer", {}, { idSuffix: 42 });
+  });
+
+  it("get_receipt with extract_text forces get_file: true in the request regardless of the caller's get_file", async () => {
+    const client = mockClient({ success: true, data: { id_by_customer: "42", file_type: "xml" } });
+    const [, getReceipt] = createReceiptsTools(client);
+
+    await getReceipt.handler({ id_by_customer: 42, get_file: false, extract_text: true });
+
+    expect(client.call).toHaveBeenCalledWith(
+      "receiptsGetIdByCustomer",
+      { get_file: true },
+      { idSuffix: 42 }
+    );
+  });
+
+  it("get_receipt with extract_text replaces file_content with extracted file_text for a text PDF", async () => {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([300, 100]);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    page.drawText("Rechnung Nr. 92119", { x: 50, y: 50, size: 12, font });
+    const fileContent = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const client = mockClient({
+      success: true,
+      data: { id_by_customer: "42", file_type: "pdf", file_content: fileContent },
+    });
+    const [, getReceipt] = createReceiptsTools(client);
+
+    const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
+
+    const data = result.structuredContent!.data as { data: { file_text?: string; file_content?: string } };
+    expect(data.data.file_text).toBe("Rechnung Nr. 92119");
+    expect(data.data).not.toHaveProperty("file_content");
+  });
+
+  it("get_receipt with extract_text falls back to file_content when the receipt isn't a PDF", async () => {
+    const client = mockClient({
+      success: true,
+      data: { id_by_customer: "42", file_type: "xml", file_content: "PHhtbC8+" },
+    });
+    const [, getReceipt] = createReceiptsTools(client);
+
+    const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
+
+    const data = result.structuredContent!.data as { data: { file_text?: string; file_content?: string } };
+    expect(data.data.file_content).toBe("PHhtbC8+");
+    expect(data.data).not.toHaveProperty("file_text");
+  });
+
+  it("get_receipt with extract_text falls back to file_content when nothing could be extracted (e.g. a scan)", async () => {
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([200, 200]);
+    const fileContent = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const client = mockClient({
+      success: true,
+      data: { id_by_customer: "42", file_type: "pdf", file_content: fileContent },
+    });
+    const [, getReceipt] = createReceiptsTools(client);
+
+    const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
+
+    const data = result.structuredContent!.data as { data: { file_text?: string; file_content?: string } };
+    expect(data.data.file_content).toBe(fileContent);
+    expect(data.data).not.toHaveProperty("file_text");
   });
 
   it("create_receipts calls receiptsAddBatch with a receipts array", async () => {

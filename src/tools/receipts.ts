@@ -1,7 +1,17 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
+import { extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+
+interface ReceiptGetResult {
+  data?: {
+    file_content?: string;
+    file_type?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
 
 // The API's counterparty filter matches exactly, not as a substring, so a
 // caller searching for "Musterfirma" by typing "Muster" gets zero results
@@ -105,6 +115,15 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const getShape = {
     id_by_customer: z.number().int(),
     get_file: z.boolean().optional(),
+    extract_text: z
+      .boolean()
+      .optional()
+      .describe(
+        "For a text-based PDF receipt, return the extracted text as file_text instead of the raw base64 " +
+          "file_content - much cheaper on context than get_file alone. Implies fetching the file regardless " +
+          "of get_file. Falls back to the normal file_content behavior if the receipt isn't a PDF or nothing " +
+          "could be extracted (e.g. a scanned image with no text layer)."
+      ),
   };
 
   const getReceipt = defineTool({
@@ -114,8 +133,20 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: getShape,
     async handler(args) {
-      const { id_by_customer, ...rest } = args;
-      const result = await client.call("receiptsGetIdByCustomer", rest, { idSuffix: id_by_customer });
+      const { id_by_customer, extract_text, ...rest } = args;
+      const params = extract_text ? { ...rest, get_file: true } : rest;
+      const result = await client.call<ReceiptGetResult>("receiptsGetIdByCustomer", params, {
+        idSuffix: id_by_customer,
+      });
+
+      if (extract_text && result.data?.file_type === "pdf" && result.data.file_content) {
+        const text = await extractReceiptText(result.data.file_content);
+        if (text !== undefined) {
+          const { file_content, ...restData } = result.data;
+          return ok({ ...result, data: { ...restData, file_text: text } });
+        }
+      }
+
       return ok(result);
     },
   });
