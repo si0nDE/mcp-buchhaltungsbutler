@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { PDFDocument, PageSizes, StandardFonts } from "pdf-lib";
 import {
   assertOccasionIsConcrete,
-  buildAmountBreakdownText,
+  buildAmountBreakdownLines,
   buildDeductibleLine,
   buildHostConfirmationLines,
   buildLetterheadSubtitle,
   buildNonDeductibleLine,
   computeAmounts,
   formatEuro,
+  formatParticipantLine,
   LETTERHEAD_GAP,
   MARGIN,
   mergeWithBillFile,
@@ -162,29 +163,42 @@ describe("wrapAddressText", () => {
   });
 });
 
-describe("buildAmountBreakdownText", () => {
+describe("buildAmountBreakdownLines", () => {
   const input = { foodNet: 32.5, foodVat: 2.28, drinksNet: 38.0, drinksVat: 7.22, tip: 4.5 };
   const computed = computeAmounts({ ...input, kleinunternehmer: false });
 
-  it("itemizes Speisen/Getränke/Trinkgeld with net + USt for Regelbesteuerung", () => {
-    const text = buildAmountBreakdownText(input, computed, false);
-    expect(text).toBe(
-      "Speisen: 32,50 € netto + 2,28 € USt  ·  Getränke: 38,00 € netto + 7,22 € USt  ·  Trinkgeld: 4,50 €  ·  " +
-        "Gesamtbetrag: 84,50 €  ·  davon Vorsteuer (100 % abziehbar): 9,50 €"
-    );
+  it("itemizes Speisen/Getränke/Trinkgeld with net + USt for Regelbesteuerung, one entry per line", () => {
+    const lines = buildAmountBreakdownLines(input, computed, false);
+    expect(lines).toEqual([
+      "Speisen: 32,50 € netto + 2,28 € USt",
+      "Getränke: 38,00 € netto + 7,22 € USt",
+      "Trinkgeld: 4,50 €",
+      "Gesamtbetrag: 84,50 €",
+      "davon Vorsteuer (100 % abziehbar): 9,50 €",
+    ]);
   });
 
   it("omits the net/USt split and the Vorsteuer line for Kleinunternehmer", () => {
     const kuComputed = computeAmounts({ ...input, kleinunternehmer: true });
-    const text = buildAmountBreakdownText(input, kuComputed, true);
-    expect(text).toBe("Speisen: 34,78 €  ·  Getränke: 45,22 €  ·  Trinkgeld: 4,50 €  ·  Gesamtbetrag: 84,50 €");
+    const lines = buildAmountBreakdownLines(input, kuComputed, true);
+    expect(lines).toEqual(["Speisen: 34,78 €", "Getränke: 45,22 €", "Trinkgeld: 4,50 €", "Gesamtbetrag: 84,50 €"]);
   });
 
-  it("omits the Trinkgeld segment entirely when there is no tip", () => {
+  it("omits the Trinkgeld line entirely when there is no tip", () => {
     const noTip = { ...input, tip: 0 };
     const noTipComputed = computeAmounts({ ...noTip, kleinunternehmer: false });
-    const text = buildAmountBreakdownText(noTip, noTipComputed, false);
-    expect(text).not.toContain("Trinkgeld");
+    const lines = buildAmountBreakdownLines(noTip, noTipComputed, false);
+    expect(lines.some((line) => line.includes("Trinkgeld"))).toBe(false);
+  });
+});
+
+describe("formatParticipantLine", () => {
+  it("renders name and company on one line", () => {
+    expect(formatParticipantLine({ name: "Anna Beispiel", company: "Beispielfirma UG" })).toBe("Anna Beispiel (Beispielfirma UG)");
+  });
+
+  it("omits the parentheses entirely when company is absent", () => {
+    expect(formatParticipantLine({ name: "Anna Beispiel" })).toBe("Anna Beispiel");
   });
 });
 
@@ -235,7 +249,10 @@ const fields = {
   date: "24.09.2026",
   location: "Restaurant Zur Alten Post, München",
   occasion: "Vertragsverhandlung Rahmenvertrag IT-Sicherheitsaudits 2026/2027 mit Kunde GmbH",
-  participants: "Anna Beispiel (Beispielfirma UG), Max Mustermann (Kunde GmbH)",
+  participants: [
+    { name: "Anna Beispiel", company: "Beispielfirma UG" },
+    { name: "Max Mustermann", company: "Kunde GmbH" },
+  ],
   hostName: "Anna Beispiel",
   hostRole: "Geschäftsführung",
   companyName: "Beispielfirma UG (haftungsbeschränkt)",

@@ -85,14 +85,17 @@ export function buildNonDeductibleLine(nonDeductible: number): string {
   return `Nicht abziehbar (Faktor 0,30): ${formatEuro(nonDeductible)}`;
 }
 
-export function buildAmountBreakdownText(
+// One entry per line rather than joined into a single "·"-separated run-on
+// line - much easier to scan for the specific figure you're looking for,
+// especially once Vorsteuer is buried behind two itemized subtotals.
+export function buildAmountBreakdownLines(
   input: Pick<EntertainmentReceiptAmounts, "foodNet" | "foodVat" | "drinksNet" | "drinksVat" | "tip">,
   computed: ComputedAmounts,
   kleinunternehmer: boolean
-): string {
+): string[] {
   const foodGross = round2(input.foodNet + input.foodVat);
   const drinksGross = round2(input.drinksNet + input.drinksVat);
-  const parts = [
+  const lines = [
     foodGross > 0
       ? kleinunternehmer
         ? `Speisen: ${formatEuro(foodGross)}`
@@ -107,7 +110,20 @@ export function buildAmountBreakdownText(
     `Gesamtbetrag: ${formatEuro(computed.grossTotal)}`,
     kleinunternehmer ? "" : `davon Vorsteuer (100 % abziehbar): ${formatEuro(computed.vatTotal)}`,
   ];
-  return parts.filter(Boolean).join("  ·  ");
+  return lines.filter(Boolean);
+}
+
+export interface Participant {
+  name: string;
+  company?: string;
+}
+
+// One participant per line instead of a single comma-joined run-on string -
+// structured input (rather than free text split on commas) avoids ambiguity
+// when a company name itself contains a comma (e.g. "Zehnder (Kanzlei X,
+// Steuerberater)").
+export function formatParticipantLine(participant: Participant): string {
+  return `${participant.name}${participant.company ? ` (${participant.company})` : ""}`;
 }
 
 // Only addition happens here - VAT amounts and the two split halves are
@@ -130,7 +146,7 @@ export interface EntertainmentReceiptFields {
   date: string;
   location: string;
   occasion: string;
-  participants: string;
+  participants: Participant[];
   hostName: string;
   hostRole?: string;
   companyName?: string;
@@ -317,18 +333,25 @@ export async function renderEntertainmentReceiptCover(
   y -= 22;
 
   // Bordered info table
-  const amountText = buildAmountBreakdownText(fields, amounts, options.kleinunternehmer);
-  const rows: Array<[string, string, boolean?]> = [
-    ["Datum", fields.date],
-    ["Ort der Bewirtung", fields.location, true],
-    ["Anlass", fields.occasion],
-    ["Teilnehmer", fields.participants],
-    ["Rechnungsbetrag", amountText],
+  const amountLines = buildAmountBreakdownLines(fields, amounts, options.kleinunternehmer);
+  const participantLines = fields.participants.map(formatParticipantLine);
+  type RowKind = "text" | "address" | "lines";
+  const rows: Array<{ label: string; kind: RowKind; value: string | string[] }> = [
+    { label: "Datum", kind: "text", value: fields.date },
+    { label: "Ort der Bewirtung", kind: "address", value: fields.location },
+    { label: "Anlass", kind: "text", value: fields.occasion },
+    { label: "Teilnehmer", kind: "lines", value: participantLines },
+    { label: "Rechnungsbetrag", kind: "lines", value: amountLines },
   ];
   const tableTop = y;
-  for (const [label, value, isAddress] of rows) {
+  for (const { label, kind, value } of rows) {
     const maxWidth = tableValueMaxWidth(contentWidth);
-    const lines = isAddress ? wrapAddressText(value, font, 10, maxWidth) : wrapText(value, font, 10, maxWidth);
+    const lines =
+      kind === "address"
+        ? wrapAddressText(value as string, font, 10, maxWidth)
+        : kind === "lines"
+          ? (value as string[]).flatMap((entry) => wrapText(entry, font, 10, maxWidth))
+          : wrapText(value as string, font, 10, maxWidth);
     page.drawText(label, { x: MARGIN + 8, y, size: 9, font, color: GRAY });
     lines.forEach((line, i) => {
       page.drawText(line, { x: MARGIN + TABLE_VALUE_X_OFFSET, y: y - i * TABLE_ROW_LINE_HEIGHT, size: 10, font, color: BLACK });
