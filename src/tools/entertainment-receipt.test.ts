@@ -31,6 +31,20 @@ describe("generate_entertainment_receipt", () => {
     expect(generateReceipt.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
   });
 
+  // Two real bookings both listed all 5 people who sat at the table as
+  // "participants", even though the linked invoice's amount only covered 2 of
+  // them (the other 3 paid separately) - because the old description told
+  // the calling model to do exactly that ("alle, die am Tisch saßen"). The
+  // description is the only way this tool can ask a clarifying question (it
+  // has no interactive human-in-the-loop channel), so it must instruct the
+  // calling model to actively ask, the same way host_name already does,
+  // rather than assume "everyone at the table" is the right answer.
+  it("instructs the calling model to actively ask who this specific amount covers, not assume everyone at the table", () => {
+    const description = generateReceipt.inputSchema.participants.description;
+    expect(description).toContain("MUSS aktiv beim Nutzer erfragt werden");
+    expect(description).not.toContain("alle, die am Tisch saßen");
+  });
+
   it("returns a single-page base64 PDF when no bill_file is given (Fall B)", async () => {
     const result = await generateReceipt.handler(baseArgs as never);
     const data = result.structuredContent!.data as { pdf_base64: string };
