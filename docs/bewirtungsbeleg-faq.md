@@ -4,11 +4,12 @@ Hintergrund zum `generate_entertainment_receipt`-Tool. Ersetzt keine Steuerberat
 
 ## Warum ist keine handschriftliche Unterschrift nötig?
 
-Nach dem BMF-Schreiben vom 30.06.2021 (IV C 6 - S 2145/19/10003 :003), inhaltlich bestätigt durch das
-BMF-Schreiben vom 19.11.2025, genügt bei digital erstellten Bewirtungsangaben eine elektronische
-Genehmigung/Bestätigung, sofern die Angaben nachträglich nicht undokumentiert verändert werden können.
-Der erzeugte Beleg dokumentiert deshalb Name und Zeitstempel der bewirtenden Person statt eines
-Unterschriftenfelds.
+Für Bewirtungen ab 1.1.2025 gilt das BMF-Schreiben vom 19.11.2025 (Rz. 19: "elektronische Unterschrift
+oder eine elektronische Genehmigung der entsprechenden Angaben" genügt, sofern diese nachträglich
+nicht undokumentiert verändert werden können). Es ersetzt das ursprüngliche BMF-Schreiben vom
+30.06.2021 (IV C 6 - S 2145/19/10003 :003), das inhaltlich dieselbe Erleichterung eingeführt hatte und nur
+noch für Bewirtungen bis 31.12.2024 weiter anzuwenden ist. Der erzeugte Beleg dokumentiert deshalb
+Name und Zeitstempel der bewirtenden Person statt eines Unterschriftenfelds.
 
 ## Wie ist die GoBD-Festschreibung sichergestellt?
 

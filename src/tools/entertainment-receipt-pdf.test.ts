@@ -3,6 +3,7 @@ import { PDFDocument, PageSizes, StandardFonts } from "pdf-lib";
 import {
   assertOccasionIsConcrete,
   buildAmountBreakdownLines,
+  buildConfirmationDisclaimer,
   buildDeductibleLine,
   buildHostConfirmationLines,
   buildLetterheadSubtitle,
@@ -273,6 +274,24 @@ const amounts = {
   deductible: 52.5,
   nonDeductible: 22.5,
 };
+
+describe("buildConfirmationDisclaimer", () => {
+  // The BMF-Schreiben v. 30.06.2021 that originally established "Unterschrift
+  // entbehrlich" for digital Eigenbelege was replaced by the BMF-Schreiben v.
+  // 19.11.2025 (Rz. 19: "elektronische Unterschrift oder eine elektronische
+  // Genehmigung" suffices) - verified directly against the BMF's own PDF, not
+  // taken from a secondary source. Citing the superseded letter would be a
+  // stale, factually wrong reference on every generated receipt.
+  it("cites the current BMF-Schreiben (19.11.2025), not the superseded one (30.06.2021)", () => {
+    const disclaimer = buildConfirmationDisclaimer();
+    expect(disclaimer).toContain("19.11.2025");
+    expect(disclaimer).not.toContain("30.06.2021");
+  });
+
+  it("still states the signature is dispensable", () => {
+    expect(buildConfirmationDisclaimer()).toContain("Unterschrift entbehrlich");
+  });
+});
 
 describe("renderEntertainmentReceiptCover", () => {
   it("produces a loadable single-page A4 PDF", async () => {
