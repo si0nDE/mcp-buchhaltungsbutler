@@ -182,10 +182,14 @@ const generateShape = {
     )
     .min(1)
     .describe(
-      "Alle Teilnehmer der Bewirtung, je ein Eintrag pro Person - d. h. alle, die am Tisch saßen/mitgegessen " +
-        "haben (inkl. der eigenen Mitarbeitenden), unabhängig davon, ob mit jedem Einzelnen gesprochen wurde. " +
-        "Nicht identisch mit den Teilnehmern einer größeren umgebenden Veranstaltung " +
-        "(§ 4 Abs. 5 Satz 1 Nr. 2 Satz 3 EStG)."
+      "Nur die Personen, deren Verzehr durch DIESEN Beleg (diesen Betrag) tatsächlich bezahlt wurde - " +
+        "NICHT automatisch jeder, der am Tisch saß. MUSS aktiv beim Nutzer erfragt werden, ob wirklich alle " +
+        "hier aufgeführten Personen aus diesem Betrag bewirtet wurden oder ob einzelne (z. B. bei getrennter " +
+        "Rechnung/Zahlung) selbst bezahlt haben - in letzterem Fall gehören nur die von diesem Betrag " +
+        "tatsächlich bezahlten Personen hierher, auch wenn andere mit am Tisch saßen. Nicht identisch mit den " +
+        "Teilnehmern einer größeren umgebenden Veranstaltung (§ 4 Abs. 5 Satz 1 Nr. 2 Satz 3 EStG) - eine " +
+        "dafür mitgelieferte Teilnehmerliste (z. B. Anmeldeliste eines Verbandstreffens) darf nicht ungeprüft " +
+        "hier übernommen werden, ohne diese Rückfrage zu stellen."
     ),
   host_name: z
     .string()

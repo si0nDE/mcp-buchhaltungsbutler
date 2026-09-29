@@ -47,10 +47,17 @@ davon unabhängig zu 100 % abziehbar (§ 15 UStG). Bei Kleinunternehmern (§ 19 
 ## Wer gehört auf die Teilnehmerliste?
 
 § 4 Abs. 5 Satz 1 Nr. 2 Satz 3 EStG verlangt Angaben zu den "Teilnehmern ... der Bewirtung" — nicht zu den
-Teilnehmern einer größeren umgebenden Veranstaltung. Maßgeblich ist der Personenkreis, der tatsächlich an der
-Bewirtung selbst teilgenommen hat, typischerweise: wer mit am Tisch saß bzw. mitgegessen hat. Das schließt die
-eigenen Mitarbeitenden ein, unabhängig davon, ob mit jeder einzelnen Person gesprochen wurde. Personen, die nur
-am Rand der Gesamtveranstaltung anwesend waren, aber nicht mit bewirtet wurden, gehören nicht auf die Liste.
+Teilnehmern einer größeren umgebenden Veranstaltung. Maßgeblich ist **nicht**, wer mit am Tisch saß, sondern
+wessen Verzehr durch den konkreten Beleg tatsächlich bezahlt wurde. Das schließt die eigenen Mitarbeitenden
+ein, unabhängig davon, ob mit jeder einzelnen Person gesprochen wurde.
+
+**Getrennte Zahlung ist der häufigste Stolperstein:** Wenn ein Teil der Anwesenden für sich selbst bezahlt
+hat (z. B. jedes Fördermitglied zahlt seinen eigenen Teil), deckt der Beleg nur die tatsächlich davon
+bezahlten Personen ab — auch wenn andere mit am Tisch saßen. Eine mitgelieferte Teilnehmerliste einer
+größeren Veranstaltung (z. B. eine Anmeldeliste) beantwortet diese Frage nicht und darf nicht ungeprüft
+übernommen werden; wer aus diesem konkreten Betrag bewirtet wurde, muss aktiv erfragt werden, bevor der
+Beleg erzeugt wird. Ein Betrag, der rechnerisch nur zu wenigen der genannten Personen passt (z. B. Portionen
+für 2 Personen bei 5 gelisteten Teilnehmern), ist ein Hinweis darauf, dass diese Rückfrage noch fehlt.
 
 ## Warum lehnt das Tool manche Anlass-Angaben ab?
 
