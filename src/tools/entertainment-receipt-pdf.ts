@@ -275,6 +275,18 @@ export function buildLetterheadSubtitle(billReference?: string): string {
   return `Ergänzung zu Rechnung ${billReference ?? "-"}`;
 }
 
+// BMF v. 30.06.2021 (IV C 6 - S 2145/19/10003 :003) originally established
+// that a digital Eigenbeleg needs no handwritten signature. It was replaced
+// by BMF v. 19.11.2025 for Bewirtungen ab 1.1.2025 (the 2021 letter still
+// only governs Bewirtungen up to 31.12.2024) - confirmed directly against
+// the BMF's own published PDF, Rz. 19: "elektronische Unterschrift oder eine
+// elektronische Genehmigung der entsprechenden Angaben" suffices. Cites the
+// current letter, not the superseded one, so every generated receipt points
+// to a source that still exists and still says what's being claimed.
+export function buildConfirmationDisclaimer(): string {
+  return "gem. § 4 Abs. 5 Nr. 2 EStG, BMF v. 19.11.2025 Rz. 19 - Unterschrift entbehrlich";
+}
+
 // Builds the Bestätigung box's name/role lines. hostName and hostRole are
 // wrapped independently and concatenated (rather than joined into one string
 // and wrapped as a unit) so hostRole always starts on its own line, even
@@ -380,12 +392,7 @@ export async function renderEntertainmentReceiptCover(
   const boxInnerWidth = boxWidth - 20;
 
   const hostLines = buildHostConfirmationLines(fields.hostName, fields.hostRole, font, 10, boxInnerWidth);
-  const disclaimerLines = wrapText(
-    "gem. § 4 Abs. 5 Nr. 2 EStG, BMF v. 30.06.2021 - Unterschrift entbehrlich",
-    font,
-    8,
-    boxInnerWidth
-  );
+  const disclaimerLines = wrapText(buildConfirmationDisclaimer(), font, 8, boxInnerWidth);
 
   const HEADER_OFFSET = 16;
   const HOST_START_OFFSET = 34;
