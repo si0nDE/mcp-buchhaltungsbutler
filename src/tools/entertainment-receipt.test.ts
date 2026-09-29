@@ -13,7 +13,10 @@ const baseArgs = {
   date: "24.09.2026",
   location: "Restaurant Zur Alten Post, München",
   occasion: "Vertragsverhandlung Rahmenvertrag IT-Sicherheitsaudits 2026/2027 mit Kunde GmbH",
-  participants: "Anna Beispiel (Beispielfirma UG), Max Mustermann (Kunde GmbH)",
+  participants: [
+    { name: "Anna Beispiel", company: "Beispielfirma UG" },
+    { name: "Max Mustermann", company: "Kunde GmbH" },
+  ],
   host_name: "Anna Beispiel",
   food_net: 32.5,
   food_vat: 2.28,
@@ -148,7 +151,10 @@ describe("generate_and_upload_entertainment_receipt", () => {
     date: "2026-09-17",
     location: "Restaurant Zur Alten Post, München",
     occasion: "Vertragsverhandlung Rahmenvertrag IT-Sicherheitsaudits 2026/2027 mit Kunde GmbH",
-    participants: "Anna Beispiel (Beispielfirma UG), Max Mustermann (Kunde GmbH)",
+    participants: [
+      { name: "Anna Beispiel", company: "Beispielfirma UG" },
+      { name: "Max Mustermann", company: "Kunde GmbH" },
+    ],
     host_name: "Anna Beispiel",
     counterparty: "Restaurant Zur Alten Post",
     food_net: 32.5,

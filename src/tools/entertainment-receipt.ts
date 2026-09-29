@@ -5,6 +5,7 @@ import {
   computeAmounts,
   type ComputedAmounts,
   mergeWithBillFile,
+  type Participant,
   renderEntertainmentReceiptCover,
 } from "./entertainment-receipt-pdf.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -86,7 +87,7 @@ interface EntertainmentReceiptDocumentArgs {
   date: string;
   location: string;
   occasion: string;
-  participants: string;
+  participants: Participant[];
   host_name: string;
   host_role?: string;
   food_net?: number;
@@ -173,12 +174,18 @@ const generateShape = {
         'erkennt. Pauschale Floskeln wie "Geschäftsessen" oder "Kundenpflege" werden abgelehnt (BFH-Rechtsprechung).'
     ),
   participants: z
-    .string()
+    .array(
+      z.object({
+        name: z.string().min(1),
+        company: z.string().optional(),
+      })
+    )
     .min(1)
     .describe(
-      "Alle Teilnehmer der Bewirtung mit Namen und Firma - d. h. alle, die am Tisch saßen/mitgegessen haben " +
-        "(inkl. der eigenen Mitarbeitenden), unabhängig davon, ob mit jedem Einzelnen gesprochen wurde. Nicht " +
-        "identisch mit den Teilnehmern einer größeren umgebenden Veranstaltung (§ 4 Abs. 5 Satz 1 Nr. 2 Satz 3 EStG)."
+      "Alle Teilnehmer der Bewirtung, je ein Eintrag pro Person - d. h. alle, die am Tisch saßen/mitgegessen " +
+        "haben (inkl. der eigenen Mitarbeitenden), unabhängig davon, ob mit jedem Einzelnen gesprochen wurde. " +
+        "Nicht identisch mit den Teilnehmern einer größeren umgebenden Veranstaltung " +
+        "(§ 4 Abs. 5 Satz 1 Nr. 2 Satz 3 EStG)."
     ),
   host_name: z
     .string()
