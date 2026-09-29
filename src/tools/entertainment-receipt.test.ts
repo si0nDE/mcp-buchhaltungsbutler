@@ -40,7 +40,11 @@ describe("generate_entertainment_receipt", () => {
   // calling model to actively ask, the same way host_name already does,
   // rather than assume "everyone at the table" is the right answer.
   it("instructs the calling model to actively ask who this specific amount covers, not assume everyone at the table", () => {
-    const description = generateReceipt.inputSchema.participants.description;
+    // ZodRawShape's value type is zod v4's generic core $ZodType, which
+    // doesn't statically declare .description even though every concrete
+    // schema (ZodArray here) carries it at runtime - narrow just enough to
+    // read it without losing the rest of inputSchema's real typing.
+    const description = (generateReceipt.inputSchema.participants as { description?: string }).description;
     expect(description).toContain("MUSS aktiv beim Nutzer erfragt werden");
     expect(description).not.toContain("alle, die am Tisch saßen");
   });
