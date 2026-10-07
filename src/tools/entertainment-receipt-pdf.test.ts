@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { PDFDocument, PageSizes, StandardFonts } from "pdf-lib";
 import {
   assertOccasionIsConcrete,
-  buildAmountBreakdownLines,
+  buildAmountTable,
   buildConfirmationDisclaimer,
-  buildDeductibleLine,
+  buildDeductibleLabel,
   buildHostConfirmationLines,
   buildLetterheadSubtitle,
-  buildNonDeductibleLine,
+  buildNonDeductibleLabel,
   computeAmounts,
+  formatConfirmationTimestamp,
   formatEuro,
   formatParticipantLine,
   LETTERHEAD_GAP,
@@ -164,32 +165,57 @@ describe("wrapAddressText", () => {
   });
 });
 
-describe("buildAmountBreakdownLines", () => {
+describe("buildAmountTable", () => {
   const input = { foodNet: 32.5, foodVat: 2.28, drinksNet: 38.0, drinksVat: 7.22, tip: 4.5 };
   const computed = computeAmounts({ ...input, kleinunternehmer: false });
 
-  it("itemizes Speisen/Getränke/Trinkgeld with net + USt for Regelbesteuerung, one entry per line", () => {
-    const lines = buildAmountBreakdownLines(input, computed, false);
-    expect(lines).toEqual([
-      "Speisen: 32,50 € netto + 2,28 € USt",
-      "Getränke: 38,00 € netto + 7,22 € USt",
-      "Trinkgeld: 4,50 €",
-      "Gesamtbetrag: 84,50 €",
-      "davon Vorsteuer (100 % abziehbar): 9,50 €",
+  it("itemizes Speisen/Getränke/Trinkgeld with net, USt and gross for Regelbesteuerung", () => {
+    const table = buildAmountTable(input, computed, false);
+    expect(table.hasVatColumns).toBe(true);
+    expect(table.rows).toEqual([
+      { label: "Speisen", net: "32,50 €", vat: "2,28 €", gross: "34,78 €" },
+      { label: "Getränke", net: "38,00 €", vat: "7,22 €", gross: "45,22 €" },
+      { label: "Trinkgeld", net: "4,50 €", vat: "-", gross: "4,50 €" },
     ]);
+    // Net total includes the tip (it carries no USt) - it is the 70/30 base.
+    expect(table.total).toEqual({ label: "Gesamtbetrag", net: "75,00 €", vat: "9,50 €", gross: "84,50 €" });
+    expect(table.vatNote).toEqual({ label: "davon Vorsteuer (100 % abziehbar)", amount: "9,50 €" });
   });
 
-  it("omits the net/USt split and the Vorsteuer line for Kleinunternehmer", () => {
+  it("shows gross only and no Vorsteuer note for Kleinunternehmer", () => {
     const kuComputed = computeAmounts({ ...input, kleinunternehmer: true });
-    const lines = buildAmountBreakdownLines(input, kuComputed, true);
-    expect(lines).toEqual(["Speisen: 34,78 €", "Getränke: 45,22 €", "Trinkgeld: 4,50 €", "Gesamtbetrag: 84,50 €"]);
+    const table = buildAmountTable(input, kuComputed, true);
+    expect(table.hasVatColumns).toBe(false);
+    expect(table.rows).toEqual([
+      { label: "Speisen", gross: "34,78 €" },
+      { label: "Getränke", gross: "45,22 €" },
+      { label: "Trinkgeld", gross: "4,50 €" },
+    ]);
+    expect(table.total).toEqual({ label: "Gesamtbetrag", gross: "84,50 €" });
+    expect(table.vatNote).toBeUndefined();
   });
 
-  it("omits the Trinkgeld line entirely when there is no tip", () => {
+  it("omits the Trinkgeld row entirely when there is no tip", () => {
     const noTip = { ...input, tip: 0 };
     const noTipComputed = computeAmounts({ ...noTip, kleinunternehmer: false });
-    const lines = buildAmountBreakdownLines(noTip, noTipComputed, false);
-    expect(lines.some((line) => line.includes("Trinkgeld"))).toBe(false);
+    const table = buildAmountTable(noTip, noTipComputed, false);
+    expect(table.rows.some((row) => row.label === "Trinkgeld")).toBe(false);
+  });
+
+  it("omits a Speisen or Getränke row that is zero", () => {
+    const drinksOnly = { ...input, foodNet: 0, foodVat: 0, tip: 0 };
+    const table = buildAmountTable(drinksOnly, computeAmounts({ ...drinksOnly, kleinunternehmer: false }), false);
+    expect(table.rows.map((row) => row.label)).toEqual(["Getränke"]);
+  });
+});
+
+describe("formatConfirmationTimestamp", () => {
+  it("formats in Europe/Berlin (summer time, CEST = UTC+2)", () => {
+    expect(formatConfirmationTimestamp(new Date("2026-10-07T07:41:00Z"))).toBe("07.10.2026, 09:41 Uhr");
+  });
+
+  it("formats in Europe/Berlin (winter time, CET = UTC+1) and rolls the date over correctly", () => {
+    expect(formatConfirmationTimestamp(new Date("2026-12-31T23:30:00Z"))).toBe("01.01.2027, 00:30 Uhr");
   });
 });
 
@@ -203,18 +229,18 @@ describe("formatParticipantLine", () => {
   });
 });
 
-describe("buildDeductibleLine / buildNonDeductibleLine", () => {
+describe("buildDeductibleLabel / buildNonDeductibleLabel", () => {
   // Avoids a bare "NN %" immediately next to a Euro amount - a plausible
   // (unconfirmed) source of confusion for a receiving system's own OCR/VAT-
   // rate heuristics when this page is uploaded and scanned as if it were an
   // independent invoice. Cheap to avoid even without proof it's the cause.
   it("expresses the 70/30 split as a decimal factor, not a bare percentage", () => {
-    expect(buildDeductibleLine(32.23, false)).toBe("Abziehbar (Faktor 0,70 v. Netto): 32,23 €");
-    expect(buildNonDeductibleLine(13.81)).toBe("Nicht abziehbar (Faktor 0,30): 13,81 €");
+    expect(buildDeductibleLabel(false)).toBe("Abziehbar (Faktor 0,70 v. Netto)");
+    expect(buildNonDeductibleLabel()).toBe("Nicht abziehbar (Faktor 0,30)");
   });
 
   it("labels the Kleinunternehmer basis as Brutto instead of Netto", () => {
-    expect(buildDeductibleLine(59.15, true)).toBe("Abziehbar (Faktor 0,70 v. Brutto): 59,15 €");
+    expect(buildDeductibleLabel(true)).toBe("Abziehbar (Faktor 0,70 v. Brutto)");
   });
 });
 
@@ -349,46 +375,47 @@ describe("renderEntertainmentReceiptCover", () => {
     expect(doc.getPageCount()).toBe(1);
   });
 
-  it("keeps the clamped companyAddress from overlapping the billReference subtitle even when both are long", async () => {
-    // Reproduces the collision the re-reviewer found by tracing pdf-lib
-    // text metrics: a long billReference widens the right-aligned `sub`
-    // line past a fixed half-content-width split, so a companyAddress
-    // clamped to that fixed split can still land to the right of `sub`'s
-    // left edge. The fix computes the left column's max width from the
-    // ACTUAL rendered width of `sub` (and title) instead of a fixed split.
+  it("renders with a fixed confirmedAt timestamp without throwing", async () => {
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, {
+      kleinunternehmer: false,
+      confirmedAt: new Date("2026-10-07T07:41:00Z"),
+    });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(1);
+  });
+
+  it("keeps the clamped companyName from overlapping the billReference subtitle even when both are long", async () => {
+    // A long billReference widens the right-aligned `sub` line past any
+    // fixed split, so a companyName clamped to a fixed split could still
+    // land to the right of `sub`'s left edge. The renderer instead computes
+    // the left column's max width from the ACTUAL rendered width of `sub`.
     const longBillReference = "RE-2026-00123456";
-    const longCompanyAddress =
-      "Musterstraße Allee der Wissenschaften und Industrie 12345678, 12345 Musterstadt-Oberdorf";
-    const collisionFields = {
-      ...fields,
-      billReference: longBillReference,
-      companyAddress: longCompanyAddress,
-    };
+    const longCompanyName =
+      "Musterstraße Allee der Wissenschaften und Industrie Beratungsgesellschaft mit beschränkter Haftung";
+    const collisionFields = { ...fields, billReference: longBillReference, companyName: longCompanyName };
 
     const bytes = await renderEntertainmentReceiptCover(collisionFields, amounts, { kleinunternehmer: false });
     const doc = await PDFDocument.load(bytes);
     expect(doc.getPageCount()).toBe(1);
 
     // Independently reconstruct exactly what the renderer computes and
-    // draws for this line - same font, same formula, same wrapText - and
-    // measure both sides' actual rendered widths to assert the gap between
-    // them is non-negative (no overlap).
+    // draws for this line - same fonts, same formula, same wrapText - and
+    // assert the gap between both sides' actual rendered widths is
+    // non-negative (no overlap).
     const measureDoc = await PDFDocument.create();
     const font = await measureDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await measureDoc.embedFont(StandardFonts.HelveticaBold);
     const [pageWidth] = PageSizes.A4;
     const contentWidth = pageWidth - 2 * MARGIN;
     const sub = buildLetterheadSubtitle(longBillReference);
     const subWidth = font.widthOfTextAtSize(sub, 9);
-    const companyAddressMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
-    const companyAddressLine = wrapText(longCompanyAddress, font, 9, companyAddressMaxWidth)[0] ?? "";
-    const companyAddressWidth = font.widthOfTextAtSize(companyAddressLine, 9);
+    const companyNameMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
+    const companyNameLine = wrapText(longCompanyName, bold, 10, companyNameMaxWidth)[0] ?? "";
+    const companyNameWidth = bold.widthOfTextAtSize(companyNameLine, 10);
 
-    // Left text spans [MARGIN, MARGIN + companyAddressWidth]; right text
-    // spans [pageWidth - MARGIN - subWidth, pageWidth - MARGIN].
     const rightTextLeftEdge = pageWidth - MARGIN - subWidth;
-    const leftTextRightEdge = MARGIN + companyAddressWidth;
-    const gap = rightTextLeftEdge - leftTextRightEdge;
-    expect(gap).toBeGreaterThanOrEqual(0);
+    const leftTextRightEdge = MARGIN + companyNameWidth;
+    expect(rightTextLeftEdge - leftTextRightEdge).toBeGreaterThanOrEqual(0);
   });
 });
 

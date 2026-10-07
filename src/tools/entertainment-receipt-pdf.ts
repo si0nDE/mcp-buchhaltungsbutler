@@ -66,51 +66,93 @@ export function formatEuro(value: number): string {
   return `${value.toFixed(2).replace(".", ",")} €`;
 }
 
+// Labels for the 70/30 split strip. Expressed as a decimal factor ("Faktor
+// 0,70") rather than "70 %" next to a Euro amount - this page is uploaded and
+// OCR-scanned by the receiving accounting system as if it were an independent
+// invoice, and a bare "NN %" next to a total is a plausible (unconfirmed)
+// source of it misreading the number as a VAT rate. Cheap to avoid even
+// without proof it's the cause. The amount itself is drawn separately, below
+// its label, so the two never share a text run.
+export function buildDeductibleLabel(kleinunternehmer: boolean): string {
+  return `Abziehbar (Faktor 0,70 v. ${kleinunternehmer ? "Brutto" : "Netto"})`;
+}
+
+export function buildNonDeductibleLabel(): string {
+  return "Nicht abziehbar (Faktor 0,30)";
+}
+
+export interface AmountTableRow {
+  label: string;
+  // Absent for Kleinunternehmer, who has no separate net/USt split.
+  net?: string;
+  vat?: string;
+  gross: string;
+}
+
+export interface AmountTable {
+  hasVatColumns: boolean;
+  rows: AmountTableRow[];
+  total: AmountTableRow;
+  // Absent for Kleinunternehmer (no Vorsteuerabzug).
+  vatNote?: { label: string; amount: string };
+}
+
 // Itemizes Speisen/Getränke/Trinkgeld instead of only the aggregate total, so
 // the amount is traceable against the original invoice without needing the
-// invoice itself at hand. Regelbesteuerung shows each item's net + USt split
-// (matching how it's printed on the restaurant bill); Kleinunternehmer shows
-// gross-only per item, consistent with computeAmounts splitting on the gross
-// base for them (no separate net/VAT distinction in their own bookkeeping).
-// Expressed as a decimal factor ("Faktor 0,70") rather than "70 %" next to a
-// Euro amount - this page is uploaded and OCR-scanned by the receiving
-// accounting system as if it were an independent invoice, and a bare "NN %"
-// next to a total is a plausible (unconfirmed) source of it misreading the
-// number as a VAT rate. Cheap to avoid even without proof it's the cause.
-export function buildDeductibleLine(deductible: number, kleinunternehmer: boolean): string {
-  return `Abziehbar (Faktor 0,70 v. ${kleinunternehmer ? "Brutto" : "Netto"}): ${formatEuro(deductible)}`;
-}
-
-export function buildNonDeductibleLine(nonDeductible: number): string {
-  return `Nicht abziehbar (Faktor 0,30): ${formatEuro(nonDeductible)}`;
-}
-
-// One entry per line rather than joined into a single "·"-separated run-on
-// line - much easier to scan for the specific figure you're looking for,
-// especially once Vorsteuer is buried behind two itemized subtotals.
-export function buildAmountBreakdownLines(
+// invoice itself at hand. Regelbesteuerung shows each item's net + USt +
+// gross (matching how it's printed on the restaurant bill); Kleinunternehmer
+// shows gross-only per item, consistent with computeAmounts splitting on the
+// gross base for them. The tip carries no USt, so it contributes to net and
+// gross alike (and the net total, which is the 70/30 base).
+export function buildAmountTable(
   input: Pick<EntertainmentReceiptAmounts, "foodNet" | "foodVat" | "drinksNet" | "drinksVat" | "tip">,
   computed: ComputedAmounts,
   kleinunternehmer: boolean
-): string[] {
+): AmountTable {
   const foodGross = round2(input.foodNet + input.foodVat);
   const drinksGross = round2(input.drinksNet + input.drinksVat);
-  const lines = [
-    foodGross > 0
-      ? kleinunternehmer
-        ? `Speisen: ${formatEuro(foodGross)}`
-        : `Speisen: ${formatEuro(input.foodNet)} netto + ${formatEuro(input.foodVat)} USt`
-      : "",
-    drinksGross > 0
-      ? kleinunternehmer
-        ? `Getränke: ${formatEuro(drinksGross)}`
-        : `Getränke: ${formatEuro(input.drinksNet)} netto + ${formatEuro(input.drinksVat)} USt`
-      : "",
-    input.tip > 0 ? `Trinkgeld: ${formatEuro(input.tip)}` : "",
-    `Gesamtbetrag: ${formatEuro(computed.grossTotal)}`,
-    kleinunternehmer ? "" : `davon Vorsteuer (100 % abziehbar): ${formatEuro(computed.vatTotal)}`,
-  ];
-  return lines.filter(Boolean);
+  const withVat = (label: string, net: number, vat: number, gross: number): AmountTableRow =>
+    kleinunternehmer
+      ? { label, gross: formatEuro(gross) }
+      : { label, net: formatEuro(net), vat: formatEuro(vat), gross: formatEuro(gross) };
+
+  const rows: AmountTableRow[] = [];
+  if (foodGross > 0) rows.push(withVat("Speisen", input.foodNet, input.foodVat, foodGross));
+  if (drinksGross > 0) rows.push(withVat("Getränke", input.drinksNet, input.drinksVat, drinksGross));
+  if (input.tip > 0) {
+    rows.push(
+      kleinunternehmer
+        ? { label: "Trinkgeld", gross: formatEuro(input.tip) }
+        : { label: "Trinkgeld", net: formatEuro(input.tip), vat: "-", gross: formatEuro(input.tip) }
+    );
+  }
+
+  const netTotal = round2(input.foodNet + input.drinksNet + input.tip);
+  return {
+    hasVatColumns: !kleinunternehmer,
+    rows,
+    total: withVat("Gesamtbetrag", netTotal, computed.vatTotal, computed.grossTotal),
+    vatNote: kleinunternehmer ? undefined : { label: "davon Vorsteuer (100 % abziehbar)", amount: formatEuro(computed.vatTotal) },
+  };
+}
+
+// "07.10.2026, 09:41 Uhr" in Europe/Berlin, regardless of the server's own
+// time zone (the Docker image typically runs in UTC).
+export function formatConfirmationTimestamp(date: Date): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("de-DE", {
+      timeZone: "Europe/Berlin",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value])
+  );
+  return `${parts.day}.${parts.month}.${parts.year}, ${parts.hour}:${parts.minute} Uhr`;
 }
 
 export interface Participant {
@@ -163,19 +205,20 @@ export interface EntertainmentReceiptFields {
 export const MARGIN = 56;
 const BLACK = rgb(0.1, 0.1, 0.1);
 const GRAY = rgb(0.46, 0.46, 0.46);
-const LIGHT_RULE = rgb(0.85, 0.85, 0.85);
+const LIGHT_RULE = rgb(0.82, 0.82, 0.82);
+const PANEL = rgb(0.955, 0.955, 0.955);
 // Minimum horizontal gap, in points, kept between a letterhead line's
 // left-aligned text (companyName/companyAddress) and its right-aligned
 // counterpart (title/sub) once both are measured at their actual rendered
 // width. Exported so tests can reconstruct the same bound independently.
 export const LETTERHEAD_GAP = 16;
 
-// Table row values are drawn at MARGIN + TABLE_VALUE_X_OFFSET, so their wrap
+// Section values are drawn at MARGIN + TABLE_VALUE_X_OFFSET, so their wrap
 // width must be measured from that same offset to the right content edge -
 // not from a separately-maintained magic number, which previously drifted
-// out of sync and let wrapped lines overflow the right border by ~8pt.
-export const TABLE_VALUE_X_OFFSET = 168;
-export const TABLE_ROW_LINE_HEIGHT = 14;
+// out of sync and let wrapped lines overflow the right edge.
+export const TABLE_VALUE_X_OFFSET = 150;
+export const TABLE_ROW_LINE_HEIGHT = 15;
 export function tableValueMaxWidth(contentWidth: number): number {
   return contentWidth - TABLE_VALUE_X_OFFSET;
 }
@@ -303,13 +346,16 @@ export function buildHostConfirmationLines(
   return [...nameLines, ...roleLines];
 }
 
-// Renders the Variante-B "Bewirtungsangaben" cover page (letterhead, bordered
-// info table, Aufteilung/Bestätigung boxes, footer) as a standalone one-page
-// A4 PDF - the caller merges or links it with the original bill afterwards.
+// Renders the "Bewirtungsangaben" cover page as a standalone one-page A4 PDF
+// (letterhead, title, the five numbered Pflichtangaben of § 4 Abs. 5 Satz 1
+// Nr. 2 EStG, a highlighted Aufteilung strip, the Bestätigung, footer) - the
+// caller merges or links it with the original bill afterwards. Separators sit
+// in the padding BETWEEN rows, never at a row's own text baseline, so no
+// rule can strike through a label or value.
 export async function renderEntertainmentReceiptCover(
   fields: EntertainmentReceiptFields,
   amounts: ComputedAmounts,
-  options: { kleinunternehmer: boolean; attachmentFollows?: boolean }
+  options: { kleinunternehmer: boolean; attachmentFollows?: boolean; confirmedAt?: Date }
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const page = doc.addPage(PageSizes.A4);
@@ -317,134 +363,134 @@ export async function renderEntertainmentReceiptCover(
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const [width, height] = PageSizes.A4;
   const contentWidth = width - 2 * MARGIN;
+  const valueX = MARGIN + TABLE_VALUE_X_OFFSET;
+  const valueMaxWidth = tableValueMaxWidth(contentWidth);
+
+  const drawRight = (text: string, rightX: number, y: number, size: number, f: PDFFont, color = BLACK) =>
+    page.drawText(text, { x: rightX - f.widthOfTextAtSize(text, size), y, size, font: f, color });
+  const rule = (y: number) =>
+    page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 0.6, color: LIGHT_RULE });
 
   let y = height - MARGIN;
 
-  // Letterhead - companyName/companyAddress sit on the same line as
-  // right-aligned text (title, subtitle) whose own width varies with
-  // billReference. A fixed half-content-width split doesn't bound the
-  // right side (a long billReference widens `sub` past that split), so
-  // each left-side line is instead clamped to whatever's left after the
-  // ACTUAL rendered width of that line's right-side text plus a fixed gap
-  // - computed per line, from the same font metrics used to draw it.
-  const title = "Bewirtungsangaben";
-  const titleWidth = bold.widthOfTextAtSize(title, 12);
-  const companyNameMaxWidth = Math.max(0, contentWidth - titleWidth - LETTERHEAD_GAP);
-  const companyNameLine = wrapText(fields.companyName ?? "[Firmenname]", bold, 12, companyNameMaxWidth)[0] ?? "";
-  page.drawText(companyNameLine, { x: MARGIN, y, size: 12, font: bold, color: BLACK });
-  page.drawText(title, { x: width - MARGIN - titleWidth, y, size: 12, font: bold, color: BLACK });
-  y -= 15;
+  // Letterhead - companyName sits on the same line as the right-aligned
+  // subtitle, whose own width varies with billReference. A fixed split
+  // doesn't bound the right side (a long billReference widens it), so the
+  // left text is clamped to whatever's left after the ACTUAL rendered width
+  // of the right text plus a fixed gap, from the same font metrics used to
+  // draw it. The address line has no right-hand counterpart.
   const sub = buildLetterheadSubtitle(fields.billReference);
   const subWidth = font.widthOfTextAtSize(sub, 9);
-  const companyAddressMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
-  const companyAddressLine = wrapText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", font, 9, companyAddressMaxWidth)[0] ?? "";
+  const companyNameMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
+  const companyNameLine = wrapText(fields.companyName ?? "[Firmenname]", bold, 10, companyNameMaxWidth)[0] ?? "";
+  page.drawText(companyNameLine, { x: MARGIN, y, size: 10, font: bold, color: BLACK });
+  drawRight(sub, width - MARGIN, y, 9, font, GRAY);
+  y -= 13;
+  const companyAddressLine = wrapText(fields.companyAddress ?? "[Straße Nr., PLZ Ort]", font, 9, contentWidth)[0] ?? "";
   page.drawText(companyAddressLine, { x: MARGIN, y, size: 9, font, color: GRAY });
-  page.drawText(sub, { x: width - MARGIN - subWidth, y, size: 9, font, color: GRAY });
-  y -= 26;
-  page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 1.5, color: BLACK });
-  y -= 22;
 
-  // Bordered info table
-  const amountLines = buildAmountBreakdownLines(fields, amounts, options.kleinunternehmer);
+  // Title
+  y -= 46;
+  page.drawText("Bewirtungsangaben", { x: MARGIN, y, size: 24, font: bold, color: BLACK });
+  y -= 18;
+  page.drawText("Angaben nach § 4 Abs. 5 Satz 1 Nr. 2 EStG", { x: MARGIN, y, size: 9.5, font, color: GRAY });
+  y -= 14;
+  page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 2, color: BLACK });
+  y -= 6;
+
+  const ROW_PAD = 14;
+  const drawSectionHead = (num: string, label: string) => {
+    page.drawText(num, { x: MARGIN, y, size: 10, font: bold, color: GRAY });
+    page.drawText(label, { x: MARGIN + 16, y, size: 9.5, font: bold, color: BLACK });
+  };
+
+  // Sections 1-4: label left, wrapped value lines right.
   const participantLines = fields.participants.map(formatParticipantLine);
-  type RowKind = "text" | "address" | "lines";
-  const rows: Array<{ label: string; kind: RowKind; value: string | string[] }> = [
-    { label: "Datum", kind: "text", value: fields.date },
-    { label: "Ort der Bewirtung", kind: "address", value: fields.location },
-    { label: "Anlass", kind: "text", value: fields.occasion },
-    { label: "Teilnehmer", kind: "lines", value: participantLines },
-    { label: "Rechnungsbetrag", kind: "lines", value: amountLines },
+  const textSections: Array<{ num: string; label: string; lines: string[] }> = [
+    { num: "1", label: "Ort der Bewirtung", lines: wrapAddressText(fields.location, font, 10.5, valueMaxWidth) },
+    { num: "2", label: "Tag der Bewirtung", lines: wrapText(fields.date, font, 10.5, valueMaxWidth) },
+    { num: "3", label: "Teilnehmer", lines: participantLines.flatMap((entry) => wrapText(entry, font, 10.5, valueMaxWidth)) },
+    { num: "4", label: "Anlass", lines: wrapText(fields.occasion, font, 10.5, valueMaxWidth) },
   ];
-  const tableTop = y;
-  for (const { label, kind, value } of rows) {
-    const maxWidth = tableValueMaxWidth(contentWidth);
-    const lines =
-      kind === "address"
-        ? wrapAddressText(value as string, font, 10, maxWidth)
-        : kind === "lines"
-          ? (value as string[]).flatMap((entry) => wrapText(entry, font, 10, maxWidth))
-          : wrapText(value as string, font, 10, maxWidth);
-    page.drawText(label, { x: MARGIN + 8, y, size: 9, font, color: GRAY });
+  for (const { num, label, lines } of textSections) {
+    y -= ROW_PAD + 8;
+    drawSectionHead(num, label);
     lines.forEach((line, i) => {
-      page.drawText(line, { x: MARGIN + TABLE_VALUE_X_OFFSET, y: y - i * TABLE_ROW_LINE_HEIGHT, size: 10, font, color: BLACK });
+      page.drawText(line, { x: valueX, y: y - i * TABLE_ROW_LINE_HEIGHT, size: 10.5, font, color: BLACK });
     });
-    y -= Math.max(26, lines.length * TABLE_ROW_LINE_HEIGHT + 12);
-    page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 0.5, color: LIGHT_RULE });
+    y -= (lines.length - 1) * TABLE_ROW_LINE_HEIGHT + ROW_PAD - 4;
+    rule(y);
   }
-  page.drawRectangle({
-    x: MARGIN,
-    y,
-    width: contentWidth,
-    height: tableTop - y + 14,
-    borderColor: BLACK,
-    borderWidth: 1,
-  });
-  y -= 24;
 
-  // Aufteilung / Bestätigung boxes - the Bestätigung box's hostName/hostRole
-  // line and disclaimer are wrapped instead of drawn unbroken, since a long
-  // hostRole (or a long companyAddress feeding into hostRole-like text) can
-  // otherwise overflow the border. Both boxes always share the taller of
-  // the fixed 78 and whatever the wrapped Bestätigung content needs, so
-  // they keep lining up with each other.
-  const boxWidth = (contentWidth - 16) / 2;
-  const confirmX = MARGIN + boxWidth + 26;
-  const boxInnerWidth = boxWidth - 20;
+  // Section 5: Aufwendungen as a right-aligned table.
+  const table = buildAmountTable(fields, amounts, options.kleinunternehmer);
+  const grossX = width - MARGIN;
+  const vatX = grossX - 80;
+  const netX = vatX - 75;
+  y -= ROW_PAD + 8;
+  drawSectionHead("5", "Aufwendungen");
+  page.drawText("Position", { x: valueX, y, size: 8.5, font, color: GRAY });
+  if (table.hasVatColumns) {
+    drawRight("Netto", netX, y, 8.5, font, GRAY);
+    drawRight("USt", vatX, y, 8.5, font, GRAY);
+  }
+  drawRight("Brutto", grossX, y, 8.5, font, GRAY);
+  y -= 8;
+  page.drawLine({ start: { x: valueX, y }, end: { x: grossX, y }, thickness: 0.6, color: LIGHT_RULE });
+  const drawTableRow = (row: AmountTableRow, f: PDFFont) => {
+    page.drawText(row.label, { x: valueX, y, size: 10.5, font: f, color: BLACK });
+    if (row.net !== undefined) drawRight(row.net, netX, y, 10.5, f);
+    if (row.vat !== undefined) drawRight(row.vat, vatX, y, 10.5, f);
+    drawRight(row.gross, grossX, y, 10.5, f);
+  };
+  for (const row of table.rows) {
+    y -= 15;
+    drawTableRow(row, font);
+  }
+  y -= 7;
+  page.drawLine({ start: { x: valueX, y }, end: { x: grossX, y }, thickness: 0.8, color: BLACK });
+  y -= 15;
+  drawTableRow(table.total, bold);
+  if (table.vatNote) {
+    y -= 15;
+    page.drawText(table.vatNote.label, { x: valueX, y, size: 9.5, font, color: GRAY });
+    drawRight(table.vatNote.amount, grossX, y, 9.5, font, GRAY);
+  }
+  y -= ROW_PAD;
+  rule(y);
 
-  const hostLines = buildHostConfirmationLines(fields.hostName, fields.hostRole, font, 10, boxInnerWidth);
-  const disclaimerLines = wrapText(buildConfirmationDisclaimer(), font, 8, boxInnerWidth);
+  // Aufteilung strip - the result of the 70/30 split, made the most
+  // prominent element on the page.
+  y -= 22;
+  const stripHeight = 62;
+  page.drawRectangle({ x: MARGIN, y: y - stripHeight, width: contentWidth, height: stripHeight, color: PANEL });
+  page.drawRectangle({ x: MARGIN, y: y - stripHeight, width: 3, height: stripHeight, color: BLACK });
+  page.drawText("Steuerliche Aufteilung", { x: MARGIN + 16, y: y - 15, size: 8.5, font, color: GRAY });
+  const secondColX = MARGIN + contentWidth / 2 + 10;
+  page.drawText(buildDeductibleLabel(options.kleinunternehmer), { x: MARGIN + 16, y: y - 32, size: 9.5, font, color: BLACK });
+  page.drawText(formatEuro(amounts.deductible), { x: MARGIN + 16, y: y - 50, size: 14, font: bold, color: BLACK });
+  page.drawText(buildNonDeductibleLabel(), { x: secondColX, y: y - 32, size: 9.5, font, color: BLACK });
+  page.drawText(formatEuro(amounts.nonDeductible), { x: secondColX, y: y - 50, size: 14, font: bold, color: BLACK });
+  y -= stripHeight + 22;
 
-  const HEADER_OFFSET = 16;
-  const HOST_START_OFFSET = 34;
-  const HOST_LINE_HEIGHT = 13;
-  const CONFIRMED_GAP = 14;
-  const DISCLAIMER_GAP = 12;
-  const DISCLAIMER_LINE_HEIGHT = 10;
-  const BOX_BOTTOM_PADDING = 10;
-
-  const hostLineOffsets = hostLines.map((_, i) => HOST_START_OFFSET + i * HOST_LINE_HEIGHT);
-  const lastHostOffset = hostLineOffsets[hostLineOffsets.length - 1] ?? HOST_START_OFFSET;
-  const confirmedOffset = lastHostOffset + CONFIRMED_GAP;
-  const disclaimerStartOffset = confirmedOffset + DISCLAIMER_GAP;
-  const disclaimerLineOffsets = disclaimerLines.map((_, i) => disclaimerStartOffset + i * DISCLAIMER_LINE_HEIGHT);
-  const lastDisclaimerOffset = disclaimerLineOffsets[disclaimerLineOffsets.length - 1] ?? disclaimerStartOffset;
-  const confirmContentHeight = lastDisclaimerOffset + BOX_BOTTOM_PADDING;
-
-  const boxHeight = Math.max(78, confirmContentHeight);
-  const boxTop = y;
-  page.drawRectangle({ x: MARGIN, y: boxTop - boxHeight, width: boxWidth, height: boxHeight, borderColor: BLACK, borderWidth: 1 });
-  page.drawRectangle({
-    x: MARGIN + boxWidth + 16,
-    y: boxTop - boxHeight,
-    width: boxWidth,
-    height: boxHeight,
-    borderColor: BLACK,
-    borderWidth: 1,
-  });
-  page.drawText("Steuerliche Aufteilung", { x: MARGIN + 10, y: boxTop - HEADER_OFFSET, size: 9, font, color: GRAY });
-  page.drawText(buildDeductibleLine(amounts.deductible, options.kleinunternehmer), {
-    x: MARGIN + 10,
-    y: boxTop - 34,
-    size: 10,
-    font,
-    color: BLACK,
-  });
-  page.drawText(buildNonDeductibleLine(amounts.nonDeductible), {
-    x: MARGIN + 10,
-    y: boxTop - 48,
-    size: 10,
-    font,
-    color: BLACK,
-  });
-
-  page.drawText("Bestätigung", { x: confirmX, y: boxTop - HEADER_OFFSET, size: 9, font, color: GRAY });
+  // Bestätigung - hostName/hostRole and the disclaimer are wrapped instead
+  // of drawn unbroken, so a long hostRole can't run off the page.
+  page.drawText("Bestätigung", { x: MARGIN, y, size: 8.5, font, color: GRAY });
+  const hostLines = buildHostConfirmationLines(fields.hostName, fields.hostRole, font, 10.5, contentWidth);
+  const hostNameLineCount = wrapText(fields.hostName, font, 10.5, contentWidth).length;
+  y -= 3;
   hostLines.forEach((line, i) => {
-    page.drawText(line, { x: confirmX, y: boxTop - hostLineOffsets[i], size: 10, font, color: BLACK });
+    y -= 14;
+    const isName = i < hostNameLineCount;
+    page.drawText(line, { x: MARGIN, y, size: 10.5, font: isName ? bold : font, color: isName ? BLACK : GRAY });
   });
-  page.drawText(`Elektronisch bestätigt: ${fields.date}`, { x: confirmX, y: boxTop - confirmedOffset, size: 9, font, color: GRAY });
-  disclaimerLines.forEach((line, i) => {
-    page.drawText(line, { x: confirmX, y: boxTop - disclaimerLineOffsets[i], size: 8, font, color: GRAY });
-  });
+  y -= 15;
+  const confirmedAt = formatConfirmationTimestamp(options.confirmedAt ?? new Date());
+  page.drawText(`Elektronisch bestätigt: ${confirmedAt}`, { x: MARGIN, y, size: 9.5, font, color: BLACK });
+  for (const line of wrapText(buildConfirmationDisclaimer(), font, 8.5, contentWidth)) {
+    y -= 13;
+    page.drawText(line, { x: MARGIN, y, size: 8.5, font, color: GRAY });
+  }
 
   // Footer
   const footerY = MARGIN - 10;
@@ -456,8 +502,7 @@ export async function renderEntertainmentReceiptCover(
   // standalone-page case - so it never claims a specific "Seite X von N";
   // it only states whether an attachment follows this page at all.
   if (options.attachmentFollows) {
-    const footerRight = "Anlage: Originalrechnung";
-    page.drawText(footerRight, { x: width - MARGIN - font.widthOfTextAtSize(footerRight, 8), y: footerY, size: 8, font, color: GRAY });
+    drawRight("Anlage: Originalrechnung", width - MARGIN, footerY, 8, font, GRAY);
   }
 
   return doc.save();
