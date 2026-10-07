@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix: `tools/list` meldete bei allen Tools `"$schema": "http://json-schema.org/draft-07/schema#"` (SDK 1.30 erzeugt immer draft-07). Clients mit
+  Ajv-Standard (2020-12) lehnten die Tools mit "invalid outputSchema" ab. `$schema` wird jetzt aus Input- und Output-Schemas entfernt
+  (`stripDraft07Dialect` in `src/server.ts`, Test `src/server-schema.test.ts`).
+- Neu: Versionierung als CalVer `yyyy.mm.dd.NNN` (`src/version.ts`; `package.json` führt die semver-konforme Form `yyyy.mmdd.N`). `npm run release`
+  zählt den Tageszähler anhand der Git-Tags hoch, committet und taggt `vYYYY.MM.DD.NNN`. Neues Tool `check_for_update` (read-only) vergleicht die
+  laufende Version mit den Release-Tags auf GitHub. 45 Tools.
+
 - Neu: Auswertung von 135 Artikeln der Kategorien Fehlerbehebung, Administratives und Funktionen & Einstellungen (siehe
   [docs/bhb-systematik.md](docs/bhb-systematik.md)). Neue Tools: `get_ustva_position` (USt-VA-Kennziffern, 95 Konten maschinell aus dem BHB-Artikel) und
   `calculate_account_balance` ("Kontostand berechnen", Abgleich mit dem Kontoauszug). Neue Vorab-Prüfungen: `create_transactions` lehnt 0,00-€-Zahlungen und

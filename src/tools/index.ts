@@ -13,6 +13,7 @@ import { createReceiptsTools } from "./receipts.js";
 import { createReportsTools } from "./reports.js";
 import { createTransactionsTools } from "./transactions.js";
 import { createUstVaTools } from "./ustva-mapping.js";
+import { createVersionTools } from "./version.js";
 import type { ToolDef } from "./types.js";
 
 export function createAllTools(client: BBClient): ToolDef[] {
@@ -31,5 +32,6 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createBookingGuideTools(),
     ...createMonthEndTools(client),
     ...createUstVaTools(),
+    ...createVersionTools(),
   ];
 }

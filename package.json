@@ -13,6 +13,7 @@
     "dev:http": "tsx --env-file=.env src/http-server.ts",
     "start": "node --env-file=.env dist/index.js",
     "start:http": "node dist/http-server.js",
+    "release": "tsx scripts/release.ts",
     "generate": "tsx scripts/generate-client.ts",
     "test": "vitest run"
   },

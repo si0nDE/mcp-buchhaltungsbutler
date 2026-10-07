@@ -8,7 +8,7 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 ## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-- **44 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **45 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
 - **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
 - **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
 - **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
