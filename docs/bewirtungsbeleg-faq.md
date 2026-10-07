@@ -91,6 +91,23 @@ Der Bundesfinanzhof hat pauschale Formulierungen wiederholt nicht anerkannt, u. 
 26.02.2004, IV R 50/01, BStBl II 2004, 502). Der Anlass muss so konkret sein, dass ein Außenstehender
 den geschäftlichen Zusammenhang sofort erkennt.
 
+## Warum wird der Audit-Kommentar beim Buchen gekürzt, und was passiert, wenn er scheitert?
+
+BuchhaltungsButler akzeptiert `comment_text` nur mit 2 bis 210 Zeichen, sonst HTTP 400 „invalid comment_text
+specified". Teilnehmer plus konkreter Anlass überschreiten das schnell; der Konnektor kürzt den Kommentar deshalb
+auf höchstens 210 Bytes (Teilnehmer zuerst, der Anlass bleibt möglichst vollständig - der volle Wortlaut steht auf
+der Bewirtungsangaben-Seite). Der Kommentar wird erst **nach** der Buchung angelegt. Scheitert er trotzdem, meldet
+der Aufruf die Buchung als erfolgt und gibt eine Warnung zurück, statt mit einem Fehler abzubrechen - ein erneuter
+Buchungsversuch würde doppelt buchen.
+
+## Wie buche ich 4650 auf den vollen Betrag und danach 4654 per Umbuchung?
+
+`entertainment_split_mode: "net_reclass"` bei `add_transaction_postings`/`add_receipt_postings`: Es wird nur 4650
+(SKR04 6640) mit vollem Betrag und Vorsteuer gebucht. Die Antwort enthält `entertainment_reclass_hints` mit den
+30 % vom **Netto** (Netto wird aus den USt-Codes der Splits abgeleitet). Diese Umbuchung (Soll 4654 an Haben 4650,
+`vat: 0_none`) bucht der Konnektor nicht selbst, sondern sie wird mit `add_free_postings` angelegt. Der Standard
+`gross_split` (beide Konten im selben Aufruf, 70/30 auf die gebuchten Beträge) bleibt unverändert.
+
 ## Haftungshinweis
 
 Diese Seite fasst unsere Recherche zusammen, ersetzt aber keine steuerliche Beratung. Vor

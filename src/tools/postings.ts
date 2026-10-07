@@ -1,6 +1,12 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { assertEntertainmentExpenseFields, formatEntertainmentExpenseNote } from "./entertainment-expense.js";
+import {
+  assertEntertainmentExpenseFields,
+  COMMENT_MAX_BYTES,
+  computeEntertainmentReclass,
+  formatEntertainmentExpenseNote,
+  truncateToBytes,
+} from "./entertainment-expense.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -51,6 +57,14 @@ const entertainmentFieldsShape = {
   participants: z.string().optional(),
   occasion: z.string().optional(),
   host_confirmed: z.boolean().optional(),
+  entertainment_split_mode: z
+    .enum(["gross_split", "net_reclass"])
+    .optional()
+    .describe(
+      'Default "gross_split": 4650 and 4654 in the same call in a 70/30 ratio. "net_reclass": book only 4650/6640 ' +
+        "with the full amount and input VAT; the response then contains entertainment_reclass_hints with the 30% " +
+        "of NET to reclassify afterwards via add_free_postings (4654 an 4650, vat 0_none). Not booked automatically."
+    ),
 };
 
 const splitShape = z.object({
@@ -109,6 +123,82 @@ function flattenTransactionSplits(splits: TransactionSplit[]) {
     ...flattenSplits(splits),
     oi_receipts_ids_by_customer: splits.map((s) => s.receipt_id_by_customer ?? null),
   };
+}
+
+interface CommentJob {
+  target: { receipt_id_by_customer: number } | { transaction_id_by_customer: number };
+  text: string;
+}
+
+// Comments are sent AFTER the booking succeeded. A failing comment must not
+// turn a completed booking into an error (a retry would book twice), so it is
+// reported as a warning instead. The text is always cut to BHB's limit first.
+async function sendComments(client: BBClient, jobs: CommentJob[]): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const job of jobs) {
+    const [kind, id] = Object.entries(job.target)[0];
+    try {
+      await client.call("commentsAdd", { ...job.target, comment_text: truncateToBytes(job.text, COMMENT_MAX_BYTES) });
+    } catch (error) {
+      warnings.push(
+        `Kommentar zu ${kind === "receipt_id_by_customer" ? "Beleg" : "Transaktion"} ${id} konnte nicht angelegt werden ` +
+          `(${error instanceof Error ? error.message : String(error)}). Die Buchung wurde bereits gebucht - NICHT erneut ` +
+          "buchen; den Kommentar bei Bedarf per add_comment nachtragen."
+      );
+    }
+  }
+  return warnings;
+}
+
+interface AuditItem {
+  target: CommentJob["target"];
+  entry: {
+    splits: Array<{ postingaccount: number; amount: string; vat: string }>;
+    traveler_name?: string;
+    business_purpose?: string;
+    participants?: string;
+    occasion?: string;
+    entertainment_split_mode?: string;
+  };
+  travelMatch: ReturnType<typeof assertTravelExpenseFields>;
+  entertainmentMatch: true | undefined;
+}
+
+// Built BEFORE booking so everything that can fail on our side fails before
+// anything is sent to BuchhaltungsButler.
+function collectAuditArtifacts(items: AuditItem[]): { commentJobs: CommentJob[]; hints: Array<Record<string, unknown>> } {
+  const commentJobs: CommentJob[] = [];
+  const hints: Array<Record<string, unknown>> = [];
+  for (const { target, entry, travelMatch, entertainmentMatch } of items) {
+    if (travelMatch) {
+      commentJobs.push({
+        target,
+        text: formatTravelExpenseNote({
+          traveler_name: entry.traveler_name!,
+          traveler_role: travelMatch.role,
+          business_purpose: entry.business_purpose!,
+        }),
+      });
+    }
+    if (entertainmentMatch) {
+      commentJobs.push({
+        target,
+        text: formatEntertainmentExpenseNote({ participants: entry.participants!, occasion: entry.occasion! }),
+      });
+      if (entry.entertainment_split_mode === "net_reclass") {
+        const hint = computeEntertainmentReclass(entry.splits);
+        if (hint) hints.push({ ...target, ...hint });
+      }
+    }
+  }
+  return { commentJobs, hints };
+}
+
+function withExtras(result: unknown, extras: { warnings: string[]; hints: Array<Record<string, unknown>> }) {
+  const add: Record<string, unknown> = {};
+  if (extras.warnings.length > 0) add.warnings = extras.warnings;
+  if (extras.hints.length > 0) add.entertainment_reclass_hints = extras.hints;
+  return ok(Object.keys(add).length > 0 ? { ...(result as Record<string, unknown>), ...add } : result);
 }
 
 export function createPostingsTools(
@@ -181,7 +271,11 @@ export function createPostingsTools(
       "(4650/6640) and non-deductible (4654/6644) splits to both be present in an approximately 70/30 " +
       "ratio, plus participants, occasion, and host_confirmed: true (confirming a proper signed " +
       "Bewirtungsbeleg exists per § 4 Abs. 5 Nr. 2 EStG — ask the user if unsure, don't assume). Both " +
-      "sets of fields are recorded as a comment on the receipt for the audit trail.",
+      "sets of fields are recorded as a comment on the receipt for the audit trail." +
+      " The audit comment is cut to BuchhaltungsButler's 210-character limit; if it still fails after the booking " +
+      "the call returns a warning instead of an error (never re-book). entertainment_split_mode " +
+      '"net_reclass" books only 4650/6640 with full amount and input VAT and returns ' +
+      "entertainment_reclass_hints (30% of NET, to book via add_free_postings as 4654 an 4650, vat 0_none).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addReceiptPostingsShape,
@@ -194,41 +288,22 @@ export function createPostingsTools(
       );
       const entertainmentMatches = args.receipts.map((entry) => assertEntertainmentExpenseFields(entry.splits, entry));
       const receipts = args.receipts.map(
-        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, ...rest }) => ({
+        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, entertainment_split_mode, ...rest }) => ({
           ...rest,
           ...flattenSplits(splits),
         })
       );
+      const { commentJobs, hints } = collectAuditArtifacts(
+        args.receipts.map((entry, i) => ({
+          target: { receipt_id_by_customer: entry.receipt_id_by_customer },
+          entry,
+          travelMatch: travelMatches[i],
+          entertainmentMatch: entertainmentMatches[i],
+        }))
+      );
       const result = await client.call("postingsAddBatchReceipts", { receipts });
-      const comments: Promise<unknown>[] = [];
-      args.receipts.forEach((entry, i) => {
-        const travelMatch = travelMatches[i];
-        if (travelMatch) {
-          comments.push(
-            client.call("commentsAdd", {
-              receipt_id_by_customer: entry.receipt_id_by_customer,
-              comment_text: formatTravelExpenseNote({
-                traveler_name: entry.traveler_name!,
-                traveler_role: travelMatch.role,
-                business_purpose: entry.business_purpose!,
-              }),
-            })
-          );
-        }
-        if (entertainmentMatches[i]) {
-          comments.push(
-            client.call("commentsAdd", {
-              receipt_id_by_customer: entry.receipt_id_by_customer,
-              comment_text: formatEntertainmentExpenseNote({
-                participants: entry.participants!,
-                occasion: entry.occasion!,
-              }),
-            })
-          );
-        }
-      });
-      await Promise.all(comments);
-      return ok(result);
+      const warnings = await sendComments(client, commentJobs);
+      return withExtras(result, { warnings, hints });
     },
   });
 
@@ -259,7 +334,11 @@ export function createPostingsTools(
       "(4650/6640) and non-deductible (4654/6644) splits to both be present in an approximately 70/30 " +
       "ratio, plus participants, occasion, and host_confirmed: true (confirming a proper signed " +
       "Bewirtungsbeleg exists per § 4 Abs. 5 Nr. 2 EStG — ask the user if unsure, don't assume). Both " +
-      "sets of fields are recorded as a comment on the transaction for the audit trail.",
+      "sets of fields are recorded as a comment on the transaction for the audit trail." +
+      " The audit comment is cut to BuchhaltungsButler's 210-character limit; if it still fails after the booking " +
+      "the call returns a warning instead of an error (never re-book). entertainment_split_mode " +
+      '"net_reclass" books only 4650/6640 with full amount and input VAT and returns ' +
+      "entertainment_reclass_hints (30% of NET, to book via add_free_postings as 4654 an 4650, vat 0_none).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addTransactionPostingsShape,
@@ -274,41 +353,22 @@ export function createPostingsTools(
         assertEntertainmentExpenseFields(entry.splits, entry)
       );
       const transactions = args.transactions.map(
-        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, ...rest }) => ({
+        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, entertainment_split_mode, ...rest }) => ({
           ...rest,
           ...flattenTransactionSplits(splits),
         })
       );
+      const { commentJobs, hints } = collectAuditArtifacts(
+        args.transactions.map((entry, i) => ({
+          target: { transaction_id_by_customer: entry.transaction_id_by_customer },
+          entry,
+          travelMatch: travelMatches[i],
+          entertainmentMatch: entertainmentMatches[i],
+        }))
+      );
       const result = await client.call("postingsAddBatchTransactions", { transactions });
-      const comments: Promise<unknown>[] = [];
-      args.transactions.forEach((entry, i) => {
-        const travelMatch = travelMatches[i];
-        if (travelMatch) {
-          comments.push(
-            client.call("commentsAdd", {
-              transaction_id_by_customer: entry.transaction_id_by_customer,
-              comment_text: formatTravelExpenseNote({
-                traveler_name: entry.traveler_name!,
-                traveler_role: travelMatch.role,
-                business_purpose: entry.business_purpose!,
-              }),
-            })
-          );
-        }
-        if (entertainmentMatches[i]) {
-          comments.push(
-            client.call("commentsAdd", {
-              transaction_id_by_customer: entry.transaction_id_by_customer,
-              comment_text: formatEntertainmentExpenseNote({
-                participants: entry.participants!,
-                occasion: entry.occasion!,
-              }),
-            })
-          );
-        }
-      });
-      await Promise.all(comments);
-      return ok(result);
+      const warnings = await sendComments(client, commentJobs);
+      return withExtras(result, { warnings, hints });
     },
   });
 
