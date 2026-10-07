@@ -105,7 +105,23 @@ describe("get_booking_guide", () => {
     expect(JSON.stringify(findBookingGuide("automatisierungsregeln"))).toMatch(/nicht dokumentiert/);
     expect(JSON.stringify(findBookingGuide("ausgangsrechnung_kasse"))).toMatch(/nur für Eingangsbelege/);
     expect(JSON.stringify(findBookingGuide("buchungsvormerkung_eur"))).toMatch(/exakt übereinstimmen/);
+    expect(JSON.stringify(findBookingGuide("buchungsvormerkung_eur"))).toMatch(/postings-reservations/);
+    expect(JSON.stringify(findBookingGuide("buchungsvormerkung_eur"))).toMatch(/insufficient privileges/);
     expect(JSON.stringify(findBookingGuide("erste_schritte"))).toMatch(/Kontenrahmen und Länge der Sachkonten/);
+  });
+
+  it("documents that receipt review is browser-only, with the Debitoren alternative and its limits", () => {
+    const entry = findBookingGuide("belegpruefung");
+    const e = JSON.stringify(entry);
+    expect(entry?.quelle).toMatch(/Übergabe des Teams/);
+    expect(e).toMatch(/confirmationStatus/);
+    expect(e).toMatch(/editReceipt/);
+    expect(e).toMatch(/Browser-Sitzung/);
+    expect(e).toMatch(/date_since_last_modified/);
+    expect(e).toMatch(/debtor posting is not activated/);
+    expect(e).toMatch(/Per API nicht verifiziert/);
+    expect(e).toMatch(/korrigiert keine falschen Felder/);
+    expect(JSON.stringify(findBookingGuide("belege_upload_matching"))).toMatch(/belegpruefung/);
   });
 
   it("holds the Anlagen browser handover with its key facts and caveats", () => {

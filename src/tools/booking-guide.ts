@@ -471,7 +471,9 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "Bestehende Buchungsreservierungen haben Vorrang vor Vorschlägen aus Automatisierungsregeln.",
     ],
     konnektor: [
-      "Vormerkungen gibt es per API nicht. EÜR: die Zahlung direkt buchen (add_transaction_postings), sobald sie da ist.",
+      "Nicht dokumentiert, aber vorhanden: /postings-reservations/add, /get und /delete (die Spec v1.9.1 enthält nur ihre Antwortschemas PostingsReservations*, ohne Pfade). Felder laut Schema: receipt_id_by_customer, postingaccount, postingtext, vat_option, amount, cost_location, cost_location_two; Fehlertexte u. a. 'the total amount of all postings reservations does not match the receipt amount'.",
+      "Getestet am 07.10.2026: Die Routen existieren (401 statt 404), liefern mit gültigen Zugangsdaten aber Fehler 4 'insufficient privileges', auch wenn alle dokumentierten Endpunkte für den Zugang funktionieren. Ohne Freischaltung durch BuchhaltungsButler kein Tool im Konnektor.",
+      "Die Weboberfläche zeigt den Status als postingsReservationsStatus am Beleg; die API liefert ihn nicht. EÜR ohne Vormerkung: die Zahlung direkt buchen (add_transaction_postings), sobald sie da ist.",
     ],
   },
   {
@@ -563,7 +565,34 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "Archiv: Originale bleiben unveränderbar gespeichert; mangels Wirtschaftsprüfertestat rät BuchhaltungsButler nicht, Papierbelege zu vernichten.",
     ],
     konnektor: [
+      "Prüfen und Korrigieren von Belegdaten (Gegenpartei, Nummer, USt) geht per API nicht: siehe belegpruefung.",
       "upload_receipt/create_receipts: payment_reference setzen; vorher list_receipts (counterparty, invoicenumber) gegen Duplikate; assign_receipts_to_transactions für Fälle, die nicht automatisch matchen; add_comment für den Hinweis an den Steuerberater; die Zahlung 'beleglos' markieren kann nur die Oberfläche.",
+    ],
+  },
+  {
+    id: "belegpruefung",
+    titel: "Belegprüfung und Korrektur von Belegdaten (nur Weboberfläche)",
+    quelle:
+      "Übergabe des Teams (07.10.2026): API-Tests gegen Spec v1.9.1 und die Live-API, Mitschnitt der Weboberfläche beim Prüfen eines Belegs. Kein BHB-Artikel.",
+    regeln: [
+      "Ein Beleg gilt in der Weboberfläche als geprüft, wenn sein Bearbeiten-Dialog gespeichert wurde. Intern wechselt dabei confirmationStatus von 'unconfirmed' auf 'confirmed'. Prüfen und Korrigieren sind ein Schritt: der Dialog überträgt alle Belegfelder (Rechnungssteller, Empfänger, Rechnungsnummer, Datum, Leistungsdatum, Betrag, Währung, USt-Satz, Fälligkeit).",
+      "Die Weboberfläche nutzt dafür POST /receipts/dialog-receipt-details mit action=editReceipt auf app.buchhaltungsbutler.de. Dieser Pfad verlangt eine angemeldete Browser-Sitzung; API-Zugangsdaten (Basic-Auth, api_key) werden mit 401 abgelehnt. Der Login ist durch reCAPTCHA geschützt.",
+      "Die API hat keinen Endpunkt, um Belegfelder zu ändern oder den Prüfstatus zu setzen: unter /receipts gibt es nur get, add, addBatch, upload, delete, restore und assigned-transactions/get. Auch undokumentierte Kandidaten (u. a. receipts/update, receipts/edit, receipts/confirm, settings/update/receipt) antworten mit 404 oder 'invalid type'. confirmationStatus fehlt auch in der ungekürzten Antwort von receipts/get.",
+      "Ersatzsignal per API: list_receipts mit date_since_last_modified (z. B. '2000-01-01 00:00:00') liefert nur Belege, die in der Weboberfläche bearbeitet wurden. Hochladen, Zahlung zuordnen, Zahlung buchen und Kommentieren setzen das Signal nicht. Belege, die dort fehlen, sind ungeprüft. Das ist eine Beobachtung, kein dokumentiertes Prüfkennzeichen.",
+      "Typische OCR-Fehler bei Gutschriften und Provisionsabrechnungen (Aussteller ist der Zahler): die eigene Firma (Rechnungsempfänger) landet als Gegenpartei, eine Kunden- oder Kreditorennummer statt der Abrechnungsnummer als Rechnungsnummer, der USt-Satz fehlt. Der Dateiname übernimmt den falschen Namen und ändert sich beim späteren Korrigieren nicht.",
+    ],
+    ablauf: [
+      "Im Browser: Beleg öffnen, Felder gegen das PDF korrigieren, speichern. Danach list_receipts mit date_since_last_modified: der Beleg muss jetzt in der Liste stehen.",
+      "Der Beleg wird über Belegdatum, Rechnungsnummer und Betrag gefunden; die id_by_customer der API zeigt die Weboberfläche nicht an.",
+    ],
+    achtung: [
+      "Alternative mit aktivierter Debitoren-/Kreditorenbuchhaltung: ein Beleg lässt sich dann per add_receipt_postings buchen und gilt laut Beobachtung in der Oberfläche danach als geprüft. Per API nicht verifiziert: ohne Aktivierung lehnt BHB mit Fehler 12 'debtor posting is not activated' ab. Das Buchen korrigiert keine falschen Felder, und ein unvollständiger Beleg wird mit Fehler 13 'the receipt is not valid, please complete the data' abgelehnt.",
+      "Die Aktivierung geht nur in der Oberfläche und ändert die Buchungslogik des ganzen Mandanten (Belege werden zum Belegdatum auf den Debitor gebucht, die Zahlung gleicht ihn aus). Bei EÜR mit Ist-Versteuerung vorher mit dem Steuerberater klären (siehe ist_versteuerer_debitoren und debitoren_kreditoren_logik).",
+      "Ersetzen statt Ändern (Buchung zurücknehmen, set_receipt_deleted, neu hochladen, zuordnen, buchen) korrigiert die Daten, setzt aber den Prüfstatus nicht, kostet Upload-Kontingent und funktioniert bei E-Rechnungen nicht: dort ignoriert BHB die mitgegebenen Felder.",
+    ],
+    konnektor: [
+      "Fehler vermeiden statt korrigieren: bei upload_receipt counterparty, invoice_number, date, amount und vat_rate selbst aus dem PDF setzen, nicht der OCR überlassen (wirkt nicht bei E-Rechnungen).",
+      "Nach dem Upload get_receipt mit extract_text aufrufen und die Felder gegen den PDF-Text vergleichen; Abweichungen dem Nutzer mit Belegdatum, Rechnungsnummer und Betrag zur Korrektur in der Weboberfläche nennen.",
     ],
   },
   {
@@ -744,7 +773,7 @@ export function createBookingGuideTools(): [ToolDef] {
       "Privateinlagen, Ist-Versteuerer mit Debitoren, Differenzbesteuerung, Amazon, 5,5 %/10,7 %, Gutschrift verrechnen, " +
       "Skonto, Dreiecksgeschäft, EU-Neufahrzeug, Geldtransit (Kasse/Bank/PayPal/Kreditkarte), Prepaid-Guthaben, Lohn, " +
       "Mehrwertsteuersenkung 2020, Storno/Rücklastschrift, Trinkgeld, Split/Saldierung, OSS, Umsatzsteuer in anderem Land, " +
-      "Fremdwährung, Investitionsabzugsbetrag. Außerdem Verfahren und Best Practices: erste_schritte (Bilanzierer vs. EÜR), wechsel_zu_bhb (Typen A-E, Anfangsbestände, Lexware-Export), monatsabschluss (siehe check_month_end), automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse. Weitere Verfahren und Regeln: festgeschriebene_loeschen, belege_upload_matching, eigenbeleg, debitoren_kreditoren_logik, ust_va_zm, auswertungen, konten_einrichtung, einstellungen_aendern, rechnungen_erstellen, kostenstellen, paket_und_limits, bilanz_integritaet, zahlungen_probleme. Anlagevermögen erfassen: anlagen_browser (Ablauf in der Weboberfläche, kein API-Weg). Jeder Eintrag ist vor dem Buchen mit dem Steuerberater abzustimmen, wenn der " +
+      "Fremdwährung, Investitionsabzugsbetrag. Außerdem Verfahren und Best Practices: erste_schritte (Bilanzierer vs. EÜR), wechsel_zu_bhb (Typen A-E, Anfangsbestände, Lexware-Export), monatsabschluss (siehe check_month_end), automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse. Weitere Verfahren und Regeln: festgeschriebene_loeschen, belege_upload_matching, eigenbeleg, debitoren_kreditoren_logik, ust_va_zm, auswertungen, konten_einrichtung, einstellungen_aendern, rechnungen_erstellen, kostenstellen, paket_und_limits, bilanz_integritaet, zahlungen_probleme. Anlagevermögen erfassen: anlagen_browser (Ablauf in der Weboberfläche, kein API-Weg). Belege prüfen und Belegdaten korrigieren: belegpruefung (nur Weboberfläche, kein API-Weg). Jeder Eintrag ist vor dem Buchen mit dem Steuerberater abzustimmen, wenn der " +
       "Fall nicht eindeutig ist; Kontonummern ohne SKR04-Angabe per list_posting_accounts nachschlagen.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,

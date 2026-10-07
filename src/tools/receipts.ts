@@ -235,7 +235,9 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata. " +
       "Accepted: PDF, JPEG, PNG, TIFF, BMP, GIF, ZUGFeRD (PDF with embedded XML), XRechnung (XML); at most 50 pages and 20 MB. " +
       "OCR only reads the first pages (none from page 4 on: then pass counterparty/date/amount yourself); an abweichendes " +
-      "Leistungsdatum is never recognised. A write-protected PDF fails with 'Datei kann nicht verarbeitet werden': print it to a new PDF. " +
+      "Leistungsdatum is never recognised. On credit notes (Gutschriften, Provisionsabrechnungen) OCR often takes the own company as counterparty " +
+      "and a customer number as invoice number: pass counterparty and invoice_number yourself. Receipt fields cannot be changed or marked as checked " +
+      "via the API afterwards (get_booking_guide topic belegpruefung). A write-protected PDF fails with 'Datei kann nicht verarbeitet werden': print it to a new PDF. " +
       "Every upload counts against the monthly quota and deleting does not give it back, so do not upload test files. " +
       "BuchhaltungsButler does not warn about a duplicate upload: check list_receipts (counterparty, invoicenumber) first. " +
       "For automatic matching of e-commerce receipts pass payment_reference (the same value must be on the payment).",

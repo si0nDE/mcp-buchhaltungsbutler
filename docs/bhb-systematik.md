@@ -45,7 +45,7 @@ jeder der 31 Quell-Artikel abgedeckt ist). Themen: `abschreibung`, `rap`, `ausla
 `differenzbesteuerung`, `amazon`, `steuersatz_5_5_10_7`, `gutschrift_verrechnen`, `skonto`, `dreiecksgeschaeft`, `eu_neufahrzeug`,
 `geldtransit`, `prepaid`, `lohn`, `mwst_senkung_2020`, `storno_ruecklastschrift`, `trinkgeld`, `split_buchung`, `oss`, `ausland_ust`,
 `fremdwaehrung`, `iab`; dazu die Best Practices `erste_schritte`, `wechsel_zu_bhb`, `monatsabschluss`, `automatisierungsregeln`,
-`bedienung_shortcuts`, `buchungsvormerkung_eur`, `ausgangsrechnung_kasse`, sowie `anlagen_browser` (Team-Übergabe).
+`bedienung_shortcuts`, `buchungsvormerkung_eur`, `ausgangsrechnung_kasse`, sowie `anlagen_browser` und `belegpruefung` (Team-Übergaben).
 
 Zusätzlich im Code umgesetzt:
 
@@ -79,8 +79,28 @@ Nutzer richtig anleiten kann; per API umsetzbar ist nur ein Teil:
 | Wechsel zu BHB, Lexware-Export | Eintrag `wechsel_zu_bhb` (Typen A-E, 9000, Reihenfolge Import vor Bank). Import und Bankverbindung nur in der Oberfläche. |
 | Automatisierungsregeln | Eintrag `automatisierungsregeln`. Regeln lassen sich per API weder anlegen noch lesen. Der Code-Tipp ist in der Feldbeschreibung `correspondence` von `create_invoice` verankert. |
 | Hacks/Shortcuts, Schnellfilter | Eintrag `bedienung_shortcuts`; Oberfläche. Per API: `manage_account` mit `is_disabled_in_select` blendet ein Basiskonto aus. |
-| Buchungsvormerkung (EÜR) | Eintrag `buchungsvormerkung_eur`; keine API. |
+| Buchungsvormerkung (EÜR) | Eintrag `buchungsvormerkung_eur`. Undokumentierte Endpunkte `/postings-reservations/add\|get\|delete` existieren, liefern aber „insufficient privileges" (siehe unten). Kein Tool. |
 | Ausgangsrechnungen in der Kasse | Eintrag `ausgangsrechnung_kasse`; `receipt_creates_transaction` wirkt nur für Eingangsbelege (Feldbeschreibung). |
+
+## Belegprüfung: nur im Browser
+
+Stand 07.10.2026, ermittelt mit API-Tests gegen Spec v1.9.1 und die Live-API sowie einem Mitschnitt der Weboberfläche (Thema `belegpruefung`).
+
+- **Was „geprüft" ist:** Die Weboberfläche führt am Beleg `confirmationStatus` (`unconfirmed` / `confirmed`). Er wechselt, wenn der
+  Bearbeiten-Dialog gespeichert wird: `POST /receipts/dialog-receipt-details` mit `action=editReceipt` auf `app.buchhaltungsbutler.de`, mit allen
+  Belegfeldern. Prüfen und Korrigieren sind derselbe Schritt.
+- **Warum der Konnektor das nicht kann:** Der Pfad verlangt eine angemeldete Browser-Sitzung und lehnt API-Zugangsdaten mit 401 ab; der Login ist
+  durch reCAPTCHA geschützt. Die API selbst hat keinen Endpunkt zum Ändern von Belegfeldern oder zum Setzen des Status (geprüft: alle dokumentierten
+  Pfade, die verwaisten Definitionen der Spec, die Pfad-Familien mit Typ-Parameter und rund 300 Namenskandidaten). `confirmationStatus` fehlt auch in
+  der ungekürzten Antwort von `receipts/get`.
+- **Ersatzsignal:** `list_receipts` mit `date_since_last_modified` liefert nur Belege, die in der Oberfläche bearbeitet wurden. Upload, Zuordnung,
+  Zahlungsbuchung und Kommentar setzen es nicht. Eine Beobachtung, kein dokumentiertes Kennzeichen.
+- **Alternative mit Debitoren-/Kreditorenbuchhaltung:** Mit aktivierter Debitorenbuchhaltung lässt sich ein Beleg per `add_receipt_postings` buchen;
+  laut Beobachtung in der Oberfläche gilt er dann als geprüft. Per API nicht verifiziert (ohne Aktivierung: Fehler 12 „debtor posting is not
+  activated"). Das Buchen korrigiert keine Felder, die Aktivierung geht nur in der Oberfläche und ändert die Buchungslogik des ganzen Mandanten
+  (bei EÜR/Ist-Versteuerung mit dem Steuerberater klären).
+- **Buchungsvormerkung:** `/postings-reservations/add`, `/get`, `/delete` existieren (401 statt 404; die Spec enthält nur ihre Antwortschemas),
+  antworten mit gültigen Zugangsdaten aber mit Fehler 4 „insufficient privileges", auch wenn alle dokumentierten Endpunkte funktionieren.
 
 ### Grenzen von `check_month_end`
 - Die API liefert an Belegen und Zahlungen keinen Buchungsstatus. „Gebucht" wird aus den Buchungen im Zeitraum abgeleitet (Verweis über `receipt_id_by_customer`,

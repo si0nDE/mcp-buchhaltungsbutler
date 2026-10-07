@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Neu: `get_booking_guide` Thema `belegpruefung`. Belege prüfen und Belegdaten korrigieren geht nur in der Weboberfläche (Bearbeiten-Dialog setzt
+  `confirmationStatus`; der Pfad verlangt eine Browser-Sitzung, die API hat keinen Endpunkt). Dokumentiert: Ersatzsignal über
+  `date_since_last_modified`, typische OCR-Fehler bei Gutschriften, die Alternative mit aktivierter Debitorenbuchhaltung samt ihren Grenzen
+  (nicht per API verifiziert). `upload_receipt` weist auf die OCR-Falle bei Gutschriften hin. Siehe [docs/bhb-systematik.md](docs/bhb-systematik.md).
+- Korrektur: `buchungsvormerkung_eur` sagte „Vormerkungen gibt es per API nicht". Die undokumentierten Endpunkte `/postings-reservations/add|get|delete`
+  existieren, liefern aber „insufficient privileges".
+
 - Fix: `tools/list` meldete bei allen Tools `"$schema": "http://json-schema.org/draft-07/schema#"` (SDK 1.30 erzeugt immer draft-07). Clients mit
   Ajv-Standard (2020-12) lehnten die Tools mit "invalid outputSchema" ab. `$schema` wird jetzt aus Input- und Output-Schemas entfernt
   (`stripDraft07Dialect` in `src/server.ts`, Test `src/server-schema.test.ts`).
