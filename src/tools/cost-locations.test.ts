@@ -20,6 +20,21 @@ describe("cost locations tools", () => {
     expect(JSON.parse(result.content[0].text)).toEqual([{ code: "CL1", name: "Marketing" }]);
   });
 
+  it("list_cost_locations pages with limit/offset until a short page", async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => ({ code: `C${i}`, name: `N${i}` }));
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, data: full })
+      .mockResolvedValueOnce({ success: true, data: [{ code: "LAST", name: "Last" }] });
+    const [listCostLocations] = createCostLocationsTools({ call } as unknown as BBClient);
+
+    const result = await listCostLocations.handler({ full: false });
+
+    expect(call).toHaveBeenNthCalledWith(1, "costLocationsGet", { limit: 1000, offset: 0 });
+    expect(call).toHaveBeenNthCalledWith(2, "costLocationsGet", { limit: 1000, offset: 1000 });
+    expect(JSON.parse(result.content[0].text)).toHaveLength(1001);
+  });
+
   it("manage_cost_location create calls costLocationsAdd", async () => {
     const client = mockClient({ success: true });
     const [, manageCostLocation] = createCostLocationsTools(client);

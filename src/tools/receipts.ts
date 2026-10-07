@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
+import { assertDeliveryDate, DATE_DELIVERY_GUIDE } from "./bhb-systematik.js";
 import { extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -51,11 +52,18 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     list_direction: z.enum(["inbound", "outbound"]),
     payment_status: z.enum(["paid", "unpaid"]).optional(),
     counterparty: z.string().optional(),
+    invoicenumber: z.string().optional().describe("Exact invoice number: the duplicate check before creating or uploading a receipt."),
+    due_date: z.string().optional().describe("YYYY-MM-DD, receipts with this due date."),
     date_from: z.string().optional(),
     date_to: z.string().optional(),
     limit: z.number().int().max(500).default(20),
     offset: z.number().int().default(0),
     deleted: z.boolean().optional(),
+    date_since_last_modified: z
+      .string()
+      .optional()
+      .describe("'YYYY-MM-DD HH:MM:SS' (date only = 23:59:59): only receipts changed after that moment - for incremental sync."),
+    include_offers: z.boolean().optional().describe("Also include offers (Angebote). Default false."),
     full: z.boolean().default(false),
     order: z
       .object({
@@ -157,12 +165,20 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     invoice_number: z.string(),
     date: z.string(),
     amount: z.number(),
-    currency: z.string(),
+    currency: z
+      .string()
+      .describe("API accepts only USD, GBP and CHF here (EUR amounts: see get_booking_guide topic fremdwaehrung); never an empty string."),
     vat_rate: z.number().optional(),
     account: z.number().int().optional(),
     creditor_debtor: z.number().int().optional(),
-    payment_reference: z.string().optional(),
-    date_delivery: z.string().optional(),
+    payment_reference: z
+      .string()
+      .optional()
+      .describe(
+        "Zahlungsreferenz for matching with the payment (PayPal/Amazon/Stripe/eBay orders). Must also be on the payment. " +
+          "On a PDF it is only read when it follows a signal word (Referenz, Reference, Zahlungsreferenz, Transaction-id, Zahlungs-ID, Verwendungszweck, Purpose, ...) plus colon/space."
+      ),
+    date_delivery: z.string().optional().describe(DATE_DELIVERY_GUIDE),
     date_payment_due: z.string().optional(),
     link_to_receipt_id_by_customer: z.number().int().optional(),
   });
@@ -175,11 +191,15 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "create_receipts",
     description:
       "Create one or more receipts in a single batch call (up to 50). Not idempotent — calling again " +
-      "with the same details creates duplicates.",
+      "with the same details creates duplicates, and BuchhaltungsButler does not warn about them: check list_receipts " +
+      "(counterparty, invoicenumber) first. date_delivery must not be after date (checked before sending). Every receipt counts " +
+      "against the monthly upload quota (500, 1000 for E-Commerce Premium); deleting does not give it back. Pass payment_reference " +
+      "for e-commerce receipts so the receipt matches the payment.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createShape,
     async handler(args) {
+      args.receipts.forEach((r, i) => assertDeliveryDate(r, `Beleg ${i + 1} (${r.invoice_number})`));
       const result = await client.call("receiptsAddBatch", { receipts: args.receipts });
       return ok(result);
     },
@@ -195,10 +215,16 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     invoice_number: z.string().optional(),
     date: z.string().optional(),
     amount: z.number().optional(),
-    currency: z.string().optional(),
+    currency: z.string().optional().describe("Only 'EUR' is accepted on upload; a foreign currency is chosen on the receipt in the UI."),
     vat_rate: z.number().optional(),
-    payment_reference: z.string().optional(),
-    date_delivery: z.string().optional(),
+    payment_reference: z
+      .string()
+      .optional()
+      .describe(
+        "Zahlungsreferenz for matching with the payment (PayPal/Amazon/Stripe/eBay orders). Must also be on the payment. " +
+          "On a PDF it is only read when it follows a signal word (Referenz, Reference, Zahlungsreferenz, Transaction-id, Zahlungs-ID, Verwendungszweck, Purpose, ...) plus colon/space."
+      ),
+    date_delivery: z.string().optional().describe(DATE_DELIVERY_GUIDE),
     date_payment_due: z.string().optional(),
     link_to_receipt_id_by_customer: z.number().int().optional(),
   };
@@ -206,11 +232,18 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   const uploadReceipt = defineTool({
     name: "upload_receipt",
     description:
-      "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata.",
+      "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata. " +
+      "Accepted: PDF, JPEG, PNG, TIFF, BMP, GIF, ZUGFeRD (PDF with embedded XML), XRechnung (XML); at most 50 pages and 20 MB. " +
+      "OCR only reads the first pages (none from page 4 on: then pass counterparty/date/amount yourself); an abweichendes " +
+      "Leistungsdatum is never recognised. A write-protected PDF fails with 'Datei kann nicht verarbeitet werden': print it to a new PDF. " +
+      "Every upload counts against the monthly quota and deleting does not give it back, so do not upload test files. " +
+      "BuchhaltungsButler does not warn about a duplicate upload: check list_receipts (counterparty, invoicenumber) first. " +
+      "For automatic matching of e-commerce receipts pass payment_reference (the same value must be on the payment).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
     async handler(args) {
+      assertDeliveryDate(args, "Upload");
       const result = await client.call("receiptsUpload", args);
       return ok(result);
     },
@@ -223,7 +256,12 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
 
   const setReceiptDeleted = defineTool({
     name: "set_receipt_deleted",
-    description: "Mark a receipt as deleted (deleted: true) or restore it (deleted: false).",
+    description:
+      "Mark a receipt as deleted (deleted: true) or restore it (deleted: false). Nothing is deleted physically (GoBD): a deleted " +
+      "receipt stays in the archive, is listed with list_receipts deleted: true and can be restored. The upload quota used " +
+      "(500 receipts per month, 1000 for E-Commerce Premium) is NOT given back by deleting. A receipt with a fixed " +
+      "Debitor/Kreditor booking or a booked assigned payment cannot be deleted before that booking is undone " +
+      "(get_booking_guide festgeschriebene_loeschen).",
     annotations: { readOnlyHint: false, destructiveHint: true },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: setDeletedShape,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTtlCache, type TtlCache } from "../bb-client/cache.js";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
+import { ANLAGEN_GUIDE, lockedAccountHint } from "./bhb-systematik.js";
 import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const SUMMARY_FIELDS = ["postingaccount_number", "name"] as const;
@@ -69,6 +70,17 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     postingaccount_number_from: z.number().int().optional(),
     postingaccount_number_to: z.number().int().optional(),
     search: z.string().optional(),
+    order: z
+      .enum([
+        "postingaccount_number ASC",
+        "postingaccount_number DESC",
+        "name ASC",
+        "name DESC",
+        "type ASC",
+        "type DESC",
+      ])
+      .optional()
+      .describe("Sort order (applied client-side to the cached catalog before pagination)."),
     refresh: z.boolean().default(false),
     full: z.boolean().default(false),
   };
@@ -81,7 +93,8 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
       "postingaccount_number_from/to or search to narrow down, or full: true for raw records including " +
       "type/parent_postingaccount_number. The full catalog is paged in (1000 rows per request) and cached " +
       "for 24h; filtering (range, search, exclude_*) and pagination happen client-side against that cached, " +
-      "complete catalog — pass refresh: true to bypass the cache after an account was added or renamed elsewhere.",
+      "complete catalog — pass refresh: true to bypass the cache after an account was added or renamed elsewhere. " +
+      ANLAGEN_GUIDE,
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
@@ -110,6 +123,17 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
         const needle = args.search.toLowerCase();
         rows = rows.filter((r) => typeof r.name === "string" && r.name.toLowerCase().includes(needle));
       }
+      if (args.order) {
+        const [field, dir] = args.order.split(" ") as ["postingaccount_number" | "name" | "type", "ASC" | "DESC"];
+        const sign = dir === "DESC" ? -1 : 1;
+        const key = (r: Record<string, unknown>) =>
+          field === "postingaccount_number" ? (parseAccountNumber(r[field]) ?? Number.POSITIVE_INFINITY) : String(r[field] ?? "");
+        rows = [...rows].sort((a, b) => {
+          const ka = key(a);
+          const kb = key(b);
+          return ka < kb ? -sign : ka > kb ? sign : 0;
+        });
+      }
       const offset = args.offset ?? 0;
       const limit = args.limit ?? 20;
       rows = rows.slice(offset, offset + limit);
@@ -128,7 +152,11 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
     name: "manage_posting_account",
     description:
       "Create or update a posting account. parent_postingaccount_number is required for create, ignored " +
-      "for update. No delete endpoint exists for posting accounts — they can only be created or renamed/reparented.",
+      "for update. No delete endpoint exists for posting accounts — they can only be created or renamed/reparented. " +
+      "Choose a number in the same range as the parent/template account; account numbers must fit the Sachkontenlänge " +
+      "(4-8 digits, fixed at account setup, Debitoren/Kreditoren one digit more). A template whose name contains a tax " +
+      "rate is an Automatikkonto and passes its tax automatism on: pick a template without a rate for free tax choice. " +
+      "Some numbers are locked for individual accounts (BHB error; see get_booking_guide konten_einrichtung).",
     annotations: { readOnlyHint: false, destructiveHint: true },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: manageShape,
@@ -137,11 +165,18 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
         if (args.parent_postingaccount_number === undefined) {
           throw new Error(`"parent_postingaccount_number" is required for action "create"`);
         }
-        const result = await client.call("settingsAddPostingaccount", {
-          name: args.name,
-          postingaccount_number: args.postingaccount_number,
-          parent_postingaccount_number: args.parent_postingaccount_number,
-        });
+        let result: unknown;
+        try {
+          result = await client.call("settingsAddPostingaccount", {
+            name: args.name,
+            postingaccount_number: args.postingaccount_number,
+            parent_postingaccount_number: args.parent_postingaccount_number,
+          });
+        } catch (error) {
+          const hint = lockedAccountHint(args.postingaccount_number);
+          if (hint === undefined) throw error;
+          throw new Error(`${error instanceof Error ? error.message : String(error)} ${hint}`);
+        }
         fullCatalog.invalidate();
         return ok(result);
       }

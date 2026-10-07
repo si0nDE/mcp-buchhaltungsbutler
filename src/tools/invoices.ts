@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
+import { supplyDateWarnings, unbookableRateWarnings, withWarnings } from "./bhb-systematik.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const invoiceItemShape = z.object({
@@ -50,8 +51,20 @@ const sharedInvoiceFields = {
   additional_addressline: z.string().optional(),
   recurring_interval: z.string().optional(),
   recurring_date_next: z.string().optional(),
-  date_of_supply: z.string().optional(),
-  correspondence: z.string().optional(),
+  date_of_supply: z
+    .string()
+    .optional()
+    .describe(
+      "Leistungsdatum. Only a YYYY-MM-DD date that is not after `date` is taken over as the receipt's " +
+        "date_delivery (UStVA by Leistungsdatum); a period text is shown on the PDF only, a later date is ignored."
+    ),
+  correspondence: z
+    .string()
+    .optional()
+    .describe(
+      "Free text on the invoice. A fixed code per tax case (e.g. \"DEnachFR\") placed here or in final_provisions can be " +
+        "matched by an Automatisierungsregel on the PDF full text to book the invoice automatically (get_booking_guide automatisierungsregeln)."
+    ),
   discount_type: z.string().optional(),
   discount_value: z.string().optional(),
   payment_conditions: z.string().optional(),
@@ -62,7 +75,7 @@ const sharedInvoiceFields = {
   language: z.enum(["de_DE", "en_US"]).optional(),
 };
 
-export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
+export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDef] {
   // invoicenumber/due_days/payment_reference are accepted by invoicesCreate and
   // invoicesCreateEInvoice, but NOT by invoicesCreateDraft - stripped below when draft.
   const createInvoiceShape = {
@@ -74,7 +87,10 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     email: z.string().optional(),
     invoicenumber: z.string().optional(),
     due_days: z.string().optional(),
-    payment_reference: z.string().optional(),
+    payment_reference: z
+      .string()
+      .optional()
+      .describe("Only Amazon order id, PayPal transaction id and Stripe transaction id are supported; then the receipt matches that payment."),
     draft: z.boolean().default(false),
     items: z.array(invoiceItemShape).min(1),
   };
@@ -84,8 +100,12 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     description:
       "Create an invoice, credit note, or offer (type selects which). draft: true saves it as a draft " +
       "(invoicesCreateDraft) instead of finalizing it (invoicesCreate); draft mode does not support " +
-      "invoicenumber, due_days, or payment_reference. For a structured e-invoice (XRechnung/ZUGFeRD), " +
-      "use create_einvoice instead.",
+      "invoicenumber, due_days, or payment_reference (a draft has no date and number until it is finalised; the number is then the " +
+      "next one of the account's numbering, which must contain at least one digit). A NEGATIVE total makes BuchhaltungsButler " +
+      "label the document a Rechnungskorrektur: then say \"Rechnungskorrektur zur Rechnung Nr. ... vom ...\" in correspondence " +
+      "(create_invoice_correction does this for you for a full correction). recurring_interval creates the first invoice at once " +
+      "and the next ones from recurring_date_next; stopping a plan is only possible in the UI. Rates 5.5% and 10.7% cannot be " +
+      "booked afterwards. For a structured e-invoice (XRechnung/ZUGFeRD), use create_einvoice instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createInvoiceShape,
@@ -96,7 +116,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       if (draft) {
         const payload = { ...fields, ...flattened };
         const result = await client.call("invoicesCreateDraft", payload);
-        return ok(result);
+        return ok(withWarnings(result, [...supplyDateWarnings(fields), ...unbookableRateWarnings(items)]));
       }
 
       const payload = {
@@ -107,7 +127,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
         ...flattened,
       };
       const result = await client.call("invoicesCreate", payload);
-      return ok(result);
+      return ok(withWarnings(result, [...supplyDateWarnings(fields), ...unbookableRateWarnings(items)]));
     },
   });
 
@@ -129,7 +149,10 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
     name: "create_einvoice",
     description:
       "Create a structured e-invoice (e.g. XRechnung/ZUGFeRD) with tax-type/tax-amount line items. " +
-      "Requires the full postal address and email in addition to the base invoice fields. For a normal " +
+      "Requires the full postal address and email in addition to the base invoice fields, and the company master data " +
+      "(address, tax number or USt-ID) must be complete in the account. e_invoice_id is the buyer reference (\"0\" if there is none); " +
+      "for public contracting authorities it must be the Leitweg-ID the recipient provides. A period of service must be given as its " +
+      "last day. For a normal " +
       "PDF invoice, credit note, or offer, use create_invoice instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
@@ -144,9 +167,28 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
         ]),
       };
       const result = await client.call("invoicesCreateEInvoice", payload);
+      return ok(withWarnings(result, supplyDateWarnings(fields)));
+    },
+  });
+
+  const createInvoiceCorrection = defineTool({
+    name: "create_invoice_correction",
+    description:
+      "Create a Rechnungskorrektur for an existing OUTBOUND invoice: a new outbound invoice with all data of the " +
+      "original, negated item prices and item names prefixed \"Gutschrift\"; invoice number from the customer's " +
+      "number settings, date = today, correspondence text references the original. Find the original's " +
+      "id_by_customer with list_receipts (list_direction outbound). Not idempotent - calling twice creates two " +
+      "corrections. For a partial credit or other terms use create_invoice with type credit instead.",
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: { receipt_id_by_customer: z.number().int() },
+    async handler(args) {
+      const result = await client.call("invoicesInvoiceCorrectionCreate", {
+        receipt_id_by_customer: args.receipt_id_by_customer,
+      });
       return ok(result);
     },
   });
 
-  return [createInvoice, createEInvoice];
+  return [createInvoice, createEInvoice, createInvoiceCorrection];
 }

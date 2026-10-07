@@ -59,6 +59,25 @@ describe("posting accounts tools", () => {
     expect(client.call).toHaveBeenCalledTimes(1);
   });
 
+  it("list_posting_accounts sorts by order before paginating", async () => {
+    const data = [
+      { postingaccount_number: "100", name: "Bravo", type: "account" },
+      { postingaccount_number: "9", name: "Alpha", type: "creditor" },
+      { postingaccount_number: "2000", name: "Charlie", type: "debtor" },
+    ];
+    const client = mockClient({ success: true, rows: data.length, data });
+    const [listPostingAccounts] = createPostingAccountsTools(client);
+    const names = async (order: string) =>
+      (JSON.parse((await listPostingAccounts.handler({ limit: 20, offset: 0, order })).content[0].text) as any[]).map(
+        (r) => r.name
+      );
+
+    expect(await names("postingaccount_number ASC")).toEqual(["Alpha", "Bravo", "Charlie"]);
+    expect(await names("postingaccount_number DESC")).toEqual(["Charlie", "Bravo", "Alpha"]);
+    expect(await names("name DESC")).toEqual(["Charlie", "Bravo", "Alpha"]);
+    expect(await names("type ASC")).toEqual(["Bravo", "Alpha", "Charlie"]);
+  });
+
   it("list_posting_accounts caps the pagination loop at FULL_CATALOG_MAX_PAGES full pages", async () => {
     const fullPage = Array.from({ length: 1000 }, (_, i) => ({
       postingaccount_number: String(i),

@@ -283,4 +283,19 @@ describe("receipts tools", () => {
       confirmed_only: true,
     });
   });
+
+  it("list_receipts passes include_offers through to receiptsGet", async () => {
+    const client = mockClient({ success: true, rows: 0, data: [] });
+    const [listReceipts] = createReceiptsTools(client);
+
+    await listReceipts.handler({ list_direction: "outbound", include_offers: true });
+
+    expect(client.call).toHaveBeenCalledWith("receiptsGet", {
+      list_direction: "outbound",
+      include_offers: true,
+      limit: 20,
+      offset: 0,
+    });
+  });
+
 });
