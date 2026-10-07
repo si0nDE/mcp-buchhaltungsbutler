@@ -29,9 +29,9 @@ describe("pathToKey", () => {
 describe("extractEndpoints", () => {
   const endpoints = extractEndpoints(spec);
 
-  it("extracts exactly 48 endpoints with unique keys", () => {
-    expect(endpoints).toHaveLength(48);
-    expect(new Set(endpoints.map((e) => e.key)).size).toBe(48);
+  it("extracts exactly 58 endpoints with unique keys", () => {
+    expect(endpoints).toHaveLength(58);
+    expect(new Set(endpoints.map((e) => e.key)).size).toBe(58);
   });
 
   it("sorts endpoints by path", () => {
