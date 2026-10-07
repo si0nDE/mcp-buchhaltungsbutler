@@ -338,7 +338,11 @@ export function createPostingsTools(
       " The audit comment is cut to BuchhaltungsButler's 210-character limit; if it still fails after the booking " +
       "the call returns a warning instead of an error (never re-book). entertainment_split_mode " +
       '"net_reclass" books only 4650/6640 with full amount and input VAT and returns ' +
-      "entertainment_reclass_hints (30% of NET, to book via add_free_postings as 4654 an 4650, vat 0_none).",
+      "entertainment_reclass_hints (30% of NET, to book via add_free_postings as 4654 an 4650, vat 0_none). " +
+      "Give split amounts as positive numbers; the direction follows the transaction. The connector passes " +
+      "amounts through unchanged. Observed live on one outgoing card payment: negative splits were rejected with " +
+      "BuchhaltungsButler error 27 (sum does not match the transaction amount), positive ones were accepted - " +
+      "not verified for other transaction types.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addTransactionPostingsShape,
