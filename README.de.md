@@ -73,7 +73,7 @@ nach Bestätigung per `set_receipt_deleted` (wiederherstellbar), danach auf den 
 
 Rückgabe: `status`, `new_receipt_id_by_customer`, `original_receipt_id_by_customer`, `original_deleted` (immer
 `false`), `pages_before`/`pages_after`, `original_sha256`, `duplicates_found`, `checks`, `amounts`, `warnings`,
-`next_step_hint`. Die Fälle A (`bill_file`) und B (`link_to_receipt_id_by_customer`) funktionieren unverändert.
+`next_step_hint`. `new_receipt_id_by_customer` stammt aus der Upload-Antwort (Fallback: Ermittlung über den internen Dateinamen per Belegliste; sonst `null` mit Warnung). `duplicates_found` listet nur andere Belege mit gleichem Datum, gleicher Gegenpartei und gleichem Betrag (die Rechnungsnummer allein zählt nicht) oder mit Verknüpfung zum Original, je Eintrag mit `matches` und `linked_to_original` - so sind alte Fall-B-Seiten erkennbar; Original und neuer Beleg erscheinen nie. Die Fälle A (`bill_file`) und B (`link_to_receipt_id_by_customer`) funktionieren unverändert.
 
 ## Remote-Deployment (Docker)
 

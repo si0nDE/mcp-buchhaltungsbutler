@@ -40,6 +40,7 @@ interface Setup {
   list?: unknown[] | Error;
   getError?: Error;
   uploadError?: Error;
+  uploadResponse?: Record<string, unknown>;
 }
 
 function setup(opts: Setup = {}) {
@@ -67,7 +68,8 @@ function setup(opts: Setup = {}) {
     }
     if (key === "receiptsUpload") {
       if (opts.uploadError) throw opts.uploadError;
-      return { data: { id_by_customer: 1042 } };
+      // Live shape per BHB spec: id_by_customer/filename at the top level.
+      return opts.uploadResponse ?? { success: true, message: "", id_by_customer: "1042", filename: "receipt567" };
     }
     if (key === "receiptsGet") {
       if (opts.list instanceof Error) throw opts.list;
@@ -206,13 +208,64 @@ describe("generate_and_upload_entertainment_receipt with source_receipt_id_by_cu
     expect(calls.map((c) => c.key)).toEqual(["receiptsGetIdByCustomer", "receiptsUpload"]);
   });
 
-  it("reports duplicates but never deletes", async () => {
-    const dup = { id_by_customer: "1010", counterparty: "Beispiel-Restaurant GmbH", invoicenumber: "000001", date: "2026-03-14", deleted: "0" };
-    const other = { id_by_customer: "1011", counterparty: "Anderer Lieferant", invoicenumber: "77", date: "2026-03-14", deleted: "0" };
-    const self = { id_by_customer: "1001", counterparty: "Beispiel-Restaurant GmbH", invoicenumber: "000001", date: "2026-03-14", deleted: "0" };
-    const { run, calls } = setup({ list: [dup, other, self] });
+  it("reads the new id from the top-level upload response and uses it in the hint", async () => {
+    const data = dataOf(await setup().run());
+    expect(data.new_receipt_id_by_customer).toBe(1042);
+    expect(data.next_step_hint).toContain("auf 1042 buchen");
+    expect(JSON.stringify(data)).not.toContain("undefined");
+  });
+
+  it("still accepts the id nested under data", async () => {
+    const data = dataOf(await setup({ uploadResponse: { data: { id_by_customer: "77" } } }).run());
+    expect(data.new_receipt_id_by_customer).toBe(77);
+  });
+
+  it("resolves the id via the internal filename when the upload response has no id", async () => {
+    const row = { id_by_customer: "521", filename: "receipt567", counterparty: "Beispiel-Restaurant GmbH", date: "2026-03-14", amount: "44.00", deleted: "0" };
+    const { run } = setup({ uploadResponse: { success: true, filename: "receipt567" }, list: [row] });
     const data = dataOf(await run());
-    expect(data.duplicates_found).toEqual([expect.objectContaining({ id_by_customer: "1010" })]);
+    expect(data.new_receipt_id_by_customer).toBe(521);
+    expect(data.duplicates_found).toEqual([]);
+    expect(data.next_step_hint).toContain("auf 521 buchen");
+  });
+
+  it("warns instead of printing 'undefined' when the new id cannot be determined", async () => {
+    const { run } = setup({ uploadResponse: { success: true }, list: [] });
+    const data = dataOf(await run());
+    expect(data.new_receipt_id_by_customer).toBeNull();
+    expect(data.warnings.join(" ")).toMatch(/Beleg-ID/);
+    expect(JSON.stringify(data)).not.toContain("undefined");
+  });
+
+  it("lists only real duplicates (not the original, not the new receipt), with reasons and link info", async () => {
+    const base = { counterparty: "Beispiel-Restaurant GmbH", date: "2026-03-14", amount: "44.00", deleted: "0" };
+    const original = { ...base, id_by_customer: "1001", invoicenumber: "112693" };
+    const oldLinkedPage = { ...base, id_by_customer: "513", invoicenumber: "000001", link_to_receipt_id_by_customer: "1001" };
+    const newReceipt = { ...base, id_by_customer: "1042", invoicenumber: "000001" };
+    const otherAmount = { ...base, id_by_customer: "1011", amount: "12.00" };
+    const otherParty = { ...base, id_by_customer: "1012", counterparty: "Anderer Lieferant" };
+    const deleted = { ...base, id_by_customer: "1013", deleted: "1" };
+    const { run } = setup({ list: [original, oldLinkedPage, newReceipt, otherAmount, otherParty, deleted] });
+    const data = dataOf(await run());
+    expect(data.duplicates_found).toHaveLength(1);
+    expect(data.duplicates_found[0]).toMatchObject({
+      id_by_customer: "513",
+      linked_to_original: true,
+      matches: expect.arrayContaining(["date", "counterparty", "amount", "linked_to_original"]),
+    });
+  });
+
+  it("matches duplicates on date + counterparty + amount even when the invoice number differs", async () => {
+    const row = { id_by_customer: "900", counterparty: "beispiel-restaurant gmbh", date: "2026-03-14", amount: "44.00", invoicenumber: "XYZ", deleted: "0" };
+    const data = dataOf(await setup({ list: [row] }).run());
+    expect(data.duplicates_found).toEqual([expect.objectContaining({ id_by_customer: "900", linked_to_original: false })]);
+    expect(data.duplicates_found[0].matches).not.toContain("invoicenumber");
+  });
+
+  it("never deletes anything", async () => {
+    const row = { id_by_customer: "900", counterparty: "Beispiel-Restaurant GmbH", date: "2026-03-14", amount: "44.00", deleted: "0" };
+    const { run, calls } = setup({ list: [row] });
+    await run();
     expect(calls.map((c) => c.key).filter((k) => k.includes("elete"))).toEqual([]);
   });
 
@@ -245,6 +298,12 @@ describe("legacy flows are unchanged", () => {
   it("Fall B still requires link_to_receipt_id_by_customer", async () => {
     const { run } = setup();
     await expect(run({ source_receipt_id_by_customer: undefined })).rejects.toThrow(/link_to_receipt_id_by_customer is required/);
+  });
+
+  it("Fall B returns the id from the top-level upload response", async () => {
+    const { run } = setup();
+    const data = dataOf(await run({ source_receipt_id_by_customer: undefined, link_to_receipt_id_by_customer: 1001 }));
+    expect(data.id_by_customer).toBe("1042");
   });
 
   it("Fall B uploads a standalone page with the link", async () => {

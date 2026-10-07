@@ -300,6 +300,18 @@ const toId = (value: unknown): string | number | undefined => {
   return typeof value === "string" ? value : undefined;
 };
 
+// BuchhaltungsButler's upload response carries id_by_customer and the internal
+// filename at the TOP level (per spec: ReceiptsUpload_Success), not under
+// `data`. Older code/tests assumed `data.id_by_customer`, so both are read.
+interface UploadResponse {
+  id_by_customer?: string | number;
+  filename?: string;
+  data?: { id_by_customer?: string | number; filename?: string };
+}
+const readUploadedId = (r: UploadResponse): string | number | undefined =>
+  r.id_by_customer ?? r.data?.id_by_customer;
+const readUploadedFilename = (r: UploadResponse): string | undefined => r.filename ?? r.data?.filename;
+
 const formatDe = (n: number) => n.toFixed(2).replace(".", ",");
 
 type SourceArgs = EntertainmentReceiptDocumentArgs & {
@@ -459,9 +471,11 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
   };
 
   let newId: string | number | undefined;
+  let uploadedFilename: string | undefined;
   try {
-    const result = await client.call<{ data?: { id_by_customer?: string | number } }>("receiptsUpload", uploadParams);
-    newId = toId(result.data?.id_by_customer);
+    const result = await client.call<UploadResponse>("receiptsUpload", uploadParams);
+    newId = toId(readUploadedId(result));
+    uploadedFilename = readUploadedFilename(result);
   } catch (error) {
     throw new Error(
       `Upload fehlgeschlagen (${error instanceof Error ? error.message : String(error)}). Nicht automatisch ` +
@@ -480,19 +494,44 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
       limit: 500,
       offset: 0,
     });
+    const rows = list.data ?? [];
+
+    // The upload response should carry the id; if it doesn't, the internal
+    // filename it returned identifies the new receipt - only if unambiguous.
+    if (newId === undefined && uploadedFilename) {
+      const byFilename = rows.filter((r) => r.filename === uploadedFilename);
+      if (byFilename.length === 1) newId = toId(byFilename[0].id_by_customer);
+    }
+
+    // Invoice numbers can legitimately differ (receipt number on the original,
+    // invoice number on the Bewirtungsseite), so a duplicate is date +
+    // counterparty + amount; a receipt linked to the original always counts.
     const wantedParty = counterparty.trim().toLowerCase();
-    for (const row of list.data ?? []) {
+    const wantedAmount = Number(uploadParams.amount);
+    for (const row of rows) {
       const rowId = toId(row.id_by_customer);
       if (rowId === sourceId || (newId !== undefined && rowId === newId)) continue;
       if (row.deleted === "1" || row.deleted === 1 || row.deleted === true) continue;
-      if (typeof row.counterparty !== "string" || row.counterparty.trim().toLowerCase() !== wantedParty) continue;
-      if (billReference && row.invoicenumber && String(row.invoicenumber) !== billReference) continue;
+      const matches: string[] = [];
+      if (row.date === uploadParams.date) matches.push("date");
+      if (typeof row.counterparty === "string" && row.counterparty.trim().toLowerCase() === wantedParty) {
+        matches.push("counterparty");
+      }
+      if (Math.abs(Number(row.amount) - wantedAmount) <= AMOUNT_TOLERANCE + 1e-9) matches.push("amount");
+      const linkedToOriginal = toId(row.link_to_receipt_id_by_customer) === sourceId;
+      const sameCore = ["date", "counterparty", "amount"].every((m) => matches.includes(m));
+      if (!sameCore && !linkedToOriginal) continue;
+      if (billReference && row.invoicenumber && String(row.invoicenumber) === billReference) matches.push("invoicenumber");
+      if (linkedToOriginal) matches.push("linked_to_original");
       duplicates.push({
         id_by_customer: row.id_by_customer,
         date: row.date,
         counterparty: row.counterparty,
         amount: row.amount,
         invoicenumber: row.invoicenumber,
+        link_to_receipt_id_by_customer: row.link_to_receipt_id_by_customer,
+        linked_to_original: linkedToOriginal,
+        matches,
       });
     }
   } catch {
@@ -501,9 +540,16 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
     );
   }
 
+  if (newId === undefined) {
+    warnings.push(
+      "Die Beleg-ID des neuen Belegs konnte nicht eindeutig ermittelt werden (Upload-Antwort ohne ID). " +
+        "Neuen Beleg per list_receipts (Gegenpartei/Datum) suchen; duplicates_found kann den neuen Beleg enthalten."
+    );
+  }
+
   return ok({
     status: "ok",
-    new_receipt_id_by_customer: newId,
+    new_receipt_id_by_customer: newId ?? null,
     original_receipt_id_by_customer: sourceId,
     original_deleted: false,
     pages_before: merged.pagesBefore,
@@ -519,7 +565,10 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
       non_deductible: amounts.nonDeductible,
     },
     warnings,
-    next_step_hint: `Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf ${newId} buchen.`,
+    next_step_hint:
+      newId !== undefined
+        ? `Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf ${newId} buchen.`
+        : `Neue Beleg-ID per list_receipts ermitteln. Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf den neuen Beleg buchen.`,
   });
 }
 
@@ -592,7 +641,7 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
         drinksVat: args.drinks_vat ?? 0,
       });
 
-      const result = await client.call<{ data?: { id_by_customer?: string | number } }>("receiptsUpload", {
+      const result = await client.call<UploadResponse>("receiptsUpload", {
         file: Buffer.from(pdfBytes).toString("base64"),
         type: "invoice inbound",
         file_name: `Bewirtungsangaben${args.bill_reference ? `_${args.bill_reference}` : ""}.pdf`,
@@ -608,7 +657,7 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
       });
 
       return ok({
-        id_by_customer: result.data?.id_by_customer,
+        id_by_customer: readUploadedId(result) ?? null,
         merged_with_bill: mergedWithBill,
         gross_total: amounts.grossTotal,
         vat_total: amounts.vatTotal,

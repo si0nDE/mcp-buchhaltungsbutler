@@ -74,7 +74,7 @@ book on the new receipt.
 
 Returns: `status`, `new_receipt_id_by_customer`, `original_receipt_id_by_customer`, `original_deleted` (always
 `false`), `pages_before`/`pages_after`, `original_sha256`, `duplicates_found`, `checks`, `amounts`, `warnings`,
-`next_step_hint`. Fall A (`bill_file`) and Fall B (`link_to_receipt_id_by_customer`) behave as before.
+`next_step_hint`. `new_receipt_id_by_customer` comes from the upload response (fallback: resolved via the internal filename from the receipt list; otherwise `null` with a warning). `duplicates_found` lists only other receipts with the same date, counterparty and amount (invoice number alone does not count) or linked to the original, each with `matches` and `linked_to_original` so old Fall-B pages are recognisable; the original and the new receipt never appear. Fall A (`bill_file`) and Fall B (`link_to_receipt_id_by_customer`) behave as before.
 
 ## Remote deployment (Docker)
 

@@ -59,7 +59,7 @@ entfernen, bevor der Beleg weiterverarbeitet wird.
 
 Mit `source_receipt_id_by_customer` entsteht bewusst ein neuer Beleg neben dem Original (das erst nach Bestätigung
 per `set_receipt_deleted` entfernt wird); gleiche Gegenpartei/Datum/Rechnungsnummer stehen dann in
-`duplicates_found`. Schlägt der Upload per Timeout fehl, wird nicht automatisch wiederholt - vor einem neuen Versuch
+`duplicates_found` (Abgleich über Datum + Gegenpartei + Betrag, nicht über die Rechnungsnummer; `linked_to_original` zeigt alte Fall-B-Seiten, die mit dem Original verknüpft sind). Schlägt der Upload per Timeout fehl, wird nicht automatisch wiederholt - vor einem neuen Versuch
 per `list_receipts` prüfen, ob der Beleg trotzdem angelegt wurde.
 
 ## Woher kommt die Aufteilung 70 % / 30 %?
