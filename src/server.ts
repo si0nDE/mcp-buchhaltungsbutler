@@ -1,12 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BBClient } from "./bb-client/client.js";
+import { SERVER_INSTRUCTIONS } from "./tools/bhb-systematik.js";
 import { createAllTools } from "./tools/index.js";
 
 export function createServer(client: BBClient): McpServer {
-  const server = new McpServer({
-    name: "buchhaltungsbutler",
-    version: "0.1.0",
-  });
+  const server = new McpServer(
+    {
+      name: "buchhaltungsbutler",
+      version: "0.1.0",
+    },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
 
   for (const tool of createAllTools(client)) {
     server.registerTool(
