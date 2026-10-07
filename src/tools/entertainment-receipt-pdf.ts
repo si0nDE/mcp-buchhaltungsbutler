@@ -308,6 +308,21 @@ export function wrapAddressText(text: string, font: PDFFont, size: number, maxWi
   return lines;
 }
 
+// Puts the restaurant name on its own line(s), with the address below it, so
+// name and address read as two distinct things. `location` is free text
+// ("Name, Straße Nr., PLZ Ort"), so the split is at the FIRST comma: what
+// precedes it is the name, the rest is the address. The separating comma is
+// dropped (the line break replaces it). Without any comma there is nothing
+// to separate, and the text is wrapped as plain address text.
+export function formatLocationLines(location: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  const commaIndex = location.indexOf(",");
+  if (commaIndex === -1) return wrapAddressText(location, font, size, maxWidth);
+  const name = location.slice(0, commaIndex).trim();
+  const address = location.slice(commaIndex + 1).trim();
+  if (!name || !address) return wrapAddressText(location.replace(/^,|,$/g, "").trim(), font, size, maxWidth);
+  return [...wrapText(name, font, size, maxWidth), ...wrapAddressText(address, font, size, maxWidth)];
+}
+
 // Short letterhead reference to the original bill - deliberately excludes
 // the EStG citation (already stated in the Bestätigung box below) so it
 // stays short enough to leave room for the company address on the same
@@ -407,7 +422,7 @@ export async function renderEntertainmentReceiptCover(
   // Sections 1-4: label left, wrapped value lines right.
   const participantLines = fields.participants.map(formatParticipantLine);
   const textSections: Array<{ num: string; label: string; lines: string[] }> = [
-    { num: "1", label: "Ort der Bewirtung", lines: wrapAddressText(fields.location, font, 10.5, valueMaxWidth) },
+    { num: "1", label: "Ort der Bewirtung", lines: formatLocationLines(fields.location, font, 10.5, valueMaxWidth) },
     { num: "2", label: "Tag der Bewirtung", lines: wrapText(fields.date, font, 10.5, valueMaxWidth) },
     { num: "3", label: "Teilnehmer", lines: participantLines.flatMap((entry) => wrapText(entry, font, 10.5, valueMaxWidth)) },
     { num: "4", label: "Anlass", lines: wrapText(fields.occasion, font, 10.5, valueMaxWidth) },

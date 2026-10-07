@@ -11,6 +11,7 @@ import {
   computeAmounts,
   formatConfirmationTimestamp,
   formatEuro,
+  formatLocationLines,
   formatParticipantLine,
   LETTERHEAD_GAP,
   MARGIN,
@@ -161,6 +162,48 @@ describe("wrapAddressText", () => {
 
     for (const line of lines) {
       expect(font.widthOfTextAtSize(line, 10)).toBeLessThanOrEqual(maxWidth);
+    }
+  });
+});
+
+describe("formatLocationLines", () => {
+  it("puts the restaurant name on its own line, address below, without the separating comma", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const lines = formatLocationLines(
+      "B. Neumann Residenzgaststätten GmbH (Biergarten), Waldkugelweg 5, 97082 Würzburg",
+      font,
+      10.5,
+      400
+    );
+    expect(lines).toEqual(["B. Neumann Residenzgaststätten GmbH (Biergarten)", "Waldkugelweg 5, 97082 Würzburg"]);
+  });
+
+  it("keeps a location without any comma as a single line", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    expect(formatLocationLines("Restaurant Zur Alten Post", font, 10.5, 400)).toEqual(["Restaurant Zur Alten Post"]);
+  });
+
+  it("does not produce an empty line for a trailing or leading comma", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    expect(formatLocationLines("Restaurant Zur Alten Post,", font, 10.5, 400)).toEqual(["Restaurant Zur Alten Post"]);
+    expect(formatLocationLines(", Musterstraße 1", font, 10.5, 400)).toEqual(["Musterstraße 1"]);
+  });
+
+  it("never produces a line wider than maxWidth for a long name and address", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const lines = formatLocationLines(
+      "Gasthaus Zum Goldenen Hirschen und Weinstube der Familie Müller-Lüdenscheidt, Musterstraße Allee der Wissenschaften 12345678, 12345 Musterstadt-Oberdorf",
+      font,
+      10.5,
+      200
+    );
+    expect(lines.length).toBeGreaterThan(2);
+    for (const line of lines) {
+      expect(font.widthOfTextAtSize(line, 10.5)).toBeLessThanOrEqual(200);
     }
   });
 });
