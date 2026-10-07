@@ -26,6 +26,26 @@ bestehenden Beleg angehängt, statt beide Dateien zu einem PDF zu verschmelzen (
 Rechnung noch nicht hochgeladen ist). Rechtlich zulässig, da das BMF-Schreiben neben dem
 Zusammenführen ausdrücklich auch die Verbindung "durch gegenseitigen Verweis" erlaubt.
 
+## Warum erscheint die Bewirtungsseite als zweiter Beleg?
+
+Das passiert bei Fall B (`link_to_receipt_id_by_customer`): BuchhaltungsButler kennt keinen Endpunkt, der eine Datei
+an einen bestehenden Beleg anhängt oder ersetzt (Spec geprüft: nur `add`, `addBatch`, `upload`, `delete`,
+`restore`), die Verknüpfung erzeugt deshalb einen eigenen Beleg. Stattdessen `source_receipt_id_by_customer`
+nutzen: Der Konnektor lädt das Original, hängt die Seite an und lädt **einen** neuen Beleg hoch.
+
+## Wie lösche ich das Original?
+
+Erst nach Prüfung des neuen Belegs und nur auf Bestätigung: `set_receipt_deleted` mit `deleted: true` auf das
+Original (Soft-Delete, per `deleted: false` wiederherstellbar). Der Konnektor löscht nie automatisch. Danach auf den
+neuen Beleg buchen.
+
+## Warum ist die Datei nicht byte-identisch mit dem Original?
+
+`pdf-lib` kennt kein inkrementelles Speichern und schreibt die Datei beim Speichern komplett neu. Der **Inhalt**
+der Originalseiten (und eingebettete Dateien, Titel/Autor) bleibt erhalten, die **Bytes** nicht. Ausgeglichen wird
+das durch den SHA-256 des Originals in der Fußzeile der Bewirtungsseite und durch das erhaltene (soft-gelöschte)
+Original in BuchhaltungsButler. JPEG-Originale werden unverändert eingebettet, PNG verlustfrei neu verpackt.
+
 ## Warum sieht der neue Beleg in BuchhaltungsButler wie ein Duplikat aus?
 
 BuchhaltungsButler dedupliziert Belege nicht automatisch nach Rechnungsnummer. Wird ein Beleg erneut
@@ -36,6 +56,11 @@ Beleg-Datensatz mit identischer Rechnungsnummer, Gegenpartei und Betrag wie das 
 nicht strukturell als Anlage erkennbar. Nach jedem erneuten Versand/Upload deshalb per `list_receipts`
 (gefiltert nach Gegenpartei und Datum) auf Duplikate prüfen und überzählige mit `set_receipt_deleted`
 entfernen, bevor der Beleg weiterverarbeitet wird.
+
+Mit `source_receipt_id_by_customer` entsteht bewusst ein neuer Beleg neben dem Original (das erst nach Bestätigung
+per `set_receipt_deleted` entfernt wird); gleiche Gegenpartei/Datum/Rechnungsnummer stehen dann in
+`duplicates_found`. Schlägt der Upload per Timeout fehl, wird nicht automatisch wiederholt - vor einem neuen Versuch
+per `list_receipts` prüfen, ob der Beleg trotzdem angelegt wurde.
 
 ## Woher kommt die Aufteilung 70 % / 30 %?
 

@@ -52,6 +52,29 @@ macht dasselbe und lädt das Ergebnis direkt über denselben Endpoint hoch, den 
 nutzt - so muss das komplette Base64-PDF nicht zweimal durchs Modell laufen. Rechtlicher Hintergrund:
 [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md).
 
+### Original aus BuchhaltungsButler anhängen (`source_receipt_id_by_customer`)
+
+Liegt die Rechnung schon in BuchhaltungsButler, `generate_and_upload_entertainment_receipt` mit
+`source_receipt_id_by_customer` aufrufen. Der Konnektor lädt das Original serverseitig (nur im Arbeitsspeicher),
+hängt die Bewirtungsangaben als **letzte Seite** an und lädt **einen** neuen Beleg hoch (Original + Bewirtungsangaben).
+Es läuft kein Base64 durchs Modell. `bill_file` nur für Dateien nutzen, die nicht in BuchhaltungsButler liegen.
+
+| Parameter | Bedeutung |
+|---|---|
+| `source_receipt_id_by_customer` | id_by_customer des Originals. Schließt `bill_file` und `link_to_receipt_id_by_customer` aus. |
+| `include_original_hash` (Default `true`) | SHA-256 des Originals in der Fußzeile der Bewirtungsseite. |
+| `keep_original_metadata` (Default `true`) | Datum, Rechnungsnummer, Betrag, Gegenpartei, Konto, Typ des Originals für den neuen Beleg (`counterparty`/`bill_reference`/`account` überschreiben, wenn angegeben). `vat_rate` wird wie bisher aus den Beträgen berechnet. |
+
+Ablauf: validieren → Original laden → Typ prüfen (PDF/JPEG/PNG, max. 15 MB) → Betragsprüfung (Summe der
+Teilbeträge = Betrag des Originals, Toleranz 0,01 €) → zusammenführen → Prüfung (Seitenzahl, Text, eingebettete
+Dateien) → **ein** Upload → Duplikatprüfung per Belegliste. Bei jedem Fehler vor dem Upload wird nichts hochgeladen;
+ein fehlgeschlagener Upload wird nie automatisch wiederholt. Das Original wird **nie** verändert oder gelöscht -
+nach Bestätigung per `set_receipt_deleted` (wiederherstellbar), danach auf den neuen Beleg buchen.
+
+Rückgabe: `status`, `new_receipt_id_by_customer`, `original_receipt_id_by_customer`, `original_deleted` (immer
+`false`), `pages_before`/`pages_after`, `original_sha256`, `duplicates_found`, `checks`, `amounts`, `warnings`,
+`next_step_hint`. Die Fälle A (`bill_file`) und B (`link_to_receipt_id_by_customer`) funktionieren unverändert.
+
 ## Remote-Deployment (Docker)
 
 Für Clients, die keinen lokalen Prozess starten können (z. B. Claude auf dem Handy), läuft der Server

@@ -370,7 +370,16 @@ export function buildHostConfirmationLines(
 export async function renderEntertainmentReceiptCover(
   fields: EntertainmentReceiptFields,
   amounts: ComputedAmounts,
-  options: { kleinunternehmer: boolean; attachmentFollows?: boolean; confirmedAt?: Date }
+  options: {
+    kleinunternehmer: boolean;
+    attachmentFollows?: boolean;
+    // The original bill is already in the document before this page (the
+    // source_receipt_id_by_customer flow appends the page at the end).
+    attachmentPrecedes?: boolean;
+    // SHA-256 (hex) of the unchanged original bytes, printed in the footer.
+    originalSha256?: string;
+    confirmedAt?: Date;
+  }
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const page = doc.addPage(PageSizes.A4);
@@ -518,6 +527,17 @@ export async function renderEntertainmentReceiptCover(
   // it only states whether an attachment follows this page at all.
   if (options.attachmentFollows) {
     drawRight("Anlage: Originalrechnung", width - MARGIN, footerY, 8, font, GRAY);
+  } else if (options.attachmentPrecedes) {
+    drawRight("Ergänzung zur vorangehenden Originalrechnung", width - MARGIN, footerY, 8, font, GRAY);
+  }
+  if (options.originalSha256) {
+    page.drawText(`SHA-256 Originaldokument: ${options.originalSha256}`, {
+      x: MARGIN,
+      y: footerY - 11,
+      size: 6.5,
+      font,
+      color: GRAY,
+    });
   }
 
   return doc.save();

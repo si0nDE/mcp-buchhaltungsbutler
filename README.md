@@ -53,6 +53,29 @@ doesn't have to round-trip through the model twice. See
 [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md) for the legal background (German only, since
 it documents German tax law).
 
+### Appending the original from BuchhaltungsButler (`source_receipt_id_by_customer`)
+
+If the bill already exists in BuchhaltungsButler, call `generate_and_upload_entertainment_receipt` with
+`source_receipt_id_by_customer`. The connector loads the original server-side (memory only), appends the
+Bewirtungsangaben page as the **last page** and uploads **one** new receipt (original + page). No base64 passes
+through the model. Use `bill_file` only for files that are not in BuchhaltungsButler.
+
+| Parameter | Meaning |
+|---|---|
+| `source_receipt_id_by_customer` | id_by_customer of the original. Mutually exclusive with `bill_file` and `link_to_receipt_id_by_customer`. |
+| `include_original_hash` (default `true`) | SHA-256 of the original in the page footer. |
+| `keep_original_metadata` (default `true`) | Reuse the original's date, invoice number, amount, counterparty, account and type (`counterparty`/`bill_reference`/`account` override if given). `vat_rate` is still derived from the amounts. |
+
+Flow: validate → load original → check type (PDF/JPEG/PNG, max 15 MB) → amount check (parts sum = original's
+amount, tolerance 0.01 EUR) → merge → dry check (page count, text, embedded files) → **one** upload → duplicate
+check. Any failure before the upload uploads nothing; a failed upload is never retried automatically. The original
+is **never** modified or deleted - after the user confirms, remove it with `set_receipt_deleted` (restorable), then
+book on the new receipt.
+
+Returns: `status`, `new_receipt_id_by_customer`, `original_receipt_id_by_customer`, `original_deleted` (always
+`false`), `pages_before`/`pages_after`, `original_sha256`, `duplicates_found`, `checks`, `amounts`, `warnings`,
+`next_step_hint`. Fall A (`bill_file`) and Fall B (`link_to_receipt_id_by_customer`) behave as before.
+
 ## Remote deployment (Docker)
 
 For clients that can't launch a local process (e.g. Claude on mobile), the server also runs as a

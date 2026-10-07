@@ -8,7 +8,14 @@ import {
   type Participant,
   renderEntertainmentReceiptCover,
 } from "./entertainment-receipt-pdf.js";
-import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+import {
+  appendCoverToOriginal,
+  classifyOriginal,
+  MAX_ORIGINAL_BYTES,
+  runDryChecks,
+  sha256Hex,
+} from "./entertainment-receipt-append.js";
+import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type CallToolResult, type ToolDef } from "./types.js";
 
 // Converts an ISO date ("2026-09-17") to the German display format used on
 // the generated page ("17.09.2026"). Pure string slicing, not a Date object -
@@ -227,7 +234,9 @@ const generateShape = {
     .string()
     .optional()
     .describe(
-      "Original-Rechnung, base64. Vorhanden -> gemergtes PDF (Fall A: Rechnung noch nicht in BuchhaltungsButler). " +
+      "NUR für Dateien, die NICHT in BuchhaltungsButler liegen (bei vorhandenem Beleg stattdessen " +
+        "source_receipt_id_by_customer verwenden - große Base64-Strings kann das Modell nicht fehlerfrei durchreichen). " +
+        "Original-Rechnung, base64. Vorhanden -> gemergtes PDF (Fall A: Rechnung noch nicht in BuchhaltungsButler). " +
         "Fehlt -> einseitiges PDF nur mit den Bewirtungsangaben, zum Hochladen mit " +
         "link_to_receipt_id_by_customer (Fall B: Rechnung existiert schon)."
     ),
@@ -237,19 +246,282 @@ const generateShape = {
 const uploadShape = {
   ...generateShape,
   date: z.string().describe('Bewirtungsdatum im ISO-Format "YYYY-MM-DD", z.B. 2026-09-17 (wird an BuchhaltungsButler weitergereicht und für die Anzeige auf der Seite ins deutsche Format umgewandelt).'),
-  counterparty: z.string().min(1).describe("Die bewirtende Gaststätte/das Restaurant, wie bei BuchhaltungsButler als Gegenpartei hinterlegt werden soll."),
+  counterparty: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Die bewirtende Gaststätte/das Restaurant, wie bei BuchhaltungsButler als Gegenpartei hinterlegt werden soll. " +
+        "Pflicht außer bei source_receipt_id_by_customer (dort wird die Gegenpartei des Originalbelegs übernommen, " +
+        "sofern hier nichts anderes angegeben ist)."
+    ),
+  source_receipt_id_by_customer: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "EMPFOHLEN, wann immer der Original-Beleg schon in BuchhaltungsButler liegt: id_by_customer des Originals. " +
+        "Der Konnektor lädt das Original serverseitig, hängt die Bewirtungsangaben als letzte Seite an und lädt " +
+        "EINEN neuen Beleg hoch (Original + Bewirtungsangaben). Kein Base64 durch den Modell-Kontext. Das Original " +
+        "bleibt unverändert und wird NICHT gelöscht - erst nach Rückfrage beim Nutzer per set_receipt_deleted. " +
+        "Nicht kombinierbar mit bill_file oder link_to_receipt_id_by_customer."
+    ),
+  include_original_hash: z
+    .boolean()
+    .default(true)
+    .describe("Nur mit source_receipt_id_by_customer: SHA-256 des Originaldokuments in die Fußzeile der Bewirtungsseite."),
+  keep_original_metadata: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Nur mit source_receipt_id_by_customer: Datum, Rechnungsnummer, Betrag, Gegenpartei und Konto des " +
+        "Originalbelegs für den neuen Beleg übernehmen (Gegenpartei/Rechnungsnummer/Konto nur, wenn nicht " +
+        "ausdrücklich angegeben). false = Werte aus den Tool-Parametern."
+    ),
   link_to_receipt_id_by_customer: z
     .number()
     .int()
     .optional()
     .describe(
       "id_by_customer der bereits in BuchhaltungsButler vorhandenen Original-Rechnung. Pflicht, wenn kein " +
-        "bill_file mitgegeben wird (Fall B) - sonst würde die reine Bewirtungsangaben-Seite als unverknüpfter " +
-        "eigener Beleg hochgeladen."
+        "bill_file und kein source_receipt_id_by_customer mitgegeben wird (Fall B) - sonst würde die reine " +
+        "Bewirtungsangaben-Seite als unverknüpfter eigener Beleg hochgeladen. Legt in BuchhaltungsButler einen " +
+        "ZWEITEN Beleg an - bevorzugt source_receipt_id_by_customer verwenden."
     ),
   account: z.number().int().optional().describe("Zahlungskonto-Kontonummer, falls der Beleg direkt zugeordnet werden soll."),
   creditor_debtor: z.number().int().optional().describe("Kreditor-Kontonummer, falls der Beleg direkt zugeordnet werden soll."),
 };
+
+const AMOUNT_TOLERANCE = 0.01;
+
+const toId = (value: unknown): string | number | undefined => {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return typeof value === "string" ? value : undefined;
+};
+
+const formatDe = (n: number) => n.toFixed(2).replace(".", ",");
+
+type SourceArgs = EntertainmentReceiptDocumentArgs & {
+  source_receipt_id_by_customer: number;
+  counterparty?: string;
+  link_to_receipt_id_by_customer?: number;
+  account?: number;
+  creditor_debtor?: number;
+  include_original_hash?: boolean;
+  keep_original_metadata?: boolean;
+};
+
+interface OriginalReceiptData {
+  filename?: string;
+  date?: string;
+  counterparty?: string;
+  invoicenumber?: string;
+  amount?: string | number;
+  type?: string;
+  account?: string | number;
+  file_content?: string;
+  [key: string]: unknown;
+}
+
+// Server-side variant: the original never passes through the model. Order is
+// load -> validate -> merge -> dry-check -> upload (exactly once, never
+// retried) -> duplicate check. Everything before the upload throws without
+// side effects; the original receipt is never modified or deleted. Only IDs,
+// page counts and check results are returned - no document content.
+async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Promise<CallToolResult> {
+  const sourceId = args.source_receipt_id_by_customer;
+  if (args.bill_file !== undefined || args.bill_file_type !== undefined) {
+    throw new Error(
+      "source_receipt_id_by_customer und bill_file schließen sich aus - das Original wird serverseitig aus " +
+        "BuchhaltungsButler geladen. bill_file nur für Dateien nutzen, die nicht in BuchhaltungsButler liegen."
+    );
+  }
+  if (args.link_to_receipt_id_by_customer !== undefined) {
+    throw new Error(
+      "source_receipt_id_by_customer und link_to_receipt_id_by_customer schließen sich aus - sonst entstünde " +
+        "wieder ein verknüpfter Zweitbeleg statt eines Belegs."
+    );
+  }
+  assertOccasionIsConcrete(args.occasion);
+  const keep = args.keep_original_metadata ?? true;
+  const warnings: string[] = [];
+
+  let original: OriginalReceiptData;
+  try {
+    const result = await client.call<{ data?: OriginalReceiptData }>(
+      "receiptsGetIdByCustomer",
+      { get_file: true },
+      { idSuffix: sourceId }
+    );
+    if (!result.data) throw new Error("leere Antwort");
+    original = result.data;
+  } catch (error) {
+    throw new Error(
+      `Original-Beleg ${sourceId} konnte nicht geladen werden (${error instanceof Error ? error.message : String(error)}). ` +
+        "Es wurde nichts hochgeladen. id_by_customer per list_receipts prüfen."
+    );
+  }
+  if (!original.file_content) {
+    throw new Error(`Original-Beleg ${sourceId} hat keine Datei - es wurde nichts hochgeladen.`);
+  }
+  if ((original.file_content.length * 3) / 4 > MAX_ORIGINAL_BYTES) {
+    throw new Error(
+      `Original-Beleg ${sourceId} ist größer als das Limit von 15 MB - es wurde nichts hochgeladen. ` +
+        "Datei verkleinern oder die Bewirtungsangaben per Fall B (link_to_receipt_id_by_customer) hochladen."
+    );
+  }
+  const originalBytes = new Uint8Array(Buffer.from(original.file_content, "base64"));
+  const kind = classifyOriginal(originalBytes);
+  const originalSha256 = sha256Hex(originalBytes);
+
+  const kleinunternehmer = args.kleinunternehmer ?? false;
+  const amounts = computeAmounts({
+    foodNet: args.food_net ?? 0,
+    foodVat: args.food_vat ?? 0,
+    drinksNet: args.drinks_net ?? 0,
+    drinksVat: args.drinks_vat ?? 0,
+    tip: args.tip ?? 0,
+    kleinunternehmer,
+  });
+  const originalAmount = original.amount === undefined || original.amount === "" ? NaN : Number(original.amount);
+  if (Number.isFinite(originalAmount)) {
+    const diff = Math.round((amounts.grossTotal - originalAmount) * 100) / 100;
+    if (Math.abs(diff) > AMOUNT_TOLERANCE + 1e-9) {
+      throw new Error(
+        `Betragsabweichung: Summe der Teilbeträge ${formatDe(amounts.grossTotal)} € ≠ Betrag des Originalbelegs ` +
+          `${formatDe(originalAmount)} € (Differenz ${formatDe(diff)} €). Es wurde nichts hochgeladen. ` +
+          "Beträge (Speisen/Getränke/Trinkgeld) mit der Rechnung abgleichen."
+      );
+    }
+  } else {
+    warnings.push("Der Originalbeleg hat keinen Betrag - Betragsprüfung übersprungen, Betrag aus den Teilbeträgen verwendet.");
+  }
+
+  const billReference = args.bill_reference ?? (keep ? original.invoicenumber || undefined : undefined);
+  const cover = await renderEntertainmentReceiptCover(
+    {
+      date: formatGermanDate(args.date),
+      location: args.location,
+      occasion: args.occasion,
+      participants: args.participants,
+      hostName: args.host_name,
+      hostRole: args.host_role,
+      companyName: args.company_name,
+      companyAddress: args.company_address,
+      receiptNumber: args.receipt_number,
+      billReference,
+      foodNet: args.food_net ?? 0,
+      foodVat: args.food_vat ?? 0,
+      drinksNet: args.drinks_net ?? 0,
+      drinksVat: args.drinks_vat ?? 0,
+      tip: args.tip ?? 0,
+    },
+    amounts,
+    {
+      kleinunternehmer,
+      attachmentPrecedes: true,
+      originalSha256: (args.include_original_hash ?? true) ? originalSha256 : undefined,
+    }
+  );
+
+  const merged = await appendCoverToOriginal(originalBytes, kind, cover);
+  const checks = await runDryChecks(originalBytes, kind, merged);
+  const failed = Object.entries(checks).filter(([, v]) => v === false).map(([k]) => k);
+  if (failed.length > 0) {
+    throw new Error(`Prüfung des zusammengeführten Belegs fehlgeschlagen (${failed.join(", ")}) - es wurde nichts hochgeladen.`);
+  }
+
+  const counterparty = args.counterparty ?? (keep ? original.counterparty : undefined);
+  if (!counterparty) {
+    throw new Error("Keine Gegenpartei: weder counterparty angegeben noch im Originalbeleg vorhanden - es wurde nichts hochgeladen.");
+  }
+  const originalAccount = Number(original.account);
+  const account = args.account ?? (keep && Number.isInteger(originalAccount) && originalAccount > 0 ? originalAccount : undefined);
+  const baseName = original.filename ? String(original.filename).replace(/\.[A-Za-z0-9]{1,5}$/, "") : `Beleg_${sourceId}`;
+  const uploadParams = {
+    file: Buffer.from(merged.pdfBytes).toString("base64"),
+    type: keep && original.type ? original.type : "invoice inbound",
+    file_name: `${baseName}_mit_Bewirtungsangaben.pdf`,
+    account,
+    creditor_debtor: args.creditor_debtor,
+    counterparty,
+    invoice_number: billReference,
+    date: keep && original.date ? original.date : args.date,
+    amount: keep && Number.isFinite(originalAmount) ? originalAmount : amounts.grossTotal,
+    currency: "EUR",
+    vat_rate: deriveVatRate({
+      foodNet: args.food_net ?? 0,
+      foodVat: args.food_vat ?? 0,
+      drinksNet: args.drinks_net ?? 0,
+      drinksVat: args.drinks_vat ?? 0,
+    }),
+  };
+
+  let newId: string | number | undefined;
+  try {
+    const result = await client.call<{ data?: { id_by_customer?: string | number } }>("receiptsUpload", uploadParams);
+    newId = toId(result.data?.id_by_customer);
+  } catch (error) {
+    throw new Error(
+      `Upload fehlgeschlagen (${error instanceof Error ? error.message : String(error)}). Nicht automatisch ` +
+        "wiederholt (Duplikatgefahr: der Beleg kann trotzdem angelegt worden sein). Vor einem erneuten Versuch per " +
+        `list_receipts (Gegenpartei/Datum) prüfen. Original ${sourceId} ist unverändert.`
+    );
+  }
+
+  const duplicates: Array<Record<string, unknown>> = [];
+  try {
+    const direction = String(uploadParams.type).includes("outbound") ? "outbound" : "inbound";
+    const list = await client.call<{ data?: Array<Record<string, unknown>> }>("receiptsGet", {
+      list_direction: direction,
+      date_from: uploadParams.date,
+      date_to: uploadParams.date,
+      limit: 500,
+      offset: 0,
+    });
+    const wantedParty = counterparty.trim().toLowerCase();
+    for (const row of list.data ?? []) {
+      const rowId = toId(row.id_by_customer);
+      if (rowId === sourceId || (newId !== undefined && rowId === newId)) continue;
+      if (row.deleted === "1" || row.deleted === 1 || row.deleted === true) continue;
+      if (typeof row.counterparty !== "string" || row.counterparty.trim().toLowerCase() !== wantedParty) continue;
+      if (billReference && row.invoicenumber && String(row.invoicenumber) !== billReference) continue;
+      duplicates.push({
+        id_by_customer: row.id_by_customer,
+        date: row.date,
+        counterparty: row.counterparty,
+        amount: row.amount,
+        invoicenumber: row.invoicenumber,
+      });
+    }
+  } catch {
+    warnings.push(
+      "Duplikatprüfung fehlgeschlagen - der Upload war erfolgreich. Bitte per list_receipts (Gegenpartei/Datum) manuell auf Duplikate prüfen."
+    );
+  }
+
+  return ok({
+    status: "ok",
+    new_receipt_id_by_customer: newId,
+    original_receipt_id_by_customer: sourceId,
+    original_deleted: false,
+    pages_before: merged.pagesBefore,
+    pages_after: merged.pagesAfter,
+    original_sha256: originalSha256,
+    merge_method: "full_rewrite (pdf-lib; Seiteninhalt unverändert, Dateibytes neu geschrieben)",
+    duplicates_found: duplicates,
+    checks,
+    amounts: {
+      gross_total: amounts.grossTotal,
+      vat_total: amounts.vatTotal,
+      deductible: amounts.deductible,
+      non_deductible: amounts.nonDeductible,
+    },
+    warnings,
+    next_step_hint: `Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf ${newId} buchen.`,
+  });
+}
 
 export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, ToolDef] {
   const generateEntertainmentReceipt = defineTool({
@@ -282,7 +554,12 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
     description:
       "Generate the 'Bewirtungsangaben' page (see generate_entertainment_receipt) and upload it to " +
       "BuchhaltungsButler in one call, instead of round-tripping the full base64 PDF through the model via a " +
-      "separate upload_receipt call. Always uploads as type 'invoice inbound'. Returns the new receipt's " +
+      "separate upload_receipt call. If the original receipt already exists in BuchhaltungsButler, ALWAYS pass " +
+      "source_receipt_id_by_customer: the connector loads the original server-side, appends the page as the last " +
+      "page and uploads ONE new receipt (original + page); the original is never changed or deleted - after the " +
+      "user confirms, remove it with set_receipt_deleted (restorable) and book on the new receipt. Use bill_file " +
+      "only for files that are NOT in BuchhaltungsButler; link_to_receipt_id_by_customer (Fall B) creates a second " +
+      "receipt and is only a fallback. Returns the new receipt's " +
       "id_by_customer, not the PDF itself. BuchhaltungsButler does not deduplicate by invoice number - if " +
       "this is a re-upload (e.g. a previous send failed), check list_receipts for an existing duplicate " +
       "first and remove it with set_receipt_deleted (see docs/bewirtungsbeleg-faq.md).",
@@ -290,6 +567,12 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
     async handler(args) {
+      if (args.source_receipt_id_by_customer !== undefined) {
+        return uploadWithSourceReceipt(client, { ...args, source_receipt_id_by_customer: args.source_receipt_id_by_customer });
+      }
+      if (args.counterparty === undefined) {
+        throw new Error("counterparty is required unless source_receipt_id_by_customer is given.");
+      }
       if (args.bill_file === undefined && args.link_to_receipt_id_by_customer === undefined) {
         throw new Error(
           "link_to_receipt_id_by_customer is required when no bill_file is given (Fall B) - otherwise the " +
