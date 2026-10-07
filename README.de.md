@@ -8,7 +8,7 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 ## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-- **32 Tools decken alle 48 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **44 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
 - **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
 - **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
 - **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
@@ -111,9 +111,21 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 | Buchungskonten | `list_posting_accounts`, `manage_posting_account` |
 | Belege | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions` |
 | Transaktionen | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
-| Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
+| Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_einvoice` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
+
+## Falsche Buchungen korrigieren (`cancel_posting`)
+
+BuchhaltungsButler hat keinen echten Lösch-Endpunkt für Buchungen; `unconfirm` entfernt Buchungen, die **nicht festgeschrieben** sind.
+`cancel_posting` kapselt das mit Sicherheitsgeländer — Details in [docs/buchungen-korrigieren-faq.md](docs/buchungen-korrigieren-faq.md):
+
+1. **Erst Vorschau** (`confirm: false`, Standard): zeigt die betroffenen Buchungen (Konten, Betrag, `fixed`, Beleg/Zahlung). Es wird nichts geändert.
+2. **Ausführen** (`confirm: true`): nur, wenn nichts festgeschrieben ist. Festgeschriebene Buchungen werden abgelehnt, nie automatisch entfestgeschrieben. Danach werden die Buchungen erneut abgefragt und `gelöscht: true/false` gemeldet.
+3. `type=transaction`/`receipt` entfernt **alle** Buchungen dieser Zahlung bzw. dieses Belegs, nur `type=free` eine einzelne Buchung.
+4. Empfohlene Buchungsreihenfolge: Beleg prüfen → Beleg buchen → Zahlung zuweisen → Zahlung buchen.
+
+Nicht für Zeiträume, die bereits in einer USt-Voranmeldung oder einem Jahresabschluss verarbeitet sind; festgeschriebene Buchungen werden per Stornobuchung korrigiert (GoBD).
 
 ## Architektur
 
@@ -137,7 +149,7 @@ Desktop) oder als Streamable-HTTP-Dienst hinter eigenem Reverse-Proxy und Bearer
 
 ## Status
 
-Alle 48 BuchhaltungsButler-Endpoints sind über 32 dieser Tools abgedeckt; `generate_entertainment_receipt` ist ein client-seitiger PDF-Generator ohne eigene BuchhaltungsButler-API-Aufrufe, während `generate_and_upload_entertainment_receipt` denselben `receiptsUpload`-Endpoint wie `upload_receipt` mitnutzt statt einen 49. hinzuzufügen (siehe [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Gegen einen echten Account verifiziert (sowohl ein Lese-Aufruf als auch ein Create+Delete-Roundtrip).
+Alle 58 BuchhaltungsButler-Endpoints sind über 40 dieser Tools abgedeckt (`get_booking_guide` und `get_ustva_position` machen keinen API-Aufruf, `check_month_end` und `calculate_account_balance` kombinieren nur Lese-Aufrufe); `generate_entertainment_receipt` ist ein client-seitiger PDF-Generator ohne eigene BuchhaltungsButler-API-Aufrufe, während `generate_and_upload_entertainment_receipt` denselben `receiptsUpload`-Endpoint wie `upload_receipt` mitnutzt statt einen 59. hinzuzufügen (siehe [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Gegen einen echten Account verifiziert (sowohl ein Lese-Aufruf als auch ein Create+Delete-Roundtrip). Die Endpoints aus dem Spec-Update vom Oktober 2026 (`/postings/cancel`, Berichte, `transactions/delete`, `accounts/update|delete`, `invoice_correction`, OSS-Felder) sind nur per Unit-Tests abgedeckt und noch nicht live verifiziert.
 
 ## Entwicklung
 

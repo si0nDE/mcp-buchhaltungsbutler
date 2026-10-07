@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **32 tools covering all 48 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **44 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.
@@ -106,16 +106,37 @@ Streamable HTTP service instead of stdio, container-ready.
 
 | Category | Tools |
 |---|---|
-| Accounts | `list_accounts`, `create_account` |
+| Accounts | `list_accounts`, `create_account`, `manage_account` |
 | Comments | `add_comment` |
 | Cost Locations | `list_cost_locations`, `manage_cost_location` |
 | Contacts (Debtors/Creditors) | `list_contacts`, `create_contacts`, `update_contact` |
 | Posting Accounts | `list_posting_accounts`, `manage_posting_account` |
 | Receipts | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions` |
-| Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
-| Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
-| Invoices | `create_invoice`, `create_einvoice` |
+| Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts`, `delete_transaction` |
+| Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
+| Invoices | `create_invoice`, `create_einvoice`, `create_invoice_correction` |
+| Month-end | `check_month_end` (read-only closing checks), `calculate_account_balance` |
+| USt-VA | `get_ustva_position` (which VAT-return field an account lands in) |
+| Booking guide | `get_booking_guide` (documented BHB special cases: Skonto, Geldtransit, Auslagen, RAP, OSS, foreign currency, ...) |
+| Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
+
+## Correcting wrong postings (`cancel_posting`)
+
+`/postings/cancel` deletes postings that are **not fixed** and cancels **fixed** ones with a reversal posting.
+`cancel_posting` wraps it per posting with guard rails — see [docs/buchungen-korrigieren-faq.md](docs/buchungen-korrigieren-faq.md):
+
+1. **Preview first** (`confirm: false`, default): lists the affected postings (accounts, amount, `fixed`, receipt/transaction). Nothing is changed.
+2. **Execute** (`confirm: true`): not fixed postings are deleted. Fixed postings are only reversed when their ids are passed in `reverse_posting_ids` (taken from the preview, approved by the user). Afterwards the postings are read again; `gelöscht: true/false` and the new reversal postings (`neu_angelegt`) are reported.
+3. `type=transaction`/`receipt` removes **all** postings of that transaction/receipt, only `type=free` a single posting.
+4. Recommended booking order: check receipt → book receipt → assign payment → book payment.
+
+Not for periods already covered by a VAT pre-return or annual accounts without the Steuerberater.
+
+## BuchhaltungsButler logic
+
+The server sends BHB's bookkeeping rules (booking order, Ist/Soll, Leistungsdatum, tax codes, opening balances) as MCP
+instructions and in the tool descriptions, and `get_booking_guide` returns the documented rule, accounts and example for a special case on demand; see [docs/bhb-systematik.md](docs/bhb-systematik.md).
 
 ## Architecture
 
@@ -139,7 +160,7 @@ for clients that need a network-reachable server.
 
 ## Status
 
-All 48 BuchhaltungsButler endpoints are covered by 32 of these tools; `generate_entertainment_receipt` is a client-side PDF generator that makes no BuchhaltungsButler API calls of its own, while `generate_and_upload_entertainment_receipt` reuses the same `receiptsUpload` endpoint `upload_receipt` already covers rather than adding a 49th one (see [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Verified against a live account (both a read call and a create+delete round trip).
+All 58 BuchhaltungsButler endpoints are covered by 40 of these tools (`get_booking_guide` and `get_ustva_position` make no API call, `check_month_end` and `calculate_account_balance` only combine read calls); `generate_entertainment_receipt` is a client-side PDF generator that makes no BuchhaltungsButler API calls of its own, while `generate_and_upload_entertainment_receipt` reuses the same `receiptsUpload` endpoint `upload_receipt` already covers rather than adding a 59th one (see [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md)). Verified against a live account (both a read call and a create+delete round trip). The endpoints added in the October 2026 spec update (`/postings/cancel`, reports, `transactions/delete`, `accounts/update|delete`, `invoice_correction`, OSS fields) are covered by unit tests only and not yet verified live.
 
 ## Development
 

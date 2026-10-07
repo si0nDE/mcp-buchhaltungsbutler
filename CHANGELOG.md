@@ -1,0 +1,50 @@
+# Changelog
+
+## Unreleased
+
+- Neu: Auswertung von 135 Artikeln der Kategorien Fehlerbehebung, Administratives und Funktionen & Einstellungen (siehe
+  [docs/bhb-systematik.md](docs/bhb-systematik.md)). Neue Tools: `get_ustva_position` (USt-VA-Kennziffern, 95 Konten maschinell aus dem BHB-Artikel) und
+  `calculate_account_balance` ("Kontostand berechnen", Abgleich mit dem Kontoauszug). Neue Vorab-Prüfungen: `create_transactions` lehnt 0,00-€-Zahlungen und
+  Verwendungszwecke über 500 Zeichen ab; `manage_posting_account` ergänzt abgelehnte Nummern um den Hinweis auf gesperrte Kontonummern; `list_receipts` hat
+  die Filter `invoicenumber` und `due_date` (Duplikatprüfung). Beschreibungen: Debitor/Kreditor-Ausgleich ohne Steuer und keine Doppelerfassung, Upload-Regeln
+  und Kontingent, Matching-Regeln und Zahlungsreferenz, Auswertungen nur mit bestätigten Buchungen, revisionssichere Konten, Kostenstellen, E-Rechnung.
+  `get_booking_guide` um 13 Themen erweitert (u. a. festgeschriebene_loeschen, belege_upload_matching, debitoren_kreditoren_logik, ust_va_zm, konten_einrichtung);
+  Kennziffer-Hinweis im Thema eu_neufahrzeug korrigiert. 44 Tools.
+- Neu: `get_booking_guide` Thema `anlagen_browser` - Übergabe des Teams zum Erfassen/Übernehmen von Anlagevermögen in der BHB-Weboberfläche (kein
+  API-Weg): fachliche Regeln (Übernahmebetrag, volle Nutzungsdauer in Monaten, Erinnerungswert), Dialogfelder, Klick-Ablauf mit den bekannten
+  Stolpersteinen, Verifikation, Grenzen. Die Anlagen-Warnung, `list_posting_accounts`, die Server-Instruktionen und das Thema `abschreibung`
+  verweisen darauf. Der Eintrag ist als Team-Erfahrung (nicht als BHB-Artikel) gekennzeichnet und nur für einen Fall getestet.
+- Neu: Tool `check_month_end` (read-only) mit den Monatsabschluss-Prüfungen aus BHBs Best Practice, soweit die API sie hergibt (Duplikate,
+  Zahlungen/Belege ohne Buchung, nicht festgeschriebene Buchungen, Saldo Geldtransit/Interimskonto); der Rest wird als `nicht_pruefbar` gelistet.
+  `get_booking_guide` um sieben Verfahrensthemen aus neun Best-Practice-Artikeln erweitert (erste_schritte, wechsel_zu_bhb, monatsabschluss,
+  automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse). Feldbeschreibungen: `receipt_creates_transaction`
+  (nur Eingangsbelege), `is_disabled_in_select`, `correspondence` (Codes für Automatisierungsregeln). 42 Tools.
+- Neu: Tool `get_booking_guide` mit den buchhalterischen Sonderfällen und Kontierungstipps aus 22 BHB-Wissensdatenbank-Artikeln
+  (Abschreibung, RAP, Auslagen, Ist-Versteuerer-Debitoren, Differenzbesteuerung, Amazon, 5,5 %/10,7 %, Gutschrift verrechnen, Skonto,
+  Dreiecksgeschäft, EU-Neufahrzeug, Geldtransit, Prepaid, Lohn, MwSt-Senkung 2020, Storno/Rücklastschrift, Trinkgeld, Split/Saldierung,
+  OSS, Umsatzsteuer im Ausland, Fremdwährung, IAB). Neue Warnungen: `create_invoice` bei 5,5 %/10,7 %, `add_free_postings` bei
+  Debitor/Kreditor-Konten. Währungsfelder bei Belegen beschrieben (`create_receipts` nur USD/GBP/CHF, `upload_receipt` nur EUR).
+  Server-Instruktionen verweisen auf den Leitfaden (41 Tools). Siehe [docs/bhb-systematik.md](docs/bhb-systematik.md).
+- Spec-Update auf den Stand der Live-API-Doku (58 statt 48 Endpunkte; die lokale Spec trug dieselbe Version 1.9.1, war aber älter).
+  Neue Tools: `create_report`/`get_report`/`get_account_ledger` (BWA, Summen- und Saldenliste, Kontenblatt; `base` für
+  Leistungsdatum), `delete_transaction`, `manage_account` (update/delete), `create_invoice_correction`. Neue Filter
+  `date_since_last_modified` bei `list_receipts`/`list_transactions`. OSS: sechs `vat_oss_*`-Codes mit `oss_*`-Feldern und Vorab-Prüfung.
+  Hinweis: Das bedeutet 40 statt 34 Tools; die neuen Endpunkte sind nur per Unit-Tests abgedeckt, nicht live verifiziert.
+- Geändert: `cancel_posting` nutzt jetzt `/postings/cancel` statt `unconfirm`. Festgeschriebene Buchungen werden nicht mehr
+  abgelehnt, sondern per Gegenbuchung storniert – aber nur für IDs, die der Nutzer in `reverse_posting_ids` freigibt. Neu in
+  der Antwort: `neu_angelegt`. Ein Fehler mitten im Lauf nennt erledigte und offene Buchungen. Siehe
+  [docs/buchungen-korrigieren-faq.md](docs/buchungen-korrigieren-faq.md).
+- Anlagenverwaltung: Der Konnektor weist darauf hin, dass es sie nur in der BHB-Oberfläche gibt (keine API). Buchungen auf
+  Konten 0001–0599 liefern eine Warnung (kein Anlagegut, keine automatische AfA, keine manuelle Doppelabschreibung);
+  „depreciation" ist kein Beispiel mehr für `add_free_postings`. Siehe [docs/bhb-systematik.md](docs/bhb-systematik.md).
+- BHB-Systematik (siehe [docs/bhb-systematik.md](docs/bhb-systematik.md)): Server-Instruktionen mit den Kernregeln;
+  `vat`-Beschreibung erklärt alle Steuerschlüssel (ausländische USt, i.g.E. nur Waren, §13b/Automatikkonten,
+  aufzuteilende Vorsteuer, 2020-Sätze); `create_receipts`/`upload_receipt` lehnen `date_delivery` nach dem Belegdatum
+  vor dem Senden ab; `create_invoice`/`create_einvoice` warnen, wenn `date_of_supply` ignoriert oder nicht als
+  Leistungsdatum übernommen wird; `add_free_postings`/`create_transactions` beschreiben Anfangsbestände, USt/VSt-Saldovortrag
+  und Gewinn-/Verlustvortrag; `confirm_payment` grenzt sich gegen EÜR-Belege ohne Debitor/Kreditor und Skonto/Sammelzahlung ab.
+- Neu: Tool `cancel_posting` – entfernt nicht festgeschriebene Buchungen (Wrapper um `/postings/unconfirm/*`) mit
+  Vorschau (`confirm: false`), Ablehnung festgeschriebener Buchungen und Nachkontrolle (`gelöscht: true/false`).
+  Siehe [docs/buchungen-korrigieren-faq.md](docs/buchungen-korrigieren-faq.md). Bestehende Tools unverändert.
+- Neu: `list_receipts` unterstützt `include_offers`; `list_posting_accounts` unterstützt `order` (clientseitig sortiert);
+  `list_cost_locations` holt alle Seiten per `limit`/`offset` statt sich auf das API-Standardlimit zu verlassen.
