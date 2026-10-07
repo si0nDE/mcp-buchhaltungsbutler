@@ -7,6 +7,7 @@ import {
   formatEntertainmentExpenseNote,
   truncateToBytes,
 } from "./entertainment-expense.js";
+import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE, withWarnings } from "./bhb-systematik.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -38,14 +39,15 @@ const VAT_CODES = [
   "19_both_app_511",
   "19_both_app_2",
   "7_both_app",
+  "vat_oss_deli_deeu",
+  "vat_oss_deli_eueu",
+  "vat_oss_serv_deeu",
+  "vat_oss_serv_eueu",
+  "vat_oss_deli_eude",
+  "vat_oss_deli_eude_19",
 ] as const;
 
-const vatShape = z
-  .enum(VAT_CODES)
-  .describe(
-    "VAT code, not a percentage. Common: 0_none (keine USt.), 19_vat (19% USt.), 7_vat (7% USt.), " +
-      "19_pre/7_pre (Vorsteuer). See BuchhaltungsButler API docs for the §13b/i.g.E. reverse-charge codes."
-  );
+const vatShape = z.enum(VAT_CODES).describe(VAT_CODE_GUIDE);
 
 const travelerFieldsShape = {
   traveler_name: z.string().optional(),
@@ -67,6 +69,18 @@ const entertainmentFieldsShape = {
     ),
 };
 
+const ossFieldsShape = {
+  oss_origin_country: z.string().optional().describe("OSS country of origin (ISO alpha-2). Only for vat_oss_* codes."),
+  oss_destination_country: z
+    .string()
+    .optional()
+    .describe("OSS country of destination (ISO alpha-2, EU, differs from origin). Only for vat_oss_* codes."),
+  oss_vat_rate: z
+    .string()
+    .optional()
+    .describe('Rate of the destination country on the delivery date, e.g. "20.00". Not needed for vat_oss_deli_eude_19.'),
+};
+
 const splitShape = z.object({
   postingaccount: z.number().int(),
   postingtext: z.string(),
@@ -74,6 +88,7 @@ const splitShape = z.object({
   amount: z.string(),
   cost_location: z.string().optional(),
   cost_location_two: z.string().optional(),
+  ...ossFieldsShape,
 });
 
 type Split = z.infer<typeof splitShape>;
@@ -85,7 +100,12 @@ function flattenSplits(splits: Split[]): {
   amounts: string[];
   cost_locations?: string[];
   cost_locations_two?: string[];
+  oss_origin_countries?: Array<string | null>;
+  oss_destination_countries?: Array<string | null>;
+  oss_vat_rates?: Array<string | null>;
 } {
+  splits.forEach((s, i) => assertOssFields(s.vat, s, `Split ${i + 1}`));
+  const hasOss = splits.some((s) => s.oss_origin_country || s.oss_destination_country || s.oss_vat_rate);
   const hasCostLocation = splits.some((s) => s.cost_location !== undefined);
   const hasCostLocationTwo = splits.some((s) => s.cost_location_two !== undefined);
   return {
@@ -95,6 +115,13 @@ function flattenSplits(splits: Split[]): {
     amounts: splits.map((s) => s.amount),
     ...(hasCostLocation ? { cost_locations: splits.map((s) => s.cost_location ?? "") } : {}),
     ...(hasCostLocationTwo ? { cost_locations_two: splits.map((s) => s.cost_location_two ?? "") } : {}),
+    ...(hasOss
+      ? {
+          oss_origin_countries: splits.map((s) => s.oss_origin_country ?? null),
+          oss_destination_countries: splits.map((s) => s.oss_destination_country ?? null),
+          oss_vat_rates: splits.map((s) => s.oss_vat_rate ?? null),
+        }
+      : {}),
   };
 }
 
@@ -201,9 +228,72 @@ function withExtras(result: unknown, extras: { warnings: string[]; hints: Array<
   return ok(Object.keys(add).length > 0 ? { ...(result as Record<string, unknown>), ...add } : result);
 }
 
+type CancelType = "transaction" | "receipt" | "free";
+type PostingRow = Record<string, unknown>;
+
+const CANCEL_PAGE_SIZE = 1000;
+const CANCEL_MAX_PAGES = 10;
+
+const isBlank = (v: unknown) => v === undefined || v === null || String(v).trim() === "";
+
+// /postings/get cannot filter by id, so the affected postings are picked
+// client-side. A transaction/receipt is unconfirmed as a whole (all its
+// postings go at once); a free posting is matched by its own id and must not
+// belong to a receipt or transaction.
+function matchesCancelTarget(p: PostingRow, type: CancelType, id: number): boolean {
+  if (type === "transaction") return Number(p.transaction_id_by_customer) === id;
+  if (type === "receipt") return Number(p.receipt_id_by_customer) === id;
+  return (
+    Number(p.id_by_customer) === id && isBlank(p.receipt_id_by_customer) && isBlank(p.transaction_id_by_customer)
+  );
+}
+
+const isFixed = (p: PostingRow) => String(p.fixed ?? "0") !== "0";
+
+function summarizePosting(p: PostingRow) {
+  const pick = [
+    "id_by_customer",
+    "date",
+    "postingtext",
+    "amount",
+    "vat",
+    "debit_postingaccount_number",
+    "credit_postingaccount_number",
+    "fixed",
+    "receipt_id_by_customer",
+    "transaction_id_by_customer",
+    "receipts_assigned_ids_by_customer",
+    "receipts_assigned_invoice_numbers",
+    "comment",
+  ];
+  return Object.fromEntries(pick.filter((k) => k in p).map((k) => [k, p[k]]));
+}
+
+async function readRange(client: BBClient, range: { date_from: string; date_to: string }): Promise<PostingRow[]> {
+  const all: PostingRow[] = [];
+  for (let page = 0; page < CANCEL_MAX_PAGES; page++) {
+    const res = await client.call<{ data?: PostingRow[] }>("postingsGet", {
+      ...range,
+      posting_status: "all",
+      limit: CANCEL_PAGE_SIZE,
+      offset: page * CANCEL_PAGE_SIZE,
+    });
+    const rows = res.data ?? [];
+    all.push(...rows);
+    if (rows.length < CANCEL_PAGE_SIZE) break;
+  }
+  return all;
+}
+
+const CANCEL_LABEL: Record<CancelType, string> = {
+  transaction: "Zahlung (Transaktion)",
+  receipt: "Beleg",
+  free: "freie Buchung",
+};
+
 export function createPostingsTools(
   client: BBClient
-): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
+): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
   const listShape = {
     date_from: z.string(),
     date_to: z.string(),
@@ -262,8 +352,13 @@ export function createPostingsTools(
     description:
       "Book one or more receipts onto posting accounts in a single batch call. Use this when the " +
       "posting is backed by a receipt/invoice document; for a bank transaction use " +
-      "add_transaction_postings, and for entries with no receipt or transaction (e.g. depreciation, " +
-      "opening balances) use add_free_postings. Booking onto a travel-expense account (Reisekosten " +
+      "add_transaction_postings, and for entries with no receipt or transaction (e.g. opening balances) use " +
+      "add_free_postings (not for depreciation of Anlagegüter - see add_free_postings). A receipt's date_delivery (abweichendes Leistungsdatum) only " +
+      "takes effect when the receipt is booked on a creditor/debtor. Book the receipt BEFORE its payment. Only for bilanzierende " +
+      "Unternehmen/Soll-Versteuerer and for receipts with payment terms in a different period; a Vorsteuer for a receipt paid in " +
+      "a later period must be booked on a Kreditor at the receipt date, otherwise it can only be claimed at payment. A receipt on an " +
+      "account with receipt_creates_transaction cannot be booked on a creditor/debtor. Sammelkonten: Debitoren 10000, Kreditoren " +
+      "70000. BuchhaltungsButler refuses a second booking of the same receipt as expense and as creditor/debtor. Booking onto a travel-expense account (Reisekosten " +
       "Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires traveler_name, " +
       "traveler_role (employee or owner_manager — ask the user if unclear, never infer it from the " +
       "invoice address or payment method), and business_purpose. Booking onto a Bewirtungskosten " +
@@ -302,7 +397,10 @@ export function createPostingsTools(
         }))
       );
       const result = await client.call("postingsAddBatchReceipts", { receipts });
-      const warnings = await sendComments(client, commentJobs);
+      const warnings = [
+        ...(await sendComments(client, commentJobs)),
+        ...anlagenWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.postingaccount))),
+      ];
       return withExtras(result, { warnings, hints });
     },
   });
@@ -339,10 +437,17 @@ export function createPostingsTools(
       "the call returns a warning instead of an error (never re-book). entertainment_split_mode " +
       '"net_reclass" books only 4650/6640 with full amount and input VAT and returns ' +
       "entertainment_reclass_hints (30% of NET, to book via add_free_postings as 4654 an 4650, vat 0_none). " +
-      "Give split amounts as positive numbers; the direction follows the transaction. The connector passes " +
-      "amounts through unchanged. Observed live on one outgoing card payment: negative splits were rejected with " +
-      "BuchhaltungsButler error 27 (sum does not match the transaction amount), positive ones were accepted - " +
-      "not verified for other transaction types.",
+      "Settling a creditor/debtor receipt: book the payment against the Debitor/Kreditor account WITHOUT tax (vat 0_none) - the " +
+      "expense/revenue and its tax were booked on the receipt; with a receipt that is already booked on a creditor/debtor the payment " +
+      "can only be booked against it, not against an expense/revenue account (and vice versa). Under Ist-Versteuerung the USt is " +
+      "moved from 'nicht fällig' to 'fällig' automatically. " +
+      "Give split amounts as positive numbers; the direction follows the transaction. A NEGATIVE split reverses " +
+      "Soll/Haben and is only for Skonto (negative split on the Skonto account with the receipt's tax rate) or for " +
+      "netting a receivable against a payable; the splits must then still add up to the transaction amount. The " +
+      "connector passes amounts through unchanged. Observed live on one outgoing card payment: all-negative splits " +
+      "were rejected with BuchhaltungsButler error 27 (sum does not match the transaction amount), positive ones " +
+      "were accepted. Special cases (Skonto, Geldtransit, Storno, Trinkgeld, Rücklastschrift, 5.5%/10.7% VAT): see " +
+      "get_booking_guide.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addTransactionPostingsShape,
@@ -371,7 +476,10 @@ export function createPostingsTools(
         }))
       );
       const result = await client.call("postingsAddBatchTransactions", { transactions });
-      const warnings = await sendComments(client, commentJobs);
+      const warnings = [
+        ...(await sendComments(client, commentJobs)),
+        ...anlagenWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingaccount))),
+      ];
       return withExtras(result, { warnings, hints });
     },
   });
@@ -385,6 +493,7 @@ export function createPostingsTools(
     vat: vatShape,
     cost_location: z.string().optional(),
     cost_location_two: z.string().optional(),
+    ...ossFieldsShape,
     ...travelerFieldsShape,
   });
 
@@ -396,8 +505,24 @@ export function createPostingsTools(
     name: "add_free_postings",
     description:
       "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch " +
-      "call, e.g. depreciation or opening balances. For a receipt or bank transaction, use " +
-      "add_receipt_postings or add_transaction_postings instead. Booking onto a travel-expense account " +
+      "call, e.g. opening balances. NOT for Abschreibung of Anlagegüter: BuchhaltungsButler's Anlagenverwaltung (UI only, no API) books " +
+      "that monthly itself once the asset is captured there, so a manual AfA posting would depreciate twice; a booking on an " +
+      "Anlagenkonto (0001-0599) via API creates no asset - ask the user to capture it in the UI. For a receipt or bank transaction, use " +
+      "add_receipt_postings or add_transaction_postings instead. Year-start bookings (ask the Steuerberater " +
+      "first, they usually do these): EB-Werte of Sachkonten (Bestand, Bilanz only) are booked against 9000 " +
+      "Saldenvortrag Sachkonten, dated 31.12. of the previous year so that SuSa shows 'Saldo zum 01.01.' " +
+      "(9090 Summenvortrag for in-year totals); to correct an EB-Wert book only the difference against 9000 at " +
+      "the end of the old year. Bank/cash opening balances are NOT free postings: create a manual transaction " +
+      "(create_transactions, last day of the previous year, signed balance) and post it against 9000. Open " +
+      "creditor/debtor items are better entered as unpaid receipts - an EB-Wert booked here does not settle " +
+      "automatically when paid and triggers no USt reclassification under Ist-Versteuerung. " +
+      "Erlös/Aufwand accounts and all USt/VSt accounts start every Wirtschaftsjahr at 0: to carry a USt/VSt " +
+      "balance, sum the USt and VSt accounts from the SuSa and book it on 01.01. to 1790 (SKR03) / 3841 (SKR04) " +
+      "Umsatzsteuer Vorjahr (Erstattung = Soll, Nachzahlung = Haben); the payment is then booked against the same " +
+      "account. Before that, defer the Vorauszahlungen for Dec (and Nov with Dauerfristverlängerung) on 31.12. from " +
+      "1780/3820 to 1789/3840 and move 1789/3840 to 1790/3841 on 01.01. A Jahresüberschuss is carried manually on " +
+      "01.01.: Gewinnvortrag 9000 (Soll) an 860/2970 (Haben), Verlustvortrag 868/2978 (Soll) an 9000 (Haben). Use vat " +
+      "0_none for all of these. Booking onto a travel-expense account " +
       "(Reisekosten Arbeitnehmer/Unternehmer, SKR03 4660-4678 or SKR04 6650-6680) requires " +
       "traveler_name, traveler_role (employee or owner_manager — ask the user if unclear, never infer " +
       "it from the invoice address or payment method), and business_purpose; these are appended to " +
@@ -406,6 +531,7 @@ export function createPostingsTools(
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: addFreePostingsShape,
     async handler(args) {
+      args.free_postings.forEach((f, i) => assertOssFields(f.vat, f, `Freie Buchung ${i + 1}`));
       const free_postings = args.free_postings.map(({ traveler_name, traveler_role, business_purpose, ...rest }) => {
         const match = assertTravelExpenseFields([rest.postingaccount_debit, rest.postingaccount_credit], {
           traveler_name,
@@ -423,7 +549,12 @@ export function createPostingsTools(
         };
       });
       const result = await client.call("postingsAddBatchFree", { free_postings });
-      return ok(result);
+      return ok(
+        withWarnings(result, [
+          ...anlagenWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
+          ...personenkontoWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
+        ])
+      );
     },
   });
 
@@ -434,7 +565,10 @@ export function createPostingsTools(
 
   const unconfirmPosting = defineTool({
     name: "unconfirm_posting",
-    description: "Unconfirm a fixed posting so it can be edited again. type selects which kind of posting.",
+    description:
+      "Unconfirm a fixed posting so it can be edited again. type selects which kind of posting. This lifts the " +
+      "Festschreibung (GoBD) - to correct a fixed posting use cancel_posting, which reverses it with a reversal posting " +
+      "instead. Only if the user explicitly decides to unfix.",
     // Flips an existing posting's fixed/confirmed status — a non-additive
     // state change, same class as update_contact/manage_posting_account/
     // unassign_receipt, so destructiveHint follows them for consistency.
@@ -496,7 +630,13 @@ export function createPostingsTools(
   const confirmPayment = defineTool({
     name: "confirm_payment",
     description:
-      "Close out a receipt against a matching bank transaction: assigning a receipt to a transaction " +
+      "Close out a receipt that was booked on a creditor/debtor against a matching bank transaction (Bilanz, or " +
+      "Ist-Versteuerung with Debitoren/Kreditoren; books with vat 0_none against posting_account, which also lets " +
+      "BuchhaltungsButler move the USt under Ist-Versteuerung). Do NOT use it for receipts without a creditor/debtor " +
+      "booking (typical EÜR): there the payment itself carries the expense/revenue account and the real VAT code - " +
+      "use add_transaction_postings. Differing amounts (Skonto, payment-provider fees, Sammelzahlung) are refused " +
+      "here; book those with add_transaction_postings: Skonto = negative split on the Skonto account with the " +
+      "receipt's tax rate (see get_booking_guide skonto), receipt_id_by_customer on the settling split. Background: assigning a receipt to a transaction " +
       "(assign_receipts_to_transactions) creates no posting and leaves the creditor/debtor balance " +
       "untouched by itself — a booking against posting_account is still required to actually settle it. " +
       "This tool does both in the right order and reports which of them actually completed, so a caller " +
@@ -564,6 +704,149 @@ export function createPostingsTools(
     },
   });
 
+  const cancelPostingShape = {
+    type: z.enum(["transaction", "receipt", "free"]),
+    id_by_customer: z
+      .number()
+      .int()
+      .describe(
+        "transaction: id of the bank transaction; receipt: id of the receipt; free: id of the free posting itself."
+      ),
+    date_from: z.string().describe("YYYY-MM-DD. Start of a range that surely contains the posting's date."),
+    date_to: z.string().describe("YYYY-MM-DD. End of that range."),
+    reverse_posting_ids: z
+      .array(z.number().int())
+      .optional()
+      .describe(
+        "Ids (id_by_customer) of FIXED postings the user explicitly approved to be reversed by a reversal posting " +
+          "(Stornobuchung). Take them from the preview. Fixed postings not listed here are never touched."
+      ),
+    confirm: z
+      .boolean()
+      .default(false)
+      .describe("false/omitted: preview only, nothing is changed. true: actually cancel the postings."),
+  };
+
+  const cancelPosting = defineTool({
+    name: "cancel_posting",
+    description:
+      "Cancel wrongly created postings (e.g. before re-booking them correctly) via BuchhaltungsButler's " +
+      "/postings/cancel, called once per posting: postings that are NOT fixed are deleted (irreversible, nicht " +
+      "umkehrbar); FIXED (festgeschrieben) postings are cancelled by a new reversal posting (Stornobuchung, GoBD-" +
+      "conform) - the original stays. Always call first with confirm=false: the preview lists every posting with " +
+      "its action (löschen / stornieren) - BHB's API gives no change log, so note the data - and let the user approve " +
+      "before confirm=true. type=transaction/receipt cancels ALL postings of that transaction/receipt, type=free a " +
+      "single posting. Fixed postings are only reversed when their ids are passed in reverse_posting_ids (a reversal " +
+      "posting is itself a posting - never run this twice for the same unit and never list reversal postings). Do " +
+      "not use for periods already covered by a VAT pre-return (USt-Voranmeldung) or annual accounts without the " +
+      "Steuerberater. Afterwards the tool re-reads the postings: gelöscht true/false for the deleted ones, " +
+      "neu_angelegt lists the reversal postings that appeared. Recommended order when booking: check receipt, book " +
+      "receipt, assign payment, book payment.",
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: cancelPostingShape,
+    async handler(args) {
+      const { type, id_by_customer: id, date_from, date_to } = args;
+      const range = { date_from, date_to };
+      const label = `${CANCEL_LABEL[type]} ${id}`;
+
+      const before = await readRange(client, range);
+      const targets = before.filter((p) => matchesCancelTarget(p, type, id));
+      if (targets.length === 0) {
+        throw new Error(
+          `Buchung nicht gefunden: keine Buchungen zu ${label} im Zeitraum ${date_from} bis ${date_to}. ` +
+            "ID, type und Zeitraum prüfen (der Zeitraum muss das Buchungsdatum enthalten)."
+        );
+      }
+      const idOf = (p: PostingRow) => Number(p.id_by_customer);
+      const fixed = targets.filter(isFixed);
+      const reverseIds = new Set(args.reverse_posting_ids ?? []);
+      const plan = targets.map((p) => ({
+        ...summarizePosting(p),
+        aktion: isFixed(p) ? "stornieren (Gegenbuchung)" : "löschen",
+      }));
+      const note =
+        "Vor dem Löschen die Buchungsdaten notieren: BuchhaltungsButler liefert über die API kein Änderungsprotokoll.";
+
+      if (!args.confirm) {
+        const fixedIds = fixed.map(idOf);
+        return ok({
+          mode: "preview",
+          gelöscht: false,
+          target: label,
+          postings: plan,
+          hinweis:
+            fixed.length > 0
+              ? `${fixed.length} Buchung(en) festgeschrieben: werden per Gegenbuchung storniert (Original bleibt). ` +
+                `Dafür reverse_posting_ids=[${fixedIds.join(", ")}] mit confirm=true übergeben - nur nach Entscheidung des Nutzers. ` +
+                `Nicht festgeschriebene werden gelöscht. ${note}`
+              : `Nichts geändert. Mit confirm=true würden genau diese Buchungen gelöscht. ${note}`,
+        });
+      }
+
+      const unknown = [...reverseIds].filter((rid) => !fixed.some((p) => idOf(p) === rid));
+      if (unknown.length > 0) {
+        throw new Error(
+          `reverse_posting_ids ${unknown.join(", ")} gehören nicht zu den festgeschriebenen Buchungen von ${label}. ` +
+            "Nur IDs aus der Vorschau übergeben (keine bereits vorhandenen Stornobuchungen)."
+        );
+      }
+      const notApproved = fixed.filter((p) => !reverseIds.has(idOf(p)));
+      if (notApproved.length > 0) {
+        throw new Error(
+          `${label}: ${notApproved.length} Buchung(en) sind festgeschrieben (${notApproved.map(idOf).join(", ")}) und ` +
+            "würden per Gegenbuchung storniert. Ausdrücklich per reverse_posting_ids freigeben (nur nach Entscheidung des " +
+            "Nutzers), sonst nichts ausführen."
+        );
+      }
+
+      const done: number[] = [];
+      for (const p of targets) {
+        try {
+          await client.call("postingsCancel", { posting_id_by_customer: idOf(p) });
+          done.push(idOf(p));
+        } catch (error) {
+          throw new Error(
+            `Buchung ${idOf(p)} konnte nicht storniert werden: ${error instanceof Error ? error.message : String(error)}. ` +
+              `Bereits erledigt: ${done.length > 0 ? done.join(", ") : "keine"}; noch offen: ` +
+              `${targets.map(idOf).filter((x) => x !== idOf(p) && !done.includes(x)).join(", ") || "keine"}. ` +
+              "Nicht blind wiederholen - zuerst mit confirm=false den aktuellen Stand prüfen."
+          );
+        }
+      }
+
+      // Do not trust the API's success answer alone: read the postings again.
+      const after = await readRange(client, range);
+      const beforeIds = new Set(before.map(idOf));
+      const removable = targets.filter((p) => !isFixed(p));
+      const remaining = after.filter((p) => removable.some((r) => idOf(r) === idOf(p)));
+      const created = after.filter((p) => !beforeIds.has(idOf(p)));
+      const warnings = [
+        ...(remaining.length > 0
+          ? [
+              `API meldete Erfolg, aber ${remaining.length} Buchung(en) sind noch vorhanden. In BuchhaltungsButler prüfen; nicht blind erneut buchen.`,
+            ]
+          : []),
+        ...(fixed.length > 0 && created.length === 0
+          ? [
+              "Es wurde keine neue Buchung im Zeitraum gefunden, obwohl festgeschriebene Buchungen storniert werden sollten. " +
+                "Zeitraum erweitern oder in BuchhaltungsButler prüfen (Gegenbuchung evtl. mit anderem Datum).",
+            ]
+          : []),
+      ];
+      return ok({
+        mode: "executed",
+        gelöscht: remaining.length === 0,
+        target: label,
+        cancelled: plan,
+        ...(created.length > 0 ? { neu_angelegt: created.map(summarizePosting) } : {}),
+        ...(remaining.length > 0 ? { remaining: remaining.map(summarizePosting) } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
+        hinweis: note,
+      });
+    },
+  });
+
   return [
     listPostings,
     addReceiptPostings,
@@ -572,5 +855,6 @@ export function createPostingsTools(
     unconfirmPosting,
     assignReceiptToFreePosting,
     confirmPayment,
+    cancelPosting,
   ];
 }

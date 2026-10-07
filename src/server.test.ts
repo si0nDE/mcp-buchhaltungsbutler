@@ -17,11 +17,11 @@ function mockClient(result: unknown): BBClient {
 }
 
 describe("createServer", () => {
-  it("registers exactly 33 tools", () => {
+  it("registers exactly 34 tools", () => {
     const server = createServer(mockClient({}));
     const registeredTools = (server as unknown as { _registeredTools: Record<string, unknown> })
       ._registeredTools;
-    expect(Object.keys(registeredTools)).toHaveLength(33);
+    expect(Object.keys(registeredTools)).toHaveLength(34);
   });
 
   it("wires list_accounts through to the given client", async () => {
@@ -84,6 +84,7 @@ describe("createServer", () => {
       "manage_posting_account", // update branch overwrites existing name
       "unassign_receipt", // removes an existing assignment
       "unconfirm_posting", // flips an existing posting's fixed/confirmed status
+      "cancel_posting", // removes unfixed postings (guarded wrapper around unconfirm)
     ]) {
       expect(registeredTools[name].annotations, name).toEqual({ readOnlyHint: false, destructiveHint: true });
     }
