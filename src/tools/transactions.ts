@@ -4,6 +4,9 @@ import { trimList } from "../formatting/trim.js";
 import { assertTransactionEntry } from "./bhb-systematik.js";
 import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
+const QUERY_SWEEP_PAGE_SIZE = 500;
+const QUERY_SWEEP_MAX_PAGES = 20;
+
 const SUMMARY_FIELDS = ["id_by_customer", "to_from", "amount", "booking_date", "purpose"] as const;
 
 export function createTransactionsTools(
@@ -16,6 +19,13 @@ export function createTransactionsTools(
     date_to: z.string().optional(),
     account: z.number().int().optional(),
     to_from: z.string().optional(),
+    query: z
+      .string()
+      .optional()
+      .describe(
+        "Case-insensitive substring over to_from, purpose and payment_reference, filtered locally after sweeping all pages of the date window " +
+          "(the API filters do not match substrings). The answer states how many transactions were scanned and how many matched. Narrow date_from/date_to."
+      ),
     date_since_last_modified: z
       .string()
       .optional()
@@ -27,18 +37,48 @@ export function createTransactionsTools(
 
   const listTransactions = defineTool({
     name: "list_transactions",
-    description: "List bank/cash transactions, with optional filters.",
+    description:
+      "List bank/cash transactions, with optional filters. Without query, limit/offset apply to the API page. query searches to_from, purpose and " +
+      "payment_reference as a substring (the API filters, to_from included, are exact); the answer reports scanned/matched counts.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { full, limit, offset, ...filters } = args;
-      const result = await client.call<BBListResult>("transactionsGet", {
-        ...filters,
-        limit: limit ?? 20,
-        offset: offset ?? 0,
+      const { full, limit, offset, query, ...filters } = args;
+      if (query === undefined) {
+        const result = await client.call<BBListResult>("transactionsGet", {
+          ...filters,
+          limit: limit ?? 20,
+          offset: offset ?? 0,
+        });
+        return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+      }
+      const needle = query.toLowerCase();
+      const all: Record<string, unknown>[] = [];
+      let truncated = false;
+      for (let page = 0; page < QUERY_SWEEP_MAX_PAGES; page++) {
+        const result = await client.call<BBListResult>("transactionsGet", {
+          ...filters,
+          limit: QUERY_SWEEP_PAGE_SIZE,
+          offset: page * QUERY_SWEEP_PAGE_SIZE,
+        });
+        all.push(...result.data);
+        if (result.data.length < QUERY_SWEEP_PAGE_SIZE) break;
+        if (page === QUERY_SWEEP_MAX_PAGES - 1) truncated = true;
+      }
+      const matched = all.filter((r) =>
+        ["to_from", "purpose", "payment_reference"].some((f) => typeof r[f] === "string" && (r[f] as string).toLowerCase().includes(needle))
+      );
+      const page = matched.slice(offset ?? 0, (offset ?? 0) + (limit ?? 20));
+      const counts = { scanned: all.length, matched: matched.length, returned: page.length, truncated };
+      const response = ok(trimList(page, SUMMARY_FIELDS, full ?? false), { query_counts: counts });
+      response.content.push({
+        type: "text",
+        text:
+          `query "${query}": ${counts.scanned} transactions scanned in the date window, ${counts.matched} matched, ${counts.returned} returned` +
+          (truncated ? `. Sweep stopped after ${QUERY_SWEEP_MAX_PAGES} pages: matches may be missing, narrow date_from/date_to.` : "."),
       });
-      return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+      return response;
     },
   });
 

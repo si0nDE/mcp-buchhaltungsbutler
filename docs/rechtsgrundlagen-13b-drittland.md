@@ -32,7 +32,7 @@ Finanzamt oder ein Steuerberater. Das zugehörige Buchungsmuster steht im Thema 
 - **Kennziffern** der USt-VA für Drittland (Abs. 2 Nr. 1): aus der Erinnerung Kz 84/85 (Bemessung/Steuer) und Kz 67 (Vorsteuer), Kz 46/47 für EU-Fälle.
   Nicht aus dem BMF-Vordruck gelesen. `get_ustva_position` kennt nur „§13b 19 % USt./VSt.“ mit Kz 46 und 67.
 - **Zuordnung Oberfläche ↔ API:** die BHB-Oberfläche trennt „EU-Mitgliedstaat (§ 13b Abs. 1)“ und „Drittland (§ 13b Abs. 2 Nr. 1)“. Ob `19_both_511`
-  der Drittland-Option entspricht (so steht es in der `vat`-Beschreibung des Konnektors), der EU-Option oder beiden, ist nicht bestätigt.
+  der Drittland-Option, der EU-Option oder beiden entspricht, ist nicht bestätigt. Die `vat`-Beschreibung des Konnektors sagt deshalb nur „§13b, Zuordnung EU/Drittland unbestätigt“ (früher stand dort „= §13b Drittland“, ohne Beleg).
 - **Verwaltungsauffassung** (UStAE 13b.1, 13b.15, 3a.12): nicht gelesen.
 - **Periode:** BHB ordnet Buchungen nach Zahlungsdatum, § 13b Abs. 2 knüpft an die Rechnung. Ob BHB für § 13b nach Rechnungsdatum melden kann,
   und ob bei EÜR/Ist ein Beleg ohne Zahlung kreditorisch gebucht werden kann, ist offen (Anhaltspunkt: Thema `ust_va_zm`, Bilanzierer buchen
