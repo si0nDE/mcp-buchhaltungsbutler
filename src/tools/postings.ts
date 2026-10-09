@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { compactRows, compactShape } from "../formatting/compact.js";
 import type { BBClient } from "../bb-client/client.js";
 import {
   assertEntertainmentExpenseFields,
@@ -7,7 +8,7 @@ import {
   formatEntertainmentExpenseNote,
   truncateToBytes,
 } from "./entertainment-expense.js";
-import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE, withWarnings } from "./bhb-systematik.js";
+import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE, withBookingHints, withWarnings } from "./bhb-systematik.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -291,6 +292,97 @@ const CANCEL_LABEL: Record<CancelType, string> = {
   free: "freie Buchung",
 };
 
+type FreeSent = {
+  date: string;
+  postingtext: string;
+  amount: string;
+  postingaccount_debit: number;
+  postingaccount_credit: number;
+};
+
+async function freePostingRows(client: BBClient, date: string): Promise<PostingRow[]> {
+  const res = await client.call<{ data?: PostingRow[] }>("postingsGet", {
+    date_from: date,
+    date_to: date,
+    account: "free booking",
+    posting_status: "all",
+    limit: CANCEL_PAGE_SIZE,
+    offset: 0,
+  });
+  return res.data ?? [];
+}
+
+async function freePostingIds(client: BBClient, date: string): Promise<Set<number>> {
+  return new Set((await freePostingRows(client, date)).map((p) => Number(p.id_by_customer)));
+}
+
+const sameAmount = (a: unknown, b: unknown) => Math.abs(Number(a)) === Math.abs(Number(b));
+
+async function assignOne(
+  client: BBClient,
+  base: { index: number; receipt_id_by_customer: number },
+  receipt: number,
+  posting: number
+) {
+  try {
+    await client.call("postingsAssignReceiptToFreePosting", { receipt_id_by_customer: receipt, posting_id_by_customer: posting });
+    return { ...base, posting_id_by_customer: posting, status: "assigned" };
+  } catch (error) {
+    return {
+      ...base,
+      posting_id_by_customer: posting,
+      status: "assign_failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+// Fallback when the batch answer carries no posting id, so a new free posting is recognised by what was sent
+// (date, text, amount, both accounts) among the ids that did not exist before the call. Ambiguous or
+// missing matches are reported, never guessed: the posting exists either way and must not be booked twice.
+async function assignNewFreePostings(
+  client: BBClient,
+  wanted: Array<{ index: number; receipt: number; sent: FreeSent }>,
+  before: Map<string, Set<number>>,
+  returned: Array<{ id_by_customer?: unknown }> = []
+): Promise<Array<{ index: number; receipt_id_by_customer: number; posting_id_by_customer?: number; status: string; error?: string }>> {
+  const rowsByDate = new Map<string, PostingRow[]>();
+  const used = new Set<number>();
+  const out = [];
+  for (const w of wanted) {
+    const { date } = w.sent;
+    const base = { index: w.index, receipt_id_by_customer: w.receipt };
+    // The batch endpoint answers with the new posting's id per entry (confirmed live); the search below is only a fallback.
+    const givenId = Number(returned[w.index]?.id_by_customer);
+    if (Number.isInteger(givenId) && givenId > 0) {
+      used.add(givenId);
+      out.push(await assignOne(client, base, w.receipt, givenId));
+      continue;
+    }
+    if (!rowsByDate.has(date)) rowsByDate.set(date, await freePostingRows(client, date));
+    const known = before.get(date) ?? new Set<number>();
+    const candidates = rowsByDate
+      .get(date)!
+      .filter(
+        (p) =>
+          !known.has(Number(p.id_by_customer)) &&
+          !used.has(Number(p.id_by_customer)) &&
+          String(p.postingtext) === w.sent.postingtext &&
+          sameAmount(p.amount, w.sent.amount) &&
+          Number(p.debit_postingaccount_number) === w.sent.postingaccount_debit &&
+          Number(p.credit_postingaccount_number) === w.sent.postingaccount_credit
+      );
+    if (candidates.length === 0) {
+      out.push({ ...base, status: "posting_not_found" });
+      continue;
+    }
+    const posting = Number(candidates.sort((a, b) => Number(a.id_by_customer) - Number(b.id_by_customer))[0].id_by_customer);
+    used.add(posting);
+    out.push(await assignOne(client, base, w.receipt, posting));
+  }
+  return out;
+}
+
 export function createPostingsTools(
   client: BBClient
 ): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
@@ -316,21 +408,29 @@ export function createPostingsTools(
       .optional(),
     limit: z.number().int().max(1000).default(20),
     offset: z.number().int().default(0),
+    ...compactShape,
   };
 
   const listPostings = defineTool({
     name: "list_postings",
-    description: "List postings (Buchungen) within a required date range, with optional filters.",
+    description:
+      "List postings (Buchungen) within a required date range, with optional filters. Rows have ~40 fields; by default " +
+      "(compact) empty fields and PDF links are left out - cheap enough for checks. fields: [...] keeps only the named " +
+      "fields, include_links: true brings the PDF links back, compact: false returns the raw rows. Example: " +
+      '{"date_from":"2026-01-01","date_to":"2026-01-31","postingaccount":"4950","fields":["id_by_customer","date","amount","postingtext"]}.',
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const result = await client.call("postingsGet", {
-        ...args,
+      const { compact, include_links, fields, ...filters } = args;
+      const result = await client.call<{ data?: unknown }>("postingsGet", {
+        ...filters,
         limit: args.limit ?? 20,
         offset: args.offset ?? 0,
       });
-      return ok(result);
+      return ok(
+        result.data === undefined ? result : { ...result, data: compactRows(result.data, { compact, include_links, fields }) }
+      );
     },
   });
 
@@ -350,7 +450,10 @@ export function createPostingsTools(
   const addReceiptPostings = defineTool({
     name: "add_receipt_postings",
     description:
-      "Book one or more receipts onto posting accounts in a single batch call. Use this when the " +
+      "Book one or more receipts onto posting accounts in a single batch call. Complete example (Bilanzierer, Eingangsrechnung " +
+      'auf Kreditor): {"receipts":[{"receipt_id_by_customer":2001,"creditor":70001,"debtor":10001,"splits":[{"amount":"119.00",' +
+      '"postingaccount":4950,"postingtext":"Beispiel GmbH RE-0001","vat":"19_pre"}]}]}. ' +
+      "Use this when the " +
       "posting is backed by a receipt/invoice document; for a bank transaction use " +
       "add_transaction_postings, and for entries with no receipt or transaction (e.g. opening balances) use " +
       "add_free_postings (not for depreciation of Anlagegüter - see add_free_postings). A receipt's date_delivery (abweichendes Leistungsdatum) only " +
@@ -396,7 +499,7 @@ export function createPostingsTools(
           entertainmentMatch: entertainmentMatches[i],
         }))
       );
-      const result = await client.call("postingsAddBatchReceipts", { receipts });
+      const result = await withBookingHints(() => client.call("postingsAddBatchReceipts", { receipts }));
       const warnings = [
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.postingaccount))),
@@ -419,7 +522,12 @@ export function createPostingsTools(
   const addTransactionPostings = defineTool({
     name: "add_transaction_postings",
     description:
-      "Book one or more transactions onto posting accounts in a single batch call. Use this for a bank " +
+      "Book one or more transactions onto posting accounts in a single batch call. Complete example (Aufwand, bezahlt von " +
+      'Bank): {"transactions":[{"transaction_id_by_customer":1001,"splits":[{"amount":"119.00","postingaccount":4950,' +
+      '"postingtext":"Beispiel GmbH RE-0001 Beratung","vat":"19_pre","receipt_id_by_customer":2001}]}]} - the array is ' +
+      "always transactions[] with splits[]; vat on an Aufwandskonto is 19_pre/7_pre (Vorsteuer), on an Erlöskonto " +
+      "19_vat/7_vat, neutral 0_none. Run ONE call first, then parallelise: an error in six parallel calls costs six answers. " +
+      "Use this for a bank " +
       "transaction; for a receipt/invoice use add_receipt_postings, and for entries with no receipt or " +
       "transaction use add_free_postings. Each split may optionally set receipt_id_by_customer to assign " +
       "an existing 'open item' receipt to that specific split — omit it for splits with no receipt; the " +
@@ -475,7 +583,7 @@ export function createPostingsTools(
           entertainmentMatch: entertainmentMatches[i],
         }))
       );
-      const result = await client.call("postingsAddBatchTransactions", { transactions });
+      const result = await withBookingHints(() => client.call("postingsAddBatchTransactions", { transactions }));
       const warnings = [
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingaccount))),
@@ -493,6 +601,15 @@ export function createPostingsTools(
     vat: vatShape,
     cost_location: z.string().optional(),
     cost_location_two: z.string().optional(),
+    receipt_id_by_customer: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "Optional: assign this receipt to the new free posting right away (replaces a separate assign_receipt_to_free_posting call). " +
+          "The batch endpoint returns no posting ids, so the connector finds the new posting itself; the result lists per entry " +
+          "whether the assignment worked."
+      ),
     ...ossFieldsShape,
     ...travelerFieldsShape,
   });
@@ -505,7 +622,12 @@ export function createPostingsTools(
     name: "add_free_postings",
     description:
       "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch " +
-      "call, e.g. opening balances. NOT for Abschreibung of Anlagegüter: BuchhaltungsButler's Anlagenverwaltung (UI only, no API) books " +
+      "call, e.g. opening balances. Complete example (Plattformverkauf, Auszahlung privat, Beleg gleich zugeordnet): " +
+      '{"free_postings":[{"date":"2026-03-10","postingtext":"Plattform RE-0100 - Gutschrift (Privat)","amount":"20.00",' +
+      '"postingaccount_debit":1800,"postingaccount_credit":8400,"vat":"19_vat","receipt_id_by_customer":3001}]} - the ' +
+      "parameter is free_postings (not postings). receipt_id_by_customer is optional; with it the receipt is assigned in the " +
+      "same call and the result lists receipt_assignments per entry. A free posting with a receipt does NOT count as payment " +
+      "(amount_paid stays 0, the receipt stays 'teilausgeglichen'). NOT for Abschreibung of Anlagegüter: BuchhaltungsButler's Anlagenverwaltung (UI only, no API) books " +
       "that monthly itself once the asset is captured there, so a manual AfA posting would depreciate twice; a booking on an " +
       "Anlagenkonto (0001-0599) via API creates no asset - ask the user to capture it in the UI. For a receipt or bank transaction, use " +
       "add_receipt_postings or add_transaction_postings instead. Year-start bookings (ask the Steuerberater " +
@@ -532,28 +654,48 @@ export function createPostingsTools(
     inputSchema: addFreePostingsShape,
     async handler(args) {
       args.free_postings.forEach((f, i) => assertOssFields(f.vat, f, `Freie Buchung ${i + 1}`));
-      const free_postings = args.free_postings.map(({ traveler_name, traveler_role, business_purpose, ...rest }) => {
-        const match = assertTravelExpenseFields([rest.postingaccount_debit, rest.postingaccount_credit], {
-          traveler_name,
-          traveler_role,
-          business_purpose,
-        });
-        if (!match) return rest;
-        return {
-          ...rest,
-          postingtext: `${rest.postingtext} — ${formatTravelExpenseNote({
-            traveler_name: traveler_name!,
-            traveler_role: match.role,
-            business_purpose: business_purpose!,
-          })}`,
-        };
-      });
-      const result = await client.call("postingsAddBatchFree", { free_postings });
+      const free_postings = args.free_postings.map(
+        ({ traveler_name, traveler_role, business_purpose, receipt_id_by_customer, ...rest }) => {
+          const match = assertTravelExpenseFields([rest.postingaccount_debit, rest.postingaccount_credit], {
+            traveler_name,
+            traveler_role,
+            business_purpose,
+          });
+          if (!match) return rest;
+          return {
+            ...rest,
+            postingtext: `${rest.postingtext} — ${formatTravelExpenseNote({
+              traveler_name: traveler_name!,
+              traveler_role: match.role,
+              business_purpose: business_purpose!,
+            })}`,
+          };
+        }
+      );
+      const wanted = args.free_postings.flatMap((f, i) =>
+        f.receipt_id_by_customer === undefined ? [] : [{ index: i, receipt: f.receipt_id_by_customer, sent: free_postings[i] }]
+      );
+      const dates = [...new Set(wanted.map((w) => w.sent.date))];
+      const before = new Map<string, Set<number>>();
+      for (const date of dates) before.set(date, await freePostingIds(client, date));
+
+      const result = await withBookingHints(() => client.call("postingsAddBatchFree", { free_postings }));
+      const returned = (result as { free_postings?: Array<{ id_by_customer?: unknown }> }).free_postings ?? [];
+      const assignments = wanted.length > 0 ? await assignNewFreePostings(client, wanted, before, returned) : [];
       return ok(
-        withWarnings(result, [
-          ...anlagenWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
-          ...personenkontoWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
-        ])
+        withWarnings(
+          assignments.length > 0 ? { ...(result as Record<string, unknown>), receipt_assignments: assignments } : result,
+          [
+            ...anlagenWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
+            ...personenkontoWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
+            ...(assignments.some((a) => a.status !== "assigned")
+              ? [
+                  "Mindestens eine Buchung wurde angelegt, aber der Beleg nicht zugeordnet (siehe receipt_assignments). " +
+                    "NICHT erneut buchen; die Zuordnung per assign_receipt_to_free_posting nachholen.",
+                ]
+              : []),
+          ]
+        )
       );
     },
   });

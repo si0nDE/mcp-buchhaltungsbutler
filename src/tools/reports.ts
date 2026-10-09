@@ -1,11 +1,33 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
+import { compactRows, compactShape } from "../formatting/compact.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const BASE_GUIDE =
   "Date the postings are taken into account by: 'date' (Buchungsdatum, default) or 'date_delivery_else_date' " +
   "(Leistungsdatum where an abweichendes Leistungsdatum exists, else Buchungsdatum). Use the latter to reconcile " +
   "with the USt-Voranmeldung, which follows the Leistungsdatum.";
+
+// Check set for ledger entries (compact default): what is needed to verify a posting. The other ~15 fields of the
+// real API rows (file names, journal numbers, standard_chart, tax_key_effective, oss_*, ...) come back with
+// fields: [...] or compact: false.
+const LEDGER_CHECK_FIELDS = [
+  "id_by_customer",
+  "date",
+  "record_side",
+  "record_amount",
+  "counterRecordPostingaccountNumber",
+  "postingTextFull",
+  "vatRate",
+  "receipts_id_by_customer",
+  // Free postings with an assigned receipt carry it ONLY here (receipts_id_by_customer is null; confirmed live).
+  "receiptsAssignedFilenamesServerPlain",
+  "transactions_id_by_customer",
+  "reversed_by_id",
+  "reversal_for_id",
+  "balanceAfterAbsolute",
+  "balanceAfterSide",
+];
 
 const baseShape = z.enum(["date", "date_delivery_else_date"]).optional().describe(BASE_GUIDE);
 
@@ -86,7 +108,8 @@ export function createReportsTools(client: BBClient): [ToolDef, ToolDef, ToolDef
     name: "get_account_ledger",
     description:
       "Kontenblatt of ONE posting account for a period, built on the fly (no create_report needed; may take a while for " +
-      "an account with many postings). Take account numbers from get_report type sums. With base " +
+      "an account with many postings). Entries are compact by default (check set: id, date, side, amount, counter account, text, vat rate, receipt ids and assigned receipt file names, transaction ids, " +
+      "reversal ids, balance; fields: [...] picks other fields, compact: false returns the raw rows). Take account numbers from get_report type sums. With base " +
       "date_delivery_else_date postings follow the Leistungsdatum; the default is the Buchungsdatum.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
@@ -95,9 +118,28 @@ export function createReportsTools(client: BBClient): [ToolDef, ToolDef, ToolDef
       date_from: z.string().describe("YYYY-MM-DD"),
       date_to: z.string().describe("YYYY-MM-DD"),
       base: baseShape,
+      ...compactShape,
     },
     async handler(args) {
-      return ok(await client.call("reportsGetSumsLedger", args));
+      const { compact, include_links, fields, ...params } = args;
+      const result = await client.call<{ report_sums_postingaccount_ledger?: { postingaccountLedger?: unknown } }>(
+        "reportsGetSumsLedger",
+        params
+      );
+      const ledger = result.report_sums_postingaccount_ledger;
+      if (!ledger || !Array.isArray(ledger.postingaccountLedger)) return ok(result);
+      return ok({
+        ...result,
+        report_sums_postingaccount_ledger: {
+          ...ledger,
+          postingaccountLedger: compactRows(
+            compact === false || fields?.length
+              ? ledger.postingaccountLedger
+              : compactRows(ledger.postingaccountLedger, { fields: LEDGER_CHECK_FIELDS }),
+            { compact, include_links, fields }
+          ),
+        },
+      });
     },
   });
 

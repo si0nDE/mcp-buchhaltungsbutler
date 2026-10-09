@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Neu: `compact` (Standard), `fields` und `include_links` bei `list_postings` und `get_account_ledger`: leere Felder (`oss_*`, `cost_location`, ...) und
+  PDF-Links entfallen, `fields: [...]` liefert nur die genannten Felder, `compact: false` die Rohzeilen. Weniger Tokens bei Prüfaufrufen.
+- Neu: `list_receipts` mit `list_direction: "both"` (eine Anfrage statt zwei, jede Zeile trägt ihre Richtung).
+- Neu: `add_free_postings` nimmt je Eintrag `receipt_id_by_customer` und ordnet den Beleg im selben Aufruf zu (`receipt_assignments` je Eintrag;
+  die ID der neuen Buchung kommt aus der Batch-Antwort, live gegen BHB geprüft; Rückfall: Suche über Datum, Text, Betrag und Konten).
+- Neu: `get_account_ledger` liefert standardmäßig ein Prüfset (Datum, Seite, Betrag, Gegenkonto, Text, Steuersatz, Beleg-/Zahlungs-ID, zugeordnete Belegdateinamen, Storno-IDs, Saldo; bei freien Buchungen steht die Belegzuordnung nur im Dateinamen);
+  `fields` oder `compact: false` liefern den Rest.
+- Neu: Beschreibungen von `add_transaction_postings`, `add_receipt_postings`, `add_free_postings` und `add_comment` enthalten einen vollständigen
+  Beispielaufruf; Hinweis, erst einen Aufruf zu testen und dann zu parallelisieren. BHB-Fehler "pre tax", "invalid vat" und Summenfehler bekommen
+  einen Korrekturhinweis (`19_pre`/`7_pre`).
+
 - Neu: `get_booking_guide` Thema `belegpruefung`. Belege prüfen und Belegdaten korrigieren geht nur in der Weboberfläche (Bearbeiten-Dialog setzt
   `confirmationStatus`; der Pfad verlangt eine Browser-Sitzung, die API hat keinen Endpunkt). Dokumentiert: Ersatzsignal über
   `date_since_last_modified`, typische OCR-Fehler bei Gutschriften, die Alternative mit aktivierter Debitorenbuchhaltung samt ihren Grenzen

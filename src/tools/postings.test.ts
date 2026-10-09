@@ -818,3 +818,75 @@ describe("postings tools", () => {
     });
   });
 });
+
+describe("postings tools: compact, hints, free posting + receipt", () => {
+  it("list_postings drops empty fields and links by default, keeps them on request", async () => {
+    const row = { id_by_customer: "1", amount: "5.00", oss_origin_country: "", cost_location: null, receipts_assigned_links: "http://x" };
+    const client = mockClient({ success: true, rows: 1, data: [row] });
+    const [listPostings] = createPostingsTools(client);
+    const compact = JSON.parse((await listPostings.handler({ date_from: "2026-01-01", date_to: "2026-01-31" })).content[0].text);
+    expect(compact.data[0]).toEqual({ id_by_customer: "1", amount: "5.00" });
+    const withLinks = JSON.parse(
+      (await listPostings.handler({ date_from: "2026-01-01", date_to: "2026-01-31", include_links: true })).content[0].text
+    );
+    expect(withLinks.data[0].receipts_assigned_links).toBe("http://x");
+    const raw = JSON.parse((await listPostings.handler({ date_from: "2026-01-01", date_to: "2026-01-31", compact: false })).content[0].text);
+    expect(raw.data[0]).toEqual(row);
+    const picked = JSON.parse(
+      (await listPostings.handler({ date_from: "2026-01-01", date_to: "2026-01-31", fields: ["amount"] })).content[0].text
+    );
+    expect(picked.data[0]).toEqual({ amount: "5.00" });
+  });
+
+  it("add_transaction_postings appends a fix to the 'pre tax' error", async () => {
+    const client = keyedMockClient({ postingsAddBatchTransactions: new Error("error 17: account must be posted with pre tax") });
+    const [, , addTransactionPostings] = createPostingsTools(client);
+    await expect(
+      addTransactionPostings.handler({
+        transactions: [{ transaction_id_by_customer: 1, splits: [{ postingaccount: 4950, postingtext: "x", vat: "19_vat", amount: "1.00" }] }],
+      })
+    ).rejects.toThrow(/19_pre/);
+  });
+
+  it("add_free_postings assigns the receipt to the newly created posting", async () => {
+    const existing = { id_by_customer: "5", postingtext: "T", amount: "20.00", debit_postingaccount_number: "1800", credit_postingaccount_number: "8400" };
+    const created = { ...existing, id_by_customer: "9" };
+    let reads = 0;
+    const call = vi.fn((key: string, _params?: unknown) => {
+      if (key === "postingsGet") return Promise.resolve({ data: reads++ === 0 ? [existing] : [existing, created] });
+      return Promise.resolve({ success: true });
+    });
+    const [, , , addFreePostings] = createPostingsTools({ call } as unknown as BBClient);
+    const res = JSON.parse(
+      (
+        await addFreePostings.handler({
+          free_postings: [
+            { date: "2026-03-10", postingtext: "T", amount: "20.00", postingaccount_debit: 1800, postingaccount_credit: 8400, vat: "19_vat", receipt_id_by_customer: 3001 },
+          ],
+        })
+      ).content[0].text
+    );
+    expect(call).toHaveBeenCalledWith("postingsAssignReceiptToFreePosting", { receipt_id_by_customer: 3001, posting_id_by_customer: 9 });
+    expect(res.receipt_assignments).toEqual([{ index: 0, receipt_id_by_customer: 3001, posting_id_by_customer: 9, status: "assigned" }]);
+    const sent = call.mock.calls.find((c) => c[0] === "postingsAddBatchFree")![1] as { free_postings: Array<Record<string, unknown>> };
+    expect(sent.free_postings[0]).not.toHaveProperty("receipt_id_by_customer");
+  });
+
+  it("add_free_postings uses the id from the batch answer without searching", async () => {
+    const call = vi.fn((key: string, _params?: unknown) =>
+      Promise.resolve(key === "postingsAddBatchFree" ? { success: true, free_postings: [{ success: true, id_by_customer: 776 }] } : { data: [] })
+    );
+    const [, , , addFreePostings] = createPostingsTools({ call } as unknown as BBClient);
+    const res = JSON.parse(
+      (
+        await addFreePostings.handler({
+          free_postings: [
+            { date: "2026-01-02", postingtext: "T", amount: "0.01", postingaccount_debit: 1800, postingaccount_credit: 1890, vat: "0_none", receipt_id_by_customer: 19 },
+          ],
+        })
+      ).content[0].text
+    );
+    expect(call).toHaveBeenCalledWith("postingsAssignReceiptToFreePosting", { receipt_id_by_customer: 19, posting_id_by_customer: 776 });
+    expect(res.receipt_assignments[0]).toMatchObject({ posting_id_by_customer: 776, status: "assigned" });
+  });
+});

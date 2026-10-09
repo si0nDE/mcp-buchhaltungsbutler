@@ -12,7 +12,9 @@ export function createCommentsTools(client: BBClient): [ToolDef] {
   const addComment = defineTool({
     name: "add_comment",
     description:
-      "Add a comment to a transaction or a receipt (provide the matching id). No endpoint exists to " +
+      "Add a comment to a transaction or a receipt (provide the matching id). Example: " +
+      '{"comment_text":"Teilzahlung 2025 in Lexware gebucht","receipt_id_by_customer":2001} - the text parameter is ' +
+      "comment_text (not comment). No endpoint exists to " +
       "list, edit, or delete comments afterward — they're visible only in the BuchhaltungsButler web app.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,

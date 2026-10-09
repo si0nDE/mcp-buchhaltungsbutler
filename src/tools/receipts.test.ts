@@ -299,3 +299,19 @@ describe("receipts tools", () => {
   });
 
 });
+
+describe("list_receipts list_direction both", () => {
+  it("queries both directions, tags rows and merges by date", async () => {
+    const call = vi.fn((_k: string, p: { list_direction: string }) =>
+      Promise.resolve({
+        data: [{ id_by_customer: p.list_direction === "inbound" ? 1 : 2, date: p.list_direction === "inbound" ? "2026-01-01" : "2026-02-01" }],
+      })
+    );
+    const [listReceipts] = createReceiptsTools({ call } as unknown as BBClient);
+    const res = JSON.parse((await listReceipts.handler({ list_direction: "both", limit: 20, offset: 0, full: false })).content[0].text);
+    expect(res.map((r: { id_by_customer: number; list_direction: string }) => [r.id_by_customer, r.list_direction])).toEqual([
+      [2, "outbound"],
+      [1, "inbound"],
+    ]);
+  });
+});

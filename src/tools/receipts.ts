@@ -49,7 +49,9 @@ const RECEIPT_TYPE = z.enum(["invoice inbound", "invoice outbound", "credit inbo
 
 export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
   const listShape = {
-    list_direction: z.enum(["inbound", "outbound"]),
+    list_direction: z
+      .enum(["inbound", "outbound", "both"])
+      .describe('"both" runs inbound and outbound in one call; every row then carries its direction in list_direction.'),
     payment_status: z.enum(["paid", "unpaid"]).optional(),
     counterparty: z.string().optional(),
     invoicenumber: z.string().optional().describe("Exact invoice number: the duplicate check before creating or uploading a receipt."),
@@ -76,6 +78,51 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       .describe('Sort order, e.g. {"date": "ASC"} or {"date": "ASC", "amount": "DESC"}.'),
   };
 
+  type ListFilters = Omit<z.infer<z.ZodObject<typeof listShape>>, "list_direction" | "full" | "limit" | "offset" | "counterparty">;
+
+  async function fetchDirection(
+    direction: "inbound" | "outbound",
+    args: ListFilters & { counterparty?: string; limit?: number; offset?: number }
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    const { counterparty, limit, offset, ...filters } = args;
+    if (counterparty === undefined) {
+      const result = await client.call<BBListResult>("receiptsGet", {
+        ...filters,
+        list_direction: direction,
+        limit: limit ?? 20,
+        offset: offset ?? 0,
+      });
+      return { rows: result.data, truncated: false };
+    }
+    const needle = counterparty.toLowerCase();
+    const allRows: Record<string, unknown>[] = [];
+    let truncated = false;
+    for (let page = 0; page < COUNTERPARTY_SWEEP_MAX_PAGES; page++) {
+      const result = await client.call<BBListResult>("receiptsGet", {
+        ...filters,
+        list_direction: direction,
+        limit: COUNTERPARTY_SWEEP_PAGE_SIZE,
+        offset: page * COUNTERPARTY_SWEEP_PAGE_SIZE,
+      });
+      allRows.push(...result.data);
+      if (result.data.length < COUNTERPARTY_SWEEP_PAGE_SIZE) break;
+      if (page === COUNTERPARTY_SWEEP_MAX_PAGES - 1) truncated = true;
+    }
+    const matched = allRows.filter(
+      (r) => typeof r.counterparty === "string" && r.counterparty.toLowerCase().includes(needle)
+    );
+    return { rows: matched.slice(offset ?? 0, (offset ?? 0) + (limit ?? 20)), truncated };
+  }
+
+  async function listOneDirection(
+    direction: "inbound" | "outbound",
+    args: ListFilters & { counterparty?: string; limit?: number; offset?: number; full?: boolean }
+  ) {
+    const { full, ...rest } = args;
+    const { rows, truncated } = await fetchDirection(direction, rest);
+    return ok(trimList(rows, SUMMARY_FIELDS, full ?? false), truncated ? { truncated } : undefined);
+  }
+
   const listReceipts = defineTool({
     name: "list_receipts",
     description:
@@ -87,36 +134,27 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     outputSchema: LIST_RECEIPTS_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { full, limit, offset, counterparty, ...filters } = args;
-
-      if (counterparty === undefined) {
-        const result = await client.call<BBListResult>("receiptsGet", {
-          ...filters,
-          limit: limit ?? 20,
-          offset: offset ?? 0,
-        });
-        return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+      const { full, limit, offset, counterparty, list_direction, ...filters } = args;
+      if (list_direction !== "both") {
+        return listOneDirection(list_direction, { ...filters, full, limit, offset, counterparty });
       }
-
-      const needle = counterparty.toLowerCase();
-      const allRows: Record<string, unknown>[] = [];
-      let truncated = false;
-      for (let page = 0; page < COUNTERPARTY_SWEEP_MAX_PAGES; page++) {
-        const result = await client.call<BBListResult>("receiptsGet", {
-          ...filters,
-          limit: COUNTERPARTY_SWEEP_PAGE_SIZE,
-          offset: page * COUNTERPARTY_SWEEP_PAGE_SIZE,
-        });
-        allRows.push(...result.data);
-        if (result.data.length < COUNTERPARTY_SWEEP_PAGE_SIZE) break;
-        if (page === COUNTERPARTY_SWEEP_MAX_PAGES - 1) truncated = true;
-      }
-
-      const matched = allRows.filter(
-        (r) => typeof r.counterparty === "string" && r.counterparty.toLowerCase().includes(needle)
+      // Without a counterparty filter, offset/limit apply to the merged list: fetch limit+offset
+      // from each direction, merge by date and cut afterwards.
+      const win = (offset ?? 0) + (limit ?? 20);
+      const [inbound, outbound] = await Promise.all(
+        (["inbound", "outbound"] as const).map((dir) =>
+          fetchDirection(dir, { ...filters, counterparty, limit: win, offset: 0 })
+        )
       );
-      const paged = matched.slice(offset ?? 0, (offset ?? 0) + (limit ?? 20));
-      return ok(trimList(paged, SUMMARY_FIELDS, full ?? false), truncated ? { truncated } : undefined);
+      const tag = (rows: Record<string, unknown>[], dir: string): Record<string, unknown>[] =>
+        rows.map((r) => ({ ...r, list_direction: dir }));
+      const merged = [...tag(inbound.rows, "inbound"), ...tag(outbound.rows, "outbound")].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
+      const paged = merged.slice(offset ?? 0, win);
+      const truncated = inbound.truncated || outbound.truncated;
+      return ok(
+        trimList(paged, [...SUMMARY_FIELDS, "list_direction"], full ?? false),
+        truncated ? { truncated } : undefined
+      );
     },
   });
 

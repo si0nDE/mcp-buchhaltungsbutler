@@ -91,3 +91,18 @@ describe("reports tools", () => {
     expect(ledger.annotations?.readOnlyHint).toBe(true);
   });
 });
+
+describe("get_account_ledger compact", () => {
+  it("drops empty fields from ledger entries by default", async () => {
+    const client = mockClient({
+      success: true,
+      report_sums_postingaccount_ledger: {
+        postingaccount_number: 4950,
+        postingaccountLedger: [{ date: "2026-02-25", record_amount: "84.03", oss_vat_rate: "", standard_chart: "SKR03", receiptsAssignedFileSuffix: "pdf" }],
+      },
+    });
+    const [, , getAccountLedger] = createReportsTools(client);
+    const res = parse(await getAccountLedger.handler({ postingaccount_number: 4950, date_from: "2026-01-01", date_to: "2026-12-31" }));
+    expect(res.report_sums_postingaccount_ledger.postingaccountLedger).toEqual([{ date: "2026-02-25", record_amount: "84.03" }]);
+  });
+});

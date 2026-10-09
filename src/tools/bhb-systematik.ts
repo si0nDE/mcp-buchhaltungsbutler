@@ -194,6 +194,41 @@ export function assertTransactionEntry(
   }
 }
 
+// BHB's booking errors name the problem but not the fix. These hints turn the known ones into a concrete
+// correction, so a retry works at once instead of after guessing (a wrong vat code in a parallel batch
+// otherwise fails every call the same way).
+const BOOKING_ERROR_HINTS: Array<[RegExp, string]> = [
+  [
+    /pre tax/i,
+    "Hinweis: Aufwandskonten verlangen Vorsteuer - vat \"19_pre\" oder \"7_pre\" (bzw. \"0_none\"). \"19_vat\"/\"7_vat\" gilt nur für Erlöskonten.",
+  ],
+  [
+    /invalid vat/i,
+    "Hinweis: vat ist ein Code, keine Prozentzahl. Aufwand: 19_pre, 7_pre; Erlös: 19_vat, 7_vat; steuerfrei/neutral: 0_none (nicht \"19_pre_tax\" oder \"19\").",
+  ],
+  [
+    /sum.*(does not|doesn't) match|does not match.*transaction amount/i,
+    "Hinweis: Die Summe der Splits muss dem Zahlungsbetrag entsprechen (Beträge positiv angeben).",
+  ],
+];
+
+export function bookingErrorHint(message: string): string | undefined {
+  return BOOKING_ERROR_HINTS.find(([re]) => re.test(message))?.[1];
+}
+
+// Runs a booking call and appends the matching hint to a BHB error message. Other errors pass through.
+export async function withBookingHints<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof Error) {
+      const hint = bookingErrorHint(error.message);
+      if (hint && !error.message.includes(hint)) error.message = `${error.message} ${hint}`;
+    }
+    throw error;
+  }
+}
+
 export function withWarnings(result: unknown, warnings: string[]): unknown {
   if (warnings.length === 0) return result;
   return { ...(result as Record<string, unknown>), warnings };
