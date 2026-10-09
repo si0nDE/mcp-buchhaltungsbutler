@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Neu: `get_booking_guide` Themen `reverse_charge_drittland` (Eingangsrechnungen ohne USt von Anbietern außerhalb der EU, § 13b Abs. 2 Nr. 1 UStG,
+  Buchung mit `19_both_511`, Entscheidungsweg, Muster für bezahlt/privat/offen/0,00-Rechnung/Korrektur), `lieferantenportal_abgleich` (Belegprüfung
+  je Lieferant samt Kurs-Ausreißertest und Portalabgleich) und `pfaendung_zahlung_buchen`. Rechtsgrundlagen und ausdrücklich nicht verifizierte Punkte
+  (Kennziffern Drittland, Zuordnung `19_both_511` zur Oberflächenoption, Meldeperiode) in [docs/rechtsgrundlagen-13b-drittland.md](docs/rechtsgrundlagen-13b-drittland.md).
 - Neu: `dry_run: true` bei `add_receipt_postings`, `add_transaction_postings` und `add_free_postings`: alle lokalen Prüfungen laufen, die Antwort zeigt `would_send`
   (die berechneten Buchungen), angekündigte Kommentare/Belegzuordnungen und `warnings` (z. B. Steuerschlüssel passt nicht zum Konto). Es wird nichts geschrieben.
   Die Steuerschlüssel-Warnung gilt nur für SKR03 und nur für 19/7 `_vat`/`_pre`.
