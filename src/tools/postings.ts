@@ -9,6 +9,8 @@ import {
   truncateToBytes,
 } from "./entertainment-expense.js";
 import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE, withBookingHints, withWarnings } from "./bhb-systematik.js";
+import { getChart } from "./posting-accounts.js";
+import { vatWarnings } from "./vat-hints.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -292,6 +294,44 @@ const CANCEL_LABEL: Record<CancelType, string> = {
   free: "freie Buchung",
 };
 
+const dryRunShape = {
+  dry_run: z
+    .boolean()
+    .optional()
+    .describe(
+      "true: run all checks and return what WOULD be sent (would_send), plus warnings (e.g. a vat code that does not fit " +
+        "the account) - nothing is written, no comments are added, no receipt is assigned. Same input as the real call."
+    ),
+};
+
+async function dryRunResult(
+  client: BBClient,
+  endpoint: string,
+  body: unknown,
+  splitRefs: Array<{ account: number; vat: string; label: string }>,
+  extras: {
+    commentJobs?: CommentJob[];
+    hints?: Array<Record<string, unknown>>;
+    assignReceipts?: Array<Record<string, unknown>>;
+    taxAccountsOnly?: boolean;
+  } = {}
+) {
+  const chart = await getChart(client).catch(() => "unknown" as const);
+  const warnings = [
+    ...vatWarnings(splitRefs, chart, extras.taxAccountsOnly),
+    ...anlagenWarnings(splitRefs.map((r) => r.account)),
+  ];
+  return ok({
+    dry_run: true,
+    written: false,
+    would_send: { endpoint, body },
+    ...(extras.commentJobs?.length ? { would_comment: extras.commentJobs } : {}),
+    ...(extras.assignReceipts?.length ? { would_assign_receipts: extras.assignReceipts } : {}),
+    ...(extras.hints?.length ? { entertainment_reclass_hints: extras.hints } : {}),
+    ...(warnings.length ? { warnings } : {}),
+  });
+}
+
 type FreeSent = {
   date: string;
   postingtext: string;
@@ -445,6 +485,7 @@ export function createPostingsTools(
 
   const addReceiptPostingsShape = {
     receipts: z.array(receiptPostingEntryShape).min(1),
+    ...dryRunShape,
   };
 
   const addReceiptPostings = defineTool({
@@ -499,6 +540,17 @@ export function createPostingsTools(
           entertainmentMatch: entertainmentMatches[i],
         }))
       );
+      if (args.dry_run) {
+        return dryRunResult(
+          client,
+          "postingsAddBatchReceipts",
+          { receipts },
+          args.receipts.flatMap((e) =>
+            e.splits.map((s) => ({ account: s.postingaccount, vat: s.vat, label: `Beleg ${e.receipt_id_by_customer}` }))
+          ),
+          { commentJobs, hints }
+        );
+      }
       const result = await withBookingHints(() => client.call("postingsAddBatchReceipts", { receipts }));
       const warnings = [
         ...(await sendComments(client, commentJobs)),
@@ -517,6 +569,7 @@ export function createPostingsTools(
 
   const addTransactionPostingsShape = {
     transactions: z.array(transactionPostingEntryShape).min(1),
+    ...dryRunShape,
   };
 
   const addTransactionPostings = defineTool({
@@ -583,6 +636,17 @@ export function createPostingsTools(
           entertainmentMatch: entertainmentMatches[i],
         }))
       );
+      if (args.dry_run) {
+        return dryRunResult(
+          client,
+          "postingsAddBatchTransactions",
+          { transactions },
+          args.transactions.flatMap((e) =>
+            e.splits.map((s) => ({ account: s.postingaccount, vat: s.vat, label: `Transaktion ${e.transaction_id_by_customer}` }))
+          ),
+          { commentJobs, hints }
+        );
+      }
       const result = await withBookingHints(() => client.call("postingsAddBatchTransactions", { transactions }));
       const warnings = [
         ...(await sendComments(client, commentJobs)),
@@ -616,6 +680,7 @@ export function createPostingsTools(
 
   const addFreePostingsShape = {
     free_postings: z.array(freePostingEntryShape).min(1),
+    ...dryRunShape,
   };
 
   const addFreePostings = defineTool({
@@ -675,6 +740,18 @@ export function createPostingsTools(
       const wanted = args.free_postings.flatMap((f, i) =>
         f.receipt_id_by_customer === undefined ? [] : [{ index: i, receipt: f.receipt_id_by_customer, sent: free_postings[i] }]
       );
+      if (args.dry_run) {
+        return dryRunResult(
+          client,
+          "postingsAddBatchFree",
+          { free_postings },
+          args.free_postings.flatMap((f, i) => [
+            { account: f.postingaccount_debit, vat: f.vat, label: `Freie Buchung ${i + 1} (Soll)` },
+            { account: f.postingaccount_credit, vat: f.vat, label: `Freie Buchung ${i + 1} (Haben)` },
+          ]),
+          { assignReceipts: wanted.map((w) => ({ index: w.index, receipt_id_by_customer: w.receipt })), taxAccountsOnly: true }
+        );
+      }
       const dates = [...new Set(wanted.map((w) => w.sent.date))];
       const before = new Map<string, Set<number>>();
       for (const date of dates) before.set(date, await freePostingIds(client, date));

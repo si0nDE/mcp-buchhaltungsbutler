@@ -315,3 +315,29 @@ describe("list_receipts list_direction both", () => {
     ]);
   });
 });
+
+describe("get_receipt_overview", () => {
+  it("combines receipt, assigned transactions and referencing postings, and flags a free posting as no payment", async () => {
+    const call = vi.fn((key: string) => {
+      if (key === "receiptsGetIdByCustomer")
+        return Promise.resolve({ data: { id_by_customer: "19", date: "2026-01-09", amount: "-20.00", amount_paid: "0.00", file_content: "XXX" } });
+      if (key === "receiptsAssignedTransactionsGet") return Promise.resolve({ data: [] });
+      return Promise.resolve({
+        data: [
+          { id_by_customer: "621", date: "2026-01-09 00:00:00", postingtext: "t", amount: "20.00", debit_postingaccount_number: "8400", credit_postingaccount_number: "1800", vat: "19.00", fixed: "0", receipts_assigned_ids_by_customer: "19" },
+          { id_by_customer: "7", date: "2026-01-10 00:00:00", amount: "1.00", receipts_assigned_ids_by_customer: "190" },
+        ],
+      });
+    });
+    const overview = createReceiptsTools({ call } as unknown as BBClient)[6];
+    const res = JSON.parse((await overview.handler({ receipt_id_by_customer: 19 })).content[0].text);
+    expect(res.receipt).not.toHaveProperty("file_content");
+    expect(res.postings).toHaveLength(1);
+    expect(res.postings[0]).toMatchObject({ id_by_customer: "621", kind: "free", date: "2026-01-09" });
+    expect(res.paid_by_free_postings).toBe(20);
+    expect(res.paid_by_transactions).toBe(0);
+    expect(res.open_amount).toBe(20);
+    expect(res.notes[0]).toMatch(/nicht als Zahlung/);
+    expect(res.postings_period).toEqual({ date_from: "2026-01-01", date_to: "2027-12-31" });
+  });
+});

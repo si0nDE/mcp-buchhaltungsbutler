@@ -3,9 +3,10 @@ import { createTtlCache, type TtlCache } from "../bb-client/cache.js";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
 import { ANLAGEN_GUIDE, lockedAccountHint } from "./bhb-systematik.js";
+import { detectChart, vatHint } from "./vat-hints.js";
 import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
-const SUMMARY_FIELDS = ["postingaccount_number", "name"] as const;
+const SUMMARY_FIELDS = ["postingaccount_number", "name", "vat_hint"] as const;
 const FULL_CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_CATALOG_PAGE_SIZE = 1000;
 const FULL_CATALOG_MAX_PAGES = 20;
@@ -26,7 +27,7 @@ function parseAccountNumber(value: unknown): number | undefined {
 // end of data), so the accumulated result really is the complete catalog —
 // not just its first page — with a FULL_CATALOG_MAX_PAGES safety cap in case
 // the API ever behaves unexpectedly.
-async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
+export async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
   const allRows: Record<string, unknown>[] = [];
   let lastPageWasFull = false;
   for (let page = 0; page < FULL_CATALOG_MAX_PAGES; page++) {
@@ -53,6 +54,18 @@ async function fetchFullCatalog(client: BBClient): Promise<BBListResult> {
     );
   }
   return { success: true, message: "", rows: allRows.length, data: allRows };
+}
+
+// The chart (SKR03/SKR04) never changes for a client, so it is detected once per client and kept.
+const chartByClient = new WeakMap<BBClient, Promise<"SKR03" | "unknown">>();
+export function getChart(client: BBClient): Promise<"SKR03" | "unknown"> {
+  let chart = chartByClient.get(client);
+  if (!chart) {
+    chart = fetchFullCatalog(client).then((r) => detectChart(r.data));
+    chartByClient.set(client, chart);
+    chart.catch(() => chartByClient.delete(client));
+  }
+  return chart;
 }
 
 export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef] {
@@ -94,6 +107,9 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
       "type/parent_postingaccount_number. The full catalog is paged in (1000 rows per request) and cached " +
       "for 24h; filtering (range, search, exclude_*) and pagination happen client-side against that cached, " +
       "complete catalog — pass refresh: true to bypass the cache after an account was added or renamed elsewhere. " +
+      "vat_hint (SKR03 only) lists the vat codes that usually fit the account (Aufwand: 19_pre/7_pre, Erlös: 19_vat/7_vat, " +
+      "Privat/Löhne/AfA: 0_none); it is derived from the number range, NOT confirmed by BuchhaltungsButler, and missing for " +
+      "accounts outside the clear classes or for other charts. " +
       ANLAGEN_GUIDE,
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
@@ -137,6 +153,11 @@ export function createPostingAccountsTools(client: BBClient): [ToolDef, ToolDef]
       const offset = args.offset ?? 0;
       const limit = args.limit ?? 20;
       rows = rows.slice(offset, offset + limit);
+      const chart = detectChart(result.data);
+      rows = rows.map((r) => {
+        const hint = vatHint(r.postingaccount_number, r.name, chart);
+        return hint ? { ...r, vat_hint: hint } : r;
+      });
       return ok(trimList(rows, SUMMARY_FIELDS, args.full ?? false));
     },
   });

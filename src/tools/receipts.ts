@@ -47,7 +47,7 @@ const SUMMARY_FIELDS = [
 
 const RECEIPT_TYPE = z.enum(["invoice inbound", "invoice outbound", "credit inbound", "credit outbound"]);
 
-export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
+export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
   const listShape = {
     list_direction: z
       .enum(["inbound", "outbound", "both"])
@@ -331,5 +331,116 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     },
   });
 
-  return [listReceipts, getReceipt, createReceipts, uploadReceipt, setReceiptDeleted, getReceiptTransactions];
+  const overviewShape = {
+    receipt_id_by_customer: z.number().int(),
+    date_from: z
+      .string()
+      .optional()
+      .describe("YYYY-MM-DD, start of the posting search. Default: 1 January of the receipt's year (a free posting may predate the receipt)."),
+    date_to: z.string().optional().describe("YYYY-MM-DD, end of the posting search. Default: 31 December of the year after the receipt."),
+  };
+
+  const OVERVIEW_PAGE = 1000;
+  const OVERVIEW_MAX_PAGES = 5;
+
+  const getReceiptOverview = defineTool({
+    name: "get_receipt_overview",
+    description:
+      "One answer for 'what is the state of this receipt': metadata (no file), assigned bank transactions, the postings that " +
+      "reference it (kind receipt/transaction/free), paid_by_transactions, paid_by_free_postings and open_amount. Replaces " +
+      "get_receipt + get_receipt_transactions + a posting search. Postings are searched by period (date_from/date_to, " +
+      "up to " + OVERVIEW_MAX_PAGES * OVERVIEW_PAGE + " postings; postings_search_truncated says if that cap was hit). " +
+      "Free postings with a receipt do NOT count as payment in BuchhaltungsButler (amount_paid stays 0, the receipt stays " +
+      "'teilausgeglichen'). open_amount is BHB's own figure (amount - amount_paid); with Sammelzahlung, Skonto or provider " +
+      "fees it is misleading - compare the transaction amounts yourself.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: overviewShape,
+    async handler(args) {
+      const receiptRes = await client.call<{ data?: Record<string, unknown> }>(
+        "receiptsGetIdByCustomer",
+        {},
+        { idSuffix: args.receipt_id_by_customer }
+      );
+      // The live API nests the record one level deeper than the spec; accept both.
+      const raw = (receiptRes.data as { data?: Record<string, unknown> } | undefined)?.data ?? receiptRes.data ?? {};
+      const { file_content, file_type, ...receipt } = raw as Record<string, unknown>;
+      const year = Number(String(receipt.date ?? "").slice(0, 4)) || new Date().getFullYear();
+      const date_from = args.date_from ?? `${year}-01-01`;
+      const date_to = args.date_to ?? `${year + 1}-12-31`;
+
+      const txRes = await client.call<{ data?: Array<Record<string, unknown>> }>("receiptsAssignedTransactionsGet", {
+        receipt_id_by_customer: args.receipt_id_by_customer,
+      });
+      const transactions = txRes.data ?? [];
+
+      const rows: Array<Record<string, unknown>> = [];
+      let truncated = false;
+      for (let page = 0; page < OVERVIEW_MAX_PAGES; page++) {
+        const res = await client.call<{ data?: Array<Record<string, unknown>> }>("postingsGet", {
+          date_from,
+          date_to,
+          posting_status: "all",
+          limit: OVERVIEW_PAGE,
+          offset: page * OVERVIEW_PAGE,
+        });
+        const batch = res.data ?? [];
+        rows.push(...batch);
+        if (batch.length < OVERVIEW_PAGE) break;
+        if (page === OVERVIEW_MAX_PAGES - 1) truncated = true;
+      }
+      const id = String(args.receipt_id_by_customer);
+      const blank = (v: unknown) => v === undefined || v === null || String(v).trim() === "";
+      const postings = rows
+        .filter(
+          (p) =>
+            String(p.receipt_id_by_customer) === id ||
+            String(p.receipts_assigned_ids_by_customer ?? "")
+              .split(",")
+              .map((x) => x.trim())
+              .includes(id)
+        )
+        .map((p) => ({
+          id_by_customer: p.id_by_customer,
+          kind: !blank(p.transaction_id_by_customer) ? "transaction" : String(p.receipt_id_by_customer) === id ? "receipt" : "free",
+          date: String(p.date ?? "").slice(0, 10),
+          postingtext: p.postingtext,
+          amount: p.amount,
+          debit: p.debit_postingaccount_number,
+          credit: p.credit_postingaccount_number,
+          vat: p.vat,
+          fixed: p.fixed,
+        }));
+
+      const sum = (xs: unknown[]) => xs.reduce<number>((a, v) => a + Math.abs(Number(v) || 0), 0);
+      const round = (n: number) => Math.round(n * 100) / 100;
+      const amount = Number(receipt.amount);
+      const paidByTransactions = round(sum(transactions.map((t) => t.amount)));
+      const paidByFree = round(sum(postings.filter((p) => p.kind === "free").map((p) => p.amount)));
+      const openAmount = Number.isFinite(amount) ? round(Math.abs(amount) - Math.abs(Number(receipt.amount_paid) || 0)) : undefined;
+      const notes: string[] = [];
+      if (paidByFree > 0) {
+        notes.push("Freie Buchungen mit Beleg zählen in BHB nicht als Zahlung: amount_paid und open_amount berücksichtigen sie nicht.");
+      }
+      if (transactions.length > 0 && Number.isFinite(amount) && Math.abs(paidByTransactions - Math.abs(amount)) > 0.005) {
+        notes.push(
+          "Die zugeordneten Zahlungen weichen vom Belegbetrag ab (Sammelzahlung, Skonto oder Gebühren?): die Anzeige 'unter-/überzahlt' kann dann falsch sein."
+        );
+      }
+      return ok({
+        receipt,
+        transactions,
+        postings,
+        paid_by_transactions: paidByTransactions,
+        paid_by_free_postings: paidByFree,
+        amount_paid_bhb: receipt.amount_paid,
+        open_amount: openAmount,
+        postings_period: { date_from, date_to },
+        ...(truncated ? { postings_search_truncated: true } : {}),
+        ...(notes.length ? { notes } : {}),
+      });
+    },
+  });
+
+  return [listReceipts, getReceipt, createReceipts, uploadReceipt, setReceiptDeleted, getReceiptTransactions, getReceiptOverview];
 }

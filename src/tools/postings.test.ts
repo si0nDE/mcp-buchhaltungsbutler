@@ -889,4 +889,50 @@ describe("postings tools: compact, hints, free posting + receipt", () => {
     expect(call).toHaveBeenCalledWith("postingsAssignReceiptToFreePosting", { receipt_id_by_customer: 19, posting_id_by_customer: 776 });
     expect(res.receipt_assignments[0]).toMatchObject({ posting_id_by_customer: 776, status: "assigned" });
   });
+
+  describe("dry_run", () => {
+    function dryClient() {
+      const call = vi.fn((key: string) => {
+        if (key === "settingsGetPostingaccounts") return Promise.resolve({ data: [{ postingaccount_number: "8400", name: "Umsätze / Erlöse 19/16% Umsatzsteuer" }] });
+        throw new Error(`unexpected write/read: ${key}`);
+      });
+      return { call } as unknown as BBClient;
+    }
+    const txEntry = (vat: string) => ({
+      transactions: [{ transaction_id_by_customer: 1, splits: [{ postingaccount: 4950, postingtext: "x", vat: vat as never, amount: "119.00", receipt_id_by_customer: 5 }] }],
+      dry_run: true,
+    });
+
+    it("writes nothing, returns the payload and warns about a vat code that does not fit the account", async () => {
+      const client = dryClient();
+      const [, , addTransactionPostings] = createPostingsTools(client);
+      const res = JSON.parse((await addTransactionPostings.handler(txEntry("19_vat"))).content[0].text);
+      expect(res).toMatchObject({ dry_run: true, written: false, would_send: { endpoint: "postingsAddBatchTransactions" } });
+      expect(res.would_send.body.transactions[0].vats).toEqual(["19_vat"]);
+      expect(res.warnings[0]).toMatch(/19_vat.*4950.*19_pre/);
+      expect((client.call as ReturnType<typeof vi.fn>).mock.calls.every((c) => c[0] === "settingsGetPostingaccounts")).toBe(true);
+    });
+
+    it("has no warning for the right code", async () => {
+      const [, , addTransactionPostings] = createPostingsTools(dryClient());
+      const res = JSON.parse((await addTransactionPostings.handler(txEntry("19_pre"))).content[0].text);
+      expect(res.warnings).toBeUndefined();
+    });
+
+    it("free posting: only the Erlös/Aufwand side is checked, the receipt assignment is announced not made", async () => {
+      const [, , , addFreePostings] = createPostingsTools(dryClient());
+      const res = JSON.parse(
+        (
+          await addFreePostings.handler({
+            free_postings: [
+              { date: "2026-03-10", postingtext: "T", amount: "20.00", postingaccount_debit: 1800, postingaccount_credit: 8400, vat: "19_vat", receipt_id_by_customer: 3001 },
+            ],
+            dry_run: true,
+          })
+        ).content[0].text
+      );
+      expect(res.warnings).toBeUndefined();
+      expect(res.would_assign_receipts).toEqual([{ index: 0, receipt_id_by_customer: 3001 }]);
+    });
+  });
 });

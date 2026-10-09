@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Neu: `dry_run: true` bei `add_receipt_postings`, `add_transaction_postings` und `add_free_postings`: alle lokalen Prüfungen laufen, die Antwort zeigt `would_send`
+  (die berechneten Buchungen), angekündigte Kommentare/Belegzuordnungen und `warnings` (z. B. Steuerschlüssel passt nicht zum Konto). Es wird nichts geschrieben.
+  Die Steuerschlüssel-Warnung gilt nur für SKR03 und nur für 19/7 `_vat`/`_pre`.
+- Neu: Tool `get_receipt_overview`: Beleg (ohne Datei), zugeordnete Zahlungen, Buchungen zum Beleg (Art receipt/transaction/free), `paid_by_transactions`,
+  `paid_by_free_postings`, `open_amount` und Hinweise (freie Buchungen zählen nicht als Zahlung, Sammelzahlung). Ersetzt drei Aufrufe. 46 Tools.
+- Neu: `list_posting_accounts` liefert `vat_hint` (SKR03): übliche Steuerschlüssel je Konto, abgeleitet aus dem Nummernkreis, von BHB nicht bestätigt.
+
 - Neu: `compact` (Standard), `fields` und `include_links` bei `list_postings` und `get_account_ledger`: leere Felder (`oss_*`, `cost_location`, ...) und
   PDF-Links entfallen, `fields: [...]` liefert nur die genannten Felder, `compact: false` die Rohzeilen. Weniger Tokens bei Prüfaufrufen.
 - Neu: `list_receipts` mit `list_direction: "both"` (eine Anfrage statt zwei, jede Zeile trägt ihre Richtung).
