@@ -18,7 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "express": "^5.2.1",
     "pdf-lib": "^1.17.1",
     "unpdf": "^1.8.1",
