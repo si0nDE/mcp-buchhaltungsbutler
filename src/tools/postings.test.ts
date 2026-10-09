@@ -138,6 +138,51 @@ describe("postings tools", () => {
     });
   });
 
+  it("add_transaction_postings books a Drittland SaaS payment with 19_both_511 (guide reverse_charge_drittland)", async () => {
+    const client = mockClient({ success: true });
+    const [, , addTransactionPostings] = createPostingsTools(client);
+
+    await addTransactionPostings.handler({
+      transactions: [
+        {
+          transaction_id_by_customer: 1001,
+          splits: [{ postingaccount: 4964, postingtext: "Beispiel Cloud Inc. RE-0042 Abo", vat: "19_both_511", amount: "86.96", receipt_id_by_customer: 2001 }],
+        },
+      ],
+    });
+
+    expect(client.call).toHaveBeenCalledWith("postingsAddBatchTransactions", {
+      transactions: [
+        {
+          transaction_id_by_customer: 1001,
+          oi_receipts_ids_by_customer: [2001],
+          postingaccounts: [4964],
+          postingtexts: ["Beispiel Cloud Inc. RE-0042 Abo"],
+          vats: ["19_both_511"],
+          amounts: ["86.96"],
+        },
+      ],
+    });
+  });
+
+  it("add_transaction_postings books a Sammelzahlung (guide pfaendung_zahlung_buchen): one split per invoice, interest and costs, sum = payment", async () => {
+    const client = mockClient({ success: true });
+    const [, , addTransactionPostings] = createPostingsTools(client);
+    const splits = [
+      { postingaccount: 4980, postingtext: "RE-1", vat: "19_pre", amount: "119.00", receipt_id_by_customer: 11 },
+      { postingaccount: 4980, postingtext: "RE-2", vat: "19_pre", amount: "238.00", receipt_id_by_customer: 12 },
+      { postingaccount: 2110, postingtext: "Verzugszinsen", vat: "0_none", amount: "12.50" },
+      { postingaccount: 4950, postingtext: "Inkassokosten", vat: "0_none", amount: "30.00" },
+    ];
+
+    await addTransactionPostings.handler({ transactions: [{ transaction_id_by_customer: 5, splits }] });
+
+    const sent = (client.call as ReturnType<typeof vi.fn>).mock.calls[0][1].transactions[0];
+    expect(sent.amounts).toEqual(["119.00", "238.00", "12.50", "30.00"]);
+    expect(sent.amounts.reduce((a: number, b: string) => a + Number(b), 0)).toBeCloseTo(399.5, 2);
+    expect(sent.oi_receipts_ids_by_customer).toEqual([11, 12, null, null]);
+  });
+
   it("add_transaction_postings pads oi_receipts_ids_by_customer with null to match the split count, instead of sending a mismatched-length array (the root cause of a live 'internal error' on every call)", async () => {
     const client = mockClient({ success: true });
     const [, , addTransactionPostings] = createPostingsTools(client);

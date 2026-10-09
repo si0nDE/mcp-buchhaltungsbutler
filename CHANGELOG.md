@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix: `npm audit fix` (Abhängigkeiten `proxy-addr`, `source-map-js`, `fast-uri` und `@modelcontextprotocol/sdk` auf gepatchte Versionen; nur `package-lock.json`).
+- Doku: `docs/bhb-systematik.md` um Parameter-Warnung, `query` bei `list_transactions` (live bestätigt: `to_from` ist kein Textfilter, HTTP 400) und `amount` als Zahl ergänzt; Tests für die Buchungsmuster Drittland-SaaS und Sammelzahlung.
+
 - Korrektur: Die `vat`-Beschreibung und die Server-Instruktionen behaupteten widersprüchlich „19_both_511 = §13b Drittland“ und „§13b nur EU“. Jetzt steht dort
   „§13b, Zuordnung EU/Drittland von BHB nicht bestätigt“ (Kennziffern im USt-VA-Entwurf prüfen), ebenso im Thema `reverse_charge_drittland`.
 - Neu: Unbekannte Top-Level-Parameter (z. B. `search` bei `list_receipts`) werden weiter ignoriert, die Antwort enthält aber einen Warnhinweis
