@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Korrektur: Die `vat`-Beschreibung und die Server-Instruktionen behaupteten widersprüchlich „19_both_511 = §13b Drittland“ und „§13b nur EU“. Jetzt steht dort
+  „§13b, Zuordnung EU/Drittland von BHB nicht bestätigt“ (Kennziffern im USt-VA-Entwurf prüfen), ebenso im Thema `reverse_charge_drittland`.
+- Neu: Unbekannte Top-Level-Parameter (z. B. `search` bei `list_receipts`) werden weiter ignoriert, die Antwort enthält aber einen Warnhinweis
+  (zusätzlicher Textblock und `structuredContent.warnings`), damit ein nicht wirksamer Filter nicht als Ergebnis gelesen wird.
+- Neu: `amount` bei `add_receipt_postings`/`add_transaction_postings`/`add_free_postings` nimmt auch eine Zahl und sendet sie als String mit zwei Nachkommastellen.
+- Neu: `assign_receipt_to_free_posting` akzeptiert `free_posting_id_by_customer` als Alias für `posting_id_by_customer`.
+- Neu: `list_transactions` mit `query` (Teilstring über `to_from`, `purpose`, `payment_reference`, lokal nach Durchlauf des Datumsfensters). Die Antwort nennt
+  gescannte, passende und gelieferte Zahlungen; bei Abbruch nach 20 Seiten `truncated`.
 - Neu: `get_booking_guide` Themen `reverse_charge_drittland` (Eingangsrechnungen ohne USt von Anbietern außerhalb der EU, § 13b Abs. 2 Nr. 1 UStG,
   Buchung mit `19_both_511`, Entscheidungsweg, Muster für bezahlt/privat/offen/0,00-Rechnung/Korrektur), `lieferantenportal_abgleich` (Belegprüfung
   je Lieferant samt Kurs-Ausreißertest und Portalabgleich) und `pfaendung_zahlung_buchen`. Rechtsgrundlagen und ausdrücklich nicht verifizierte Punkte

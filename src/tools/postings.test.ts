@@ -238,6 +238,15 @@ describe("postings tools", () => {
     expect(client.call).toHaveBeenCalledWith("postingsUnconfirmFree", { posting_id_by_customer: 99 });
   });
 
+  it("assign_receipt_to_free_posting accepts the alias free_posting_id_by_customer and requires one id", async () => {
+    const client = mockClient({ success: true });
+    const [, , , , , assignReceiptToFreePosting] = createPostingsTools(client);
+
+    await assignReceiptToFreePosting.handler({ receipt_id_by_customer: 42, free_posting_id_by_customer: 99 });
+    expect(client.call).toHaveBeenCalledWith("postingsAssignReceiptToFreePosting", { receipt_id_by_customer: 42, posting_id_by_customer: 99 });
+    await expect(assignReceiptToFreePosting.handler({ receipt_id_by_customer: 42 })).rejects.toThrow(/posting_id_by_customer is required/);
+  });
+
   it("assign_receipt_to_free_posting calls postingsAssignReceiptToFreePosting", async () => {
     const client = mockClient({ success: true });
     const [, , , , , assignReceiptToFreePosting] = createPostingsTools(client);

@@ -114,4 +114,38 @@ describe("createServer", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({ data: { success: true, message: "" } });
   });
+
+  it("lists ignored top-level parameters as a warning instead of failing", async () => {
+    const client = mockClient({ success: true, rows: 0, data: [] });
+    const mcp = await connectedClient(client);
+
+    const res = (await mcp.callTool({ name: "list_receipts", arguments: { search: "Hudu", list_direction: "inbound", limit: 5 } })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+      structuredContent: { warnings?: string[] };
+    };
+
+    expect(res.isError, JSON.stringify(res.content)).toBeFalsy();
+    expect(res.content.at(-1)?.text).toMatch(/unbekannte Parameter ignoriert: search/);
+    expect(res.structuredContent.warnings?.[0]).toMatch(/search/);
+    const clean = (await mcp.callTool({ name: "list_receipts", arguments: { list_direction: "inbound", limit: 5 } })) as { content: Array<{ text: string }> };
+    expect(clean.content.map((c) => c.text).join(" ")).not.toMatch(/unbekannte Parameter/);
+  });
+
+  it("accepts a number for amount and sends it as a string", async () => {
+    const client = mockClient({ success: true, data: [] });
+    const mcp = await connectedClient(client);
+
+    await mcp.callTool({
+      name: "add_free_postings",
+      arguments: {
+        free_postings: [
+          { date: "2026-03-18", postingtext: "t", amount: 52.33, postingaccount_debit: 4964, postingaccount_credit: 1890, vat: "19_both_511" },
+        ],
+      },
+    });
+
+    const sent = JSON.stringify((client.call as ReturnType<typeof vi.fn>).mock.calls);
+    expect(sent).toContain('"amount":"52.33"');
+  });
 });

@@ -82,4 +82,21 @@ describe("transactions tools", () => {
       transaction_id_by_customer: 7,
     });
   });
+
+  it("list_transactions query sweeps the window, filters locally and reports counts before and after", async () => {
+    const rows = [
+      { id_by_customer: "1", to_from: "Hudu Inc", amount: "-10.00", booking_date: "2026-01-01", purpose: "Abo" },
+      { id_by_customer: "2", to_from: "ACME", amount: "-5.00", booking_date: "2026-01-02", purpose: "HUDU Rechnung 7" },
+      { id_by_customer: "3", to_from: "ACME", amount: "-1.00", booking_date: "2026-01-03", purpose: "Miete" },
+    ];
+    const client = mockClient({ success: true, rows: 3, data: rows });
+    const [listTransactions] = createTransactionsTools(client);
+
+    const result = await listTransactions.handler({ query: "hudu", date_from: "2026-01-01", date_to: "2026-01-31", limit: 20, offset: 0 });
+
+    expect(client.call).toHaveBeenCalledWith("transactionsGet", { date_from: "2026-01-01", date_to: "2026-01-31", limit: 500, offset: 0 });
+    expect(JSON.parse(result.content[0].text).map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["1", "2"]);
+    expect(result.content[1].text).toMatch(/3 transactions scanned.*2 matched, 2 returned/);
+    expect(result.structuredContent?.query_counts).toEqual({ scanned: 3, matched: 2, returned: 2, truncated: false });
+  });
 });

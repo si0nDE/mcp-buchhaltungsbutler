@@ -84,11 +84,16 @@ const ossFieldsShape = {
     .describe('Rate of the destination country on the delivery date, e.g. "20.00". Not needed for vat_oss_deli_eude_19.'),
 };
 
+// BHB verlangt amount als String; eine Zahl (52.33) wird still in einen String mit zwei Nachkommastellen umgewandelt.
+const amountShape = z
+  .union([z.string(), z.number()])
+  .transform((v) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : String(v)));
+
 const splitShape = z.object({
   postingaccount: z.number().int(),
   postingtext: z.string(),
   vat: vatShape,
-  amount: z.string(),
+  amount: amountShape,
   cost_location: z.string().optional(),
   cost_location_two: z.string().optional(),
   ...ossFieldsShape,
@@ -659,7 +664,7 @@ export function createPostingsTools(
   const freePostingEntryShape = z.object({
     date: z.string(),
     postingtext: z.string(),
-    amount: z.string(),
+    amount: amountShape,
     postingaccount_debit: z.number().int(),
     postingaccount_credit: z.number().int(),
     vat: vatShape,
@@ -814,19 +819,27 @@ export function createPostingsTools(
 
   const assignShape = {
     receipt_id_by_customer: z.number().int(),
-    posting_id_by_customer: z.number().int(),
+    posting_id_by_customer: z.number().int().optional(),
+    free_posting_id_by_customer: z.number().int().optional().describe("Alias for posting_id_by_customer."),
   };
 
   const assignReceiptToFreePosting = defineTool({
     name: "assign_receipt_to_free_posting",
     description:
-      "Assign a receipt to an existing free posting. Not for transactions — to assign a receipt to a " +
+      "Assign a receipt to an existing free posting (parameters receipt_id_by_customer and posting_id_by_customer). Not for transactions — to assign a receipt to a " +
       "transaction, use assign_receipts_to_transactions instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: assignShape,
     async handler(args) {
-      const result = await client.call("postingsAssignReceiptToFreePosting", args);
+      const posting = args.posting_id_by_customer ?? args.free_posting_id_by_customer;
+      if (posting === undefined) {
+        throw new Error("posting_id_by_customer is required (the id_by_customer of the free posting; alias free_posting_id_by_customer).");
+      }
+      const result = await client.call("postingsAssignReceiptToFreePosting", {
+        receipt_id_by_customer: args.receipt_id_by_customer,
+        posting_id_by_customer: posting,
+      });
       return ok(result);
     },
   });
