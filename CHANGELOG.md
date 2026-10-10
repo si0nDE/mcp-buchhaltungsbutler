@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Neu: Warnung W1 bei `add_transaction_postings`/`add_free_postings`: ein PDF-Beleg nennt „Reverse-Charge“, „Steuerschuldner des Leistungsempfängers“ oder „§ 13b“, die Buchung trägt aber `vat 0_none`
+  (Hinweis auf 19_both_511/506; Ausnahme Zahlung eines schon auf einem Kreditor gebuchten Belegs). Höchstens 5 PDF-Abrufe je Aufruf, nur Belege mit Textebene, nichts wird geändert.
+  W2 (Lieferantenland) entfällt bewusst: die API liefert kein Land, Anschriften aus dem PDF-Text zu lesen ist zu unzuverlässig.
+
 - Doku: Guide `fremdwaehrung` um Sofortzahlung (tatsächlich abgebuchter Euro-Betrag, Bagatellregel laut Wiki), kreditorische Variante mit SKR03 2660/2150 und den ISO-Code am Beleg ergänzt; `reverse_charge_drittland` nennt das Automatikkonto 3125 | 5925 (Kz 84) als ungeprüfte zweite Route.
 
 - Doku: Guide `reverse_charge_drittland` und `lieferantenportal_abgleich` nennen die Oberflächenoption „Drittland (§ 13b Abs. 2 Nr. 1)“ für Schlüssel 511 und erklären die Kurs-Warnung: BHB setzt den Tageskurs automatisch, am Beleg ist er manuell anpassbar; ein auffälliger Kurs heißt „angepasst oder Rechnung/Kartenumsatz weichen ab“, kein Buchungsfehler an sich.

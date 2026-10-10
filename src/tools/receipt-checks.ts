@@ -1,11 +1,13 @@
 // Warnungen beim Buchen von Zahlungen/freien Buchungen mit Beleg, die ohne Beleg-Volltext und Lieferantenland auskommen:
 //  W4: § 13b-Schlüssel, aber Leistungs-/Belegdatum und Zahlungsdatum liegen in verschiedenen Quartalen oder Jahren. BHB bucht nach
 //      Zahlungsdatum, die Steuer entsteht nach § 13b Abs. 1/2 mit Leistung bzw. Rechnung (spätestens Folgemonat): die Meldeperiode weicht ab.
+//  W1: Beleg nennt Reverse-Charge/§ 13b, die Buchung trägt aber 0_none (nur PDF-Belege mit Textebene, höchstens MAX_TEXT_LOOKUPS je Aufruf).
 //  W3: Fremdwährungsbeleg, dessen Umrechnungskurs mehr als 5 % vom Median der zeitlich nächsten Belege desselben Lieferanten abweicht.
 // Beides sind nur Hinweise: nichts wird geändert oder blockiert, Abruffehler werden verschluckt (dann gibt es keine Warnung).
 // Hintergrund und Grenzen: get_booking_guide reverse_charge_drittland und lieferantenportal_abgleich.
 
 import type { BBClient, BBListResult } from "../bb-client/client.js";
+import { extractReceiptText } from "./receipt-text-extraction.js";
 
 // §13b-Schlüssel der vat-Liste (Sachverhalt 7, Drittland/Andere Leistungen, jeweils auch mit Vorsteueraufteilung).
 const REVERSE_CHARGE_VATS = new Set([
@@ -26,6 +28,9 @@ const MIN_NEIGHBOURS = 3;
 const MAX_NEIGHBOURS = 5;
 // Höchstens so viele Beleg-Abrufe je Toolaufruf (Belege selbst plus Nachbarn).
 const MAX_RECEIPT_LOOKUPS = 24;
+// Höchstens so viele PDF-Abrufe (Dateiinhalt) für die Textsuche je Aufruf.
+const MAX_TEXT_LOOKUPS = 5;
+export const REVERSE_CHARGE_TEXT = /reverse[\s-]*charge|steuerschuldner\s+des\s+leistungsempf(?:ae|ä|a)ngers|steuerschuldnerschaft\s+des\s+leistungsempf(?:ae|ä|a)ngers|§\s*13b/i;
 
 export interface CheckSplit {
   vat: string;
@@ -100,6 +105,8 @@ async function run(client: BBClient, items: CheckItem[]): Promise<string[]> {
     return data;
   };
 
+  const textHits: string[] = [];
+  let textLookups = 0;
   const quarterShifts: string[] = [];
   const outliers: string[] = [];
   const checkedRates = new Set<number>();
@@ -122,6 +129,12 @@ async function run(client: BBClient, items: CheckItem[]): Promise<string[]> {
       const receipt = await getReceipt(id);
       if (!receipt) continue;
 
+      if (split.vat === "0_none" && textLookups < MAX_TEXT_LOOKUPS) {
+        textLookups++;
+        const text = await receiptText(client, id);
+        if (text && REVERSE_CHARGE_TEXT.test(text)) textHits.push(`Beleg ${id} (${item.label})`);
+      }
+
       if (isReverseChargeVat(split.vat) && paymentDate) {
         const serviceDate = receipt.delivery_date ?? receipt.date_delivery ?? receipt.date;
         const qs = serviceDate ? quarterOf(serviceDate) : undefined;
@@ -137,6 +150,13 @@ async function run(client: BBClient, items: CheckItem[]): Promise<string[]> {
     }
   }
 
+  if (textHits.length > 0) {
+    warnings.push(
+      `Der Beleg nennt Reverse-Charge bzw. § 13b, die Buchung trägt aber vat 0_none (${textHits.join("; ")}). Bei einem Anbieter ohne Sitz im Inland und ohne ausgewiesene USt ` +
+        "gehört die Leistung in der Regel unter § 13b (Drittland/Andere Leistungen 19_both_511, EU 19_both_506, Thema reverse_charge_drittland). Ausnahme: der Beleg ist schon " +
+        "auf einem Kreditor gebucht und dies ist nur die Zahlung dazu (0_none ist dort richtig). Nichts wurde geändert."
+    );
+  }
   if (quarterShifts.length > 0) {
     warnings.push(
       `§ 13b: Meldeperiode weicht ab (${quarterShifts.join("; ")}). BHB bucht nach Zahlungsdatum, die Steuer entsteht nach § 13b Abs. 1 mit ` +
@@ -183,4 +203,13 @@ async function rateOutlier(
   const deviation = Math.abs(own / mid - 1);
   if (deviation <= RATE_OUTLIER_THRESHOLD) return undefined;
   return `Beleg ${id}: Kurs ${own} (${receipt.currency_original}), Median der ${rates.length} nächsten Belege ${mid.toFixed(4)}, Abweichung ${(deviation * 100).toFixed(1)} %`;
+}
+
+async function receiptText(client: BBClient, id: number): Promise<string | undefined> {
+  const data = await client
+    .call<{ data?: { file_type?: string; file_content?: string } }>("receiptsGetIdByCustomer", { get_file: true }, { idSuffix: id })
+    .then((r) => r.data)
+    .catch(() => undefined);
+  if (data?.file_type !== "pdf" || !data.file_content) return undefined;
+  return extractReceiptText(data.file_content);
 }

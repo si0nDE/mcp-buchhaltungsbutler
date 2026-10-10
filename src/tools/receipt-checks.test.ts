@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
-import { isReverseChargeVat, median, quarterOf, receiptCheckWarnings } from "./receipt-checks.js";
+import { isReverseChargeVat, median, quarterOf, receiptCheckWarnings, REVERSE_CHARGE_TEXT } from "./receipt-checks.js";
+import * as extraction from "./receipt-text-extraction.js";
 
 // Erfundene Belege eines erfundenen Lieferanten "Beispiel Cloud Inc.".
 type Receipt = Record<string, unknown>;
@@ -82,5 +83,53 @@ describe("W3: Kurs-Ausreißer", () => {
     expect(await receiptCheckWarnings(eur, [{ label: "T", paymentDate: "2026-03-07", splits: [{ vat: "19_pre", receipt_id_by_customer: 9 }] }])).toEqual([]);
     const few = clientFor(Object.fromEntries([usd(1, "2026-01-05", 1.1), usd(9, "2026-03-06", 1.5)]));
     expect(await receiptCheckWarnings(few, [{ label: "T", paymentDate: "2026-03-07", splits: [{ vat: "19_pre", receipt_id_by_customer: 9 }] }])).toEqual([]);
+  });
+});
+
+describe("W1: Beleg nennt Reverse-Charge, Buchung trägt 0_none", () => {
+  it("recognises the typical phrases", () => {
+    for (const t of ["Steuer zahlbar auf Reverse-Charge-Basis", "reverse charge applies", "Steuerschuldner des Leistungsempfängers", "Steuerschuldnerschaft des Leistungsempfaengers", "Leistung nach § 13b UStG"]) {
+      expect(REVERSE_CHARGE_TEXT.test(t), t).toBe(true);
+    }
+    expect(REVERSE_CHARGE_TEXT.test("Rechnung über 10,00 € inkl. 19 % USt")).toBe(false);
+  });
+
+  function pdfClient(text: string | undefined) {
+    vi.spyOn(extraction, "extractReceiptText").mockResolvedValue(text);
+    return {
+      call: vi.fn(async (key: string, params: { get_file?: boolean }, options?: { idSuffix?: number }) => {
+        if (key === "receiptsGetIdByCustomer") {
+          return { success: true, data: params.get_file ? { file_type: "pdf", file_content: "QUJD" } : { date: "2026-03-01", counterparty: "Beispiel Cloud Inc." } };
+        }
+        throw new Error(`unexpected ${key} ${options?.idSuffix}`);
+      }) as BBClient["call"],
+    };
+  }
+
+  it("warns for 0_none and stays silent for other codes, plain text and unreadable PDFs", async () => {
+    const hit = await receiptCheckWarnings(pdfClient("Steuer zahlbar auf Reverse-Charge-Basis"), [
+      { label: "Transaktion 5", paymentDate: "2026-03-02", splits: [{ vat: "0_none", receipt_id_by_customer: 7 }] },
+    ]);
+    expect(hit).toHaveLength(1);
+    expect(hit[0]).toMatch(/vat 0_none \(Beleg 7 \(Transaktion 5\)\).*19_both_511.*Kreditor/);
+
+    expect(await receiptCheckWarnings(pdfClient("Steuer zahlbar auf Reverse-Charge-Basis"), [
+      { label: "T", paymentDate: "2026-03-02", splits: [{ vat: "19_both_511", receipt_id_by_customer: 7 }] },
+    ])).toEqual([]);
+    expect(await receiptCheckWarnings(pdfClient("Rechnung inkl. 19 % USt"), [
+      { label: "T", paymentDate: "2026-03-02", splits: [{ vat: "0_none", receipt_id_by_customer: 7 }] },
+    ])).toEqual([]);
+    expect(await receiptCheckWarnings(pdfClient(undefined), [
+      { label: "T", paymentDate: "2026-03-02", splits: [{ vat: "0_none", receipt_id_by_customer: 7 }] },
+    ])).toEqual([]);
+  });
+
+  it("fetches at most 5 PDFs per call", async () => {
+    const client = pdfClient("Reverse-Charge");
+    const splits = Array.from({ length: 9 }, (_, i) => ({ vat: "0_none", receipt_id_by_customer: 100 + i }));
+    const w = await receiptCheckWarnings(client, [{ label: "T", paymentDate: "2026-03-02", splits }]);
+    const fileCalls = (client.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => (c[1] as { get_file?: boolean }).get_file);
+    expect(fileCalls).toHaveLength(5);
+    expect(w[0].match(/Beleg \d+/g)).toHaveLength(5);
   });
 });
