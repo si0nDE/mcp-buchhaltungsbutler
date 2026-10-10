@@ -14,7 +14,7 @@ describe("candidateKeys", () => {
     const keys = candidateKeys(
       "Abrechnung 2026-10001 vom 16.04.2026 über 1.234,56 EUR, IBAN DE12500105170648489890, USt-IdNr. DE123456789, Nr. 1/23, RE-000123"
     );
-    expect([...keys].sort()).toEqual(["2026-10001", "RE-000123"]);
+    expect([...keys].sort()).toEqual(["000123", "2026-10001"]);
   });
 });
 
@@ -30,6 +30,14 @@ describe("groupByShared", () => {
   it("links by a number shared by few receipts and ignores a number that is in nearly all", () => {
     const groups = groupByShared(docs, 3).map((g) => g.ids).sort();
     expect(groups).toEqual([[1, 2], [3, 4], [5]]);
+  });
+
+  it("links a number with and without a letter prefix (Rechnung KR-2026-10001 to Abrechnung 2026-10001)", () => {
+    const g = groupByShared([
+      { id: 10, text: "Abrechnung / Gutschrift Nr. 2026-10001" },
+      { id: 11, text: "Verwendungszweck: Rechnungsnummer KR-2026-10001 – Anwaltshonorar" },
+    ]);
+    expect(g).toEqual([{ ids: [10, 11], keys: ["2026-10001"] }]);
   });
 
   it("names the shared numbers", () => {
@@ -83,6 +91,32 @@ describe("pair_receipt_family", () => {
     expect(un[3].question).toMatch(/Zu welchem Fall gehört Beleg 3/);
     expect(un[3].gaps[0]).toMatch(/weichen vom Belegbetrag/);
     expect(un[4].reason).toMatch(/Kein Text lesbar/);
+  });
+
+  it("does not report a payment shared by the receipts of a case as a gap", async () => {
+    const c = client({
+      1: { text: "Abrechnung Nr. 2026-10001", amount: "152.00", tx: [{ id_by_customer: 7001, amount: "152.00" }] },
+      2: { text: "Rechnungsnummer KR-2026-10001", amount: "400.00", tx: [{ id_by_customer: 7001, amount: "152.00" }] },
+    });
+    const [tool] = createReceiptFamilyTools(c);
+    const res = parse(await tool.handler({ receipt_ids: [1, 2], max_family_size: 4 }));
+    const r2 = res.cases[0].receipts.find((r: { id_by_customer: number }) => r.id_by_customer === 2);
+    expect(r2.gaps).toBeUndefined();
+    expect(r2.hints[0]).toMatch(/hängt auch an Beleg 1.*Drittzahlung/);
+  });
+
+  it("flags two payments of the same amount on one receipt as a likely wrong assignment, not as Drittzahlung", async () => {
+    const c = client({
+      1: { text: "Abrechnung Nr. 2026-10003", amount: "80.00", tx: [{ id_by_customer: 7001, amount: "80.00" }, { id_by_customer: 7002, amount: "80.00" }] },
+      2: { text: "Rechnungsnummer KR-2026-10003", amount: "388.12", tx: [{ id_by_customer: 7001, amount: "80.00" }] },
+    });
+    const [tool] = createReceiptFamilyTools(c);
+    const res = parse(await tool.handler({ receipt_ids: [1, 2], max_family_size: 4 }));
+    const by = Object.fromEntries(res.cases[0].receipts.map((r: { id_by_customer: number }) => [r.id_by_customer, r]));
+    expect(by[1].gaps[0]).toMatch(/übersteigen den Belegbetrag 80.00.*7001, 7002/);
+    expect(by[1].hints).toBeUndefined();
+    expect(by[2].gaps).toBeUndefined();
+    expect(by[2].hints[0]).toMatch(/Drittzahlung/);
   });
 
   it("is read-only and only reads from BHB", async () => {

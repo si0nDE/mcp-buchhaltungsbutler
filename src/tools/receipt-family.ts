@@ -21,14 +21,19 @@ const AMOUNT = /^\d{1,3}(?:[.,]\d{3})*[.,]\d{2}$|^\d+[.,]\d{2}$/;
 const IBAN = /^[A-Z]{2}\d{2}[A-Z0-9]{10,}$/;
 const VAT_ID = /^[A-Z]{2}\d{8,11}$/;
 
-// Nummern, die einen Fall tragen können: mindestens eine Ziffer, mindestens 6 Zeichen, kein Datum, Betrag, IBAN oder USt-IdNr.
+// Ein Buchstabenpräfix vor der Nummer (Kanzlei: "KR-2026-10001", Käufer: "2026-10001") gehört nicht zur Fallnummer.
+const PREFIX = /^[A-Z]{1,5}[-/]?(?=\d)/;
+
+// Nummern, die einen Fall tragen können: mindestens eine Ziffer, mindestens 6 Zeichen (ohne Buchstabenpräfix), kein Datum,
+// Betrag, IBAN oder USt-IdNr.
 export function candidateKeys(text: string): Set<string> {
   const keys = new Set<string>();
   for (const raw of text.match(TOKEN) ?? []) {
     const t = raw.replace(/[.\-/_]+$/, "").toUpperCase();
     if (t.length < 6 || !/\d/.test(t)) continue;
     if (DATE.test(t) || AMOUNT.test(t) || IBAN.test(t) || VAT_ID.test(t)) continue;
-    keys.add(t);
+    const key = t.replace(PREFIX, "");
+    if (key.length >= 6) keys.add(key);
   }
   return keys;
 }
@@ -104,15 +109,29 @@ export function createReceiptFamilyTools(client: BBClient): [ToolDef] {
         readable.map((id) => ({ id, text: info.get(id)!.text! })),
         args.max_family_size
       );
-      const describe = (id: number) => {
+      const txIds = (id: number) => info.get(id)!.transactions.map((t) => String(t.id_by_customer));
+      const describe = (id: number, caseIds: number[] = [id]) => {
         const { receipt, transactions } = info.get(id)!;
         const amount = Number(receipt.amount);
         const paid = round(transactions.reduce((a, t) => a + Math.abs(Number(t.amount) || 0), 0));
         const gaps: string[] = [];
+        const info_notes: string[] = [];
         if (!receipt.date || String(receipt.date).trim() === "") gaps.push("Beleg ohne Datum");
         if (transactions.length === 0) gaps.push("keine Zahlung zugeordnet");
         else if (Number.isFinite(amount) && Math.abs(paid - Math.abs(amount)) > 0.005) {
-          gaps.push(`Zahlungen ${paid.toFixed(2)} weichen vom Belegbetrag ${Math.abs(amount).toFixed(2)} ab (Sammelzahlung, Skonto, Gebühren?)`);
+          const sharedWith = caseIds.filter((o) => o !== id && txIds(o).some((t) => txIds(id).includes(t)));
+          if (paid > Math.abs(amount) + 0.005) {
+            // Mehr Zahlung als Beleg ist nie die Drittzahlung. Bei gleich hohen Zahlungen ordnet BHB per Betrag zu und kreuzt.
+            gaps.push(
+              `Zahlungen ${paid.toFixed(2)} übersteigen den Belegbetrag ${Math.abs(amount).toFixed(2)}: vermutlich falsche Zuordnung bei gleich hohen Zahlungen (${txIds(id).join(", ")}). Mit get_receipt_transactions prüfen, nicht per Betrag raten.`
+            );
+          } else if (sharedWith.length > 0) {
+            info_notes.push(
+              `Die Zahlung (${paid.toFixed(2)}) hängt auch an Beleg ${sharedWith.join(", ")} des Falls und weicht vom Belegbetrag ${Math.abs(amount).toFixed(2)} ab: bei Drittzahlung/Kostenübernahme erwartet.`
+            );
+          } else {
+            gaps.push(`Zahlungen ${paid.toFixed(2)} weichen vom Belegbetrag ${Math.abs(amount).toFixed(2)} ab (Sammelzahlung, Skonto, Gebühren?)`);
+          }
         }
         return {
           id_by_customer: id,
@@ -123,12 +142,13 @@ export function createReceiptFamilyTools(client: BBClient): [ToolDef] {
           amount: receipt.amount,
           transactions: transactions.map((t) => ({ id_by_customer: t.id_by_customer, date: t.date, amount: t.amount })),
           ...(gaps.length ? { gaps } : {}),
+          ...(info_notes.length ? { hints: info_notes } : {}),
         };
       };
 
       const cases = grouped.filter((g) => g.ids.length > 1).map((g) => ({
         shared_numbers: g.keys,
-        receipts: g.ids.map(describe),
+        receipts: g.ids.map((id) => describe(id, g.ids)),
         ...(g.ids.length > args.max_family_size ? { note: "Gruppe größer als max_family_size: Schlüssel nicht eindeutig, bitte prüfen." } : {}),
       }));
       const single = grouped.filter((g) => g.ids.length === 1).map((g) => g.ids[0]);
