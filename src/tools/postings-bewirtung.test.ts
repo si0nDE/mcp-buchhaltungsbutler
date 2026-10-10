@@ -119,7 +119,8 @@ describe("audit comment length (BHB: comment_text 2-210 characters)", () => {
         },
       ],
     } as never);
-    expect(vi.mocked(c.call).mock.calls.map((x) => x[0])).toEqual(["postingsAddBatchTransactions", "commentsAdd"]);
+    // transactionsGet: Cashback-Prüfung vor dem Buchen (nur lesend).
+    expect(vi.mocked(c.call).mock.calls.map((x) => x[0])).toEqual(["transactionsGet", "postingsAddBatchTransactions", "commentsAdd"]);
     const data = result.structuredContent!.data as { warnings?: string[] };
     expect(data.warnings?.join(" ")).toMatch(/Kommentar.*705/);
     expect(data.warnings?.join(" ")).toMatch(/gebucht/);

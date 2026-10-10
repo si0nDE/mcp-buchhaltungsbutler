@@ -2,19 +2,41 @@ import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
 import { assertTransactionEntry } from "./bhb-systematik.js";
-import { defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+import { cashbackHint, cashbackHintText, cashbackUnconfirmedText, resolveCashback } from "./cashback.js";
+import { getChart } from "./posting-accounts.js";
+import { type CallToolResult, defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const QUERY_SWEEP_PAGE_SIZE = 500;
 const QUERY_SWEEP_MAX_PAGES = 20;
 
 const SUMMARY_FIELDS = ["id_by_customer", "to_from", "amount", "booking_date", "purpose"] as const;
+const QUERY_FIELDS = ["to_from", "purpose", "payment_reference"];
+
+// Erkannte Sonderfälle (bisher: PayPal-Cashback) als Textblock und structuredContent.booking_hints anhängen.
+// Die Liste liefert type nicht: Kandidaten schlägt resolveCashback einzeln nach (höchstens 25 Abfragen je Aufruf).
+async function withCashbackHint(client: BBClient, response: CallToolResult, rows: Record<string, unknown>[]): Promise<CallToolResult> {
+  const { confirmed, unconfirmed } = await resolveCashback(client, rows);
+  if (unconfirmed.length > 0) response.content.push({ type: "text", text: cashbackUnconfirmedText(unconfirmed) });
+  if (confirmed.length === 0) return response;
+  const chart = await getChart(client).catch(() => "unknown" as const);
+  response.content.push({ type: "text", text: cashbackHintText(confirmed, chart) });
+  response.structuredContent = {
+    ...response.structuredContent,
+    booking_hints: [{ ...cashbackHint(confirmed, chart), ...(unconfirmed.length ? { unconfirmed_ids: unconfirmed } : {}) }],
+  };
+  return response;
+}
 
 export function createTransactionsTools(
   client: BBClient
 ): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
   const listShape = {
-    id_by_customer_from: z.number().int().optional(),
-    id_by_customer_to: z.number().int().optional(),
+    id_by_customer_from: z
+      .number()
+      .int()
+      .optional()
+      .describe("Exclusive lower bound (observed live: from 100 to 105 returns 101-104; from = to returns nothing)."),
+    id_by_customer_to: z.number().int().optional().describe("Exclusive upper bound, see id_by_customer_from."),
     date_from: z.string().optional(),
     date_to: z.string().optional(),
     account: z.number().int().optional(),
@@ -39,7 +61,10 @@ export function createTransactionsTools(
     name: "list_transactions",
     description:
       "List bank/cash transactions, with optional filters. Without query, limit/offset apply to the API page. query searches to_from, purpose and " +
-      "payment_reference as a substring (the API filters, to_from included, are exact); the answer reports scanned/matched counts.",
+      "payment_reference as a substring (the API filters, to_from included, are exact); the answer reports scanned/matched counts. " +
+      "The list does not carry the Zahlungsart (type, only get_transaction has it). Recognised special cases come as booking_hints with " +
+      "the booking to use: PayPal Business Debit cashback (positive payment from 'PayPal Inc Debit Card', confirmed by looking up type " +
+      "\"Cash Back Bonus\" per payment; find them with query \"PayPal Inc Debit Card\").",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
@@ -51,7 +76,7 @@ export function createTransactionsTools(
           limit: limit ?? 20,
           offset: offset ?? 0,
         });
-        return ok(trimList(result.data, SUMMARY_FIELDS, full ?? false));
+        return withCashbackHint(client, ok(trimList(result.data, SUMMARY_FIELDS, full ?? false)), result.data);
       }
       const needle = query.toLowerCase();
       const all: Record<string, unknown>[] = [];
@@ -67,7 +92,7 @@ export function createTransactionsTools(
         if (page === QUERY_SWEEP_MAX_PAGES - 1) truncated = true;
       }
       const matched = all.filter((r) =>
-        ["to_from", "purpose", "payment_reference"].some((f) => typeof r[f] === "string" && (r[f] as string).toLowerCase().includes(needle))
+        QUERY_FIELDS.some((f) => typeof r[f] === "string" && (r[f] as string).toLowerCase().includes(needle))
       );
       const page = matched.slice(offset ?? 0, (offset ?? 0) + (limit ?? 20));
       const counts = { scanned: all.length, matched: matched.length, returned: page.length, truncated };
@@ -78,7 +103,7 @@ export function createTransactionsTools(
           `query "${query}": ${counts.scanned} transactions scanned in the date window, ${counts.matched} matched, ${counts.returned} returned` +
           (truncated ? `. Sweep stopped after ${QUERY_SWEEP_MAX_PAGES} pages: matches may be missing, narrow date_from/date_to.` : "."),
       });
-      return response;
+      return withCashbackHint(client, response, page);
     },
   });
 
@@ -86,13 +111,14 @@ export function createTransactionsTools(
 
   const getTransaction = defineTool({
     name: "get_transaction",
-    description: "Get a single transaction by its id_by_customer.",
+    description:
+      "Get a single transaction by its id_by_customer. A recognised special case (PayPal Business Debit cashback) comes with booking_hints.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: getShape,
     async handler(args) {
-      const result = await client.call("transactionsGetIdByCustomer", {}, { idSuffix: args.id_by_customer });
-      return ok(result);
+      const result = await client.call<{ data?: Record<string, unknown> }>("transactionsGetIdByCustomer", {}, { idSuffix: args.id_by_customer });
+      return withCashbackHint(client, ok(result), result?.data ? [result.data] : []);
     },
   });
 

@@ -406,6 +406,41 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     konnektor: ["add_free_postings, add_transaction_postings, add_receipt_postings (dry_run: true zeigt die Warnung ohne Buchung), cancel_posting."],
   },
   {
+    id: "paypal_cashback",
+    titel: "Cashback der PayPal Business Debit Mastercard (Zahlungsart \"Cash Back Bonus\")",
+    quelle:
+      "Übergabe des Teams (10.10.2026): Zahlungen am PayPal-Konto beobachtet, § 17 UStG auf gesetze-im-internet.de, Payback-Linie (BFH V R 42/17), " +
+      "PayPal-Kartenbedingungen vom 24.10.2024. Kein BHB-Artikel, kein BMF-Schreiben und kein Urteil zu genau diesem Fall, keine Steuerberatung. " +
+      "Quellen und offene Punkte: docs/rechtsgrundlagen-paypal-cashback.md",
+    regeln: [
+      "Erkennen: eigene Zahlung auf dem PayPal-Konto mit to_from 'PayPal Inc Debit Card', type 'Cash Back Bonus', positivem Betrag (Cent-Beträge) und der PayPal-Transaktions-ID als purpose. Die Liste (list_transactions) liefert type nicht, nur get_transaction: list_transactions schlägt positive Zahlungen von 'PayPal Inc Debit Card' deshalb einzeln nach (höchstens 25 je Aufruf, Rest als unconfirmed_ids) und meldet bestätigte als booking_hints (kind paypal_cashback). Suchen mit query 'PayPal Inc Debit Card', nicht 'Cash Back'.",
+      "Umsatzsteuer: nicht steuerbar, vat 0_none. PayPal zahlt das Cashback für die Kartennutzung, der Karteninhaber erbringt dafür keine Leistung (kein Leistungsaustausch). Keine Entgeltminderung des Einkaufs nach § 17 Abs. 1 UStG: der Händler gewährt nichts, PayPal steht nicht in der Lieferkette. Die Vorsteuer der Einkäufe bleibt unverändert.",
+      "Abgrenzung Payback: dort finanziert der Partnerhändler die Punkte, deshalb sieht die Finanzverwaltung beim Einlösen eine Entgeltminderung beim Händler, und ein unternehmerischer Kunde berichtigt seine Vorsteuer (BFH V R 42/17, § 17 Abs. 1 S. 2 UStG). Beim Karten-Cashback zahlt kein Händler.",
+      "Selbst wenn man das Cashback als Preisnachlass auf PayPals eigene Zahlungsdienste sähe: die sind steuerfrei (§ 4 Nr. 8 UStG), es gab keine Vorsteuer, also nichts zu berichtigen. Das Ergebnis 0_none hängt nicht an der Begründung.",
+      "Ertragsteuer: Betriebseinnahme. EÜR bei Gutschrift auf dem PayPal-Konto (§ 11 EStG), also am Buchungsdatum der Zahlung. Bilanzierer: Cashback für Dezember-Zahlungen, das erst im Januar kommt, ist streng genommen eine Forderung zum 31.12.; bei 0,5 % meist unwesentlich, mit dem Steuerberater klären.",
+      "Getrennt als Ertrag buchen (Bruttoprinzip), nicht gegen das Aufwandskonto des Einkaufs verrechnen: das verzerrt die Aufwandskonten und sieht aus wie eine Entgeltminderung, also wie der Fall mit Vorsteuerkorrektur.",
+    ],
+    buchungen: [
+      "Konto: Sonstige Erträge 2700 | 4830, vat 0_none, kein Beleg (Nachweis ist die Zahlung im PayPal-Konto). Buchungstext konstant 'PayPal Business Debit Cashback'; BHB hängt den Gegenpartner selbst an (Thema buchungstexte).",
+      "Beispiel (Beispiel des Konnektors): {\"transactions\":[{\"transaction_id_by_customer\":1001,\"splits\":[{\"amount\":\"1.23\",\"postingaccount\":2700,\"postingtext\":\"PayPal Business Debit Cashback\",\"vat\":\"0_none\"}]}]} an add_transaction_postings.",
+      "Mehrere Cashbacks: ein Eintrag je Zahlung in einem Aufruf (transactions[]), erst einen buchen und im Kontenblatt prüfen, dann den Rest.",
+    ],
+    ablauf: [
+      "1. list_transactions mit query 'PayPal Inc Debit Card' und Datumsfenster (oder account = PayPal-Konto) - booking_hints nennt die bestätigten IDs; unconfirmed_ids mit get_transaction nachsehen.",
+      "2. Prüfen, ob schon gebucht (get_account_ledger auf 2700 | 4830, Pflicht: postingaccount_number, date_from, date_to).",
+      "3. add_transaction_postings mit dry_run: true; die Antwort warnt, wenn bei einer Cashback-Zahlung Konto, vat oder Text abweichen. Dann ohne dry_run buchen.",
+    ],
+    achtung: [
+      "Rechtslage nicht abschließend geklärt: kein BMF-Schreiben, kein BFH-Urteil zu Cashback des Kartenherausgebers. Die Einordnung folgt aus § 17 UStG und der Payback-Abgrenzung. Einmal vom Steuerberater bestätigen lassen; verbindlich sind Finanzamt oder Steuerberater.",
+      "Satz und Takt laut PayPal-Bedingungen (24.10.2024): 0,5 % auf den Nettobetrag berechtigter Kartenzahlungen (abzüglich PayPal-Gebühren), wöchentliche Gutschrift, befristete Aktionen mit höherem Satz möglich. Vor einer Aussage an Kunden die aktuellen Bedingungen prüfen.",
+      "Erkennung nur an type und to_from. Andere Cashback-Programme (Händler-Cashback, Cashback-Portale, Kreditkarten anderer Herausgeber) sind damit nicht abgedeckt: dort kann der Zahlende in der Lieferkette stehen und § 17 UStG greifen. Einzeln prüfen.",
+      "Private Kartenzahlungen eines Einzelunternehmers: Cashback darauf ist nicht betrieblich veranlasst. Bei gemischter Nutzung den Nutzer fragen, nicht selbst aufteilen.",
+    ],
+    konnektor: [
+      "list_transactions (query, booking_hints), get_transaction, add_transaction_postings (dry_run, Warnung bei abweichendem Konto/vat/Text), get_account_ledger.",
+    ],
+  },
+  {
     id: "lieferantenportal_abgleich",
     titel: "Alle Belege eines wiederkehrenden Lieferanten prüfen und mit dessen Rechnungsportal abgleichen",
     quelle: "Übergabe des Teams (09.10.2026): Prüfsitzung zu einem Auslands-SaaS-Anbieter, Beispielwerte. Kein BHB-Artikel",
@@ -884,7 +919,7 @@ export function createBookingGuideTools(): [ToolDef] {
       "Privateinlagen, Ist-Versteuerer mit Debitoren, Differenzbesteuerung, Amazon, 5,5 %/10,7 %, Gutschrift verrechnen, " +
       "Skonto, Dreiecksgeschäft, EU-Neufahrzeug, Geldtransit (Kasse/Bank/PayPal/Kreditkarte), Prepaid-Guthaben, Lohn, " +
       "Mehrwertsteuersenkung 2020, Storno/Rücklastschrift, Trinkgeld, Split/Saldierung, OSS, Umsatzsteuer in anderem Land, " +
-      "Fremdwährung, Investitionsabzugsbetrag. Die Steuerschlüssel (vat: 19_pre, 19_vat, 0_none, ...) sind kein Thema, sondern stehen am Parameter vat der add_*_postings-Tools. Außerdem Verfahren und Best Practices: erste_schritte (Bilanzierer vs. EÜR), wechsel_zu_bhb (Typen A-E, Anfangsbestände, Lexware-Export), monatsabschluss (siehe check_month_end), automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse. Weitere Verfahren und Regeln: festgeschriebene_loeschen, belege_upload_matching, eigenbeleg, debitoren_kreditoren_logik, ust_va_zm, auswertungen, konten_einrichtung, einstellungen_aendern, rechnungen_erstellen, kostenstellen, paket_und_limits, bilanz_integritaet, zahlungen_probleme. Anlagevermögen erfassen: anlagen_browser (Ablauf in der Weboberfläche, kein API-Weg). Belege prüfen und Belegdaten korrigieren: belegpruefung (nur Weboberfläche, kein API-Weg). Jeder Eintrag ist vor dem Buchen mit dem Steuerberater abzustimmen, wenn der " +
+      "Fremdwährung, Investitionsabzugsbetrag, PayPal-Cashback (paypal_cashback). Die Steuerschlüssel (vat: 19_pre, 19_vat, 0_none, ...) sind kein Thema, sondern stehen am Parameter vat der add_*_postings-Tools. Außerdem Verfahren und Best Practices: erste_schritte (Bilanzierer vs. EÜR), wechsel_zu_bhb (Typen A-E, Anfangsbestände, Lexware-Export), monatsabschluss (siehe check_month_end), automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse. Weitere Verfahren und Regeln: festgeschriebene_loeschen, belege_upload_matching, eigenbeleg, debitoren_kreditoren_logik, ust_va_zm, auswertungen, konten_einrichtung, einstellungen_aendern, rechnungen_erstellen, kostenstellen, paket_und_limits, bilanz_integritaet, zahlungen_probleme. Anlagevermögen erfassen: anlagen_browser (Ablauf in der Weboberfläche, kein API-Weg). Belege prüfen und Belegdaten korrigieren: belegpruefung (nur Weboberfläche, kein API-Weg). Jeder Eintrag ist vor dem Buchen mit dem Steuerberater abzustimmen, wenn der " +
       "Fall nicht eindeutig ist; Kontonummern ohne SKR04-Angabe per list_posting_accounts nachschlagen.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,

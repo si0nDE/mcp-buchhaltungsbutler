@@ -14,6 +14,7 @@ import { vatWarnings } from "./vat-hints.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { postingtextWarnings } from "./postingtext.js";
 import { thirdPartyPaymentWarnings } from "./third-party-payment.js";
+import { cashbackPostingWarnings, fetchCashbackIds } from "./cashback.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -648,6 +649,11 @@ export function createPostingsTools(
           entertainmentMatch: entertainmentMatches[i],
         }))
       );
+      const cashbackIds = await fetchCashbackIds(client, args.transactions.map((e) => e.transaction_id_by_customer));
+      const cashbackWarnings =
+        cashbackIds.size === 0
+          ? []
+          : cashbackPostingWarnings(args.transactions, cashbackIds, await getChart(client).catch(() => "unknown" as const));
       if (args.dry_run) {
         return dryRunResult(
           client,
@@ -656,11 +662,17 @@ export function createPostingsTools(
           args.transactions.flatMap((e) =>
             e.splits.map((s) => ({ account: s.postingaccount, vat: s.vat, label: `Transaktion ${e.transaction_id_by_customer}` }))
           ),
-          { commentJobs, hints, postingtexts: args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext)) }
+          {
+            commentJobs,
+            hints,
+            postingtexts: args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext)),
+            extraWarnings: cashbackWarnings,
+          }
         );
       }
       const result = await withBookingHints(() => client.call("postingsAddBatchTransactions", { transactions }));
       const warnings = [
+        ...cashbackWarnings,
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingaccount))),
         ...postingtextWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext))),

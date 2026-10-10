@@ -265,6 +265,9 @@ export const SERVER_INSTRUCTIONS = [
     "'Kontostand berechnen'.",
   "- Special cases (Skonto, Geldtransit between payment accounts, Auslagen, RAP, Differenzbesteuerung, OSS, foreign " +
     "currency, Lohn, Stornos, ...): call get_booking_guide first - it holds BHB's documented booking rules and accounts.",
+  "- PayPal Business Debit cashback (to_from 'PayPal Inc Debit Card', type 'Cash Back Bonus'): one split on Sonstige Erträge " +
+    "2700 | 4830, vat 0_none, no receipt, text 'PayPal Business Debit Cashback' - not steuerbar, no Vorsteuer correction " +
+    "(get_booking_guide paypal_cashback). list_transactions/get_transaction flag it as booking_hints.",
   "- Transfers between Zahlungskonten are never booked directly: both sides go against Geldtransit 1360 | 1460. Skonto " +
     "is a negative split with the receipt's tax rate on the settling payment, never a reduced receipt.",
   "- Fixed (festgeschrieben) postings are corrected by a reversal posting (cancel_posting does this only for ids the user " +

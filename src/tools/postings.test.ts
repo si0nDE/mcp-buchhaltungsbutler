@@ -177,7 +177,7 @@ describe("postings tools", () => {
 
     await addTransactionPostings.handler({ transactions: [{ transaction_id_by_customer: 5, splits }] });
 
-    const sent = (client.call as ReturnType<typeof vi.fn>).mock.calls[0][1].transactions[0];
+    const sent = (client.call as ReturnType<typeof vi.fn>).mock.calls.find((c) => c[0] === "postingsAddBatchTransactions")![1].transactions[0];
     expect(sent.amounts).toEqual(["119.00", "238.00", "12.50", "30.00"]);
     expect(sent.amounts.reduce((a: number, b: string) => a + Number(b), 0)).toBeCloseTo(399.5, 2);
     expect(sent.oi_receipts_ids_by_customer).toEqual([11, 12, null, null]);
@@ -964,7 +964,9 @@ describe("postings tools: compact, hints, free posting + receipt", () => {
       expect(res).toMatchObject({ dry_run: true, written: false, would_send: { endpoint: "postingsAddBatchTransactions" } });
       expect(res.would_send.body.transactions[0].vats).toEqual(["19_vat"]);
       expect(res.warnings[0]).toMatch(/19_vat.*4950.*19_pre/);
-      expect((client.call as ReturnType<typeof vi.fn>).mock.calls.every((c) => c[0] === "settingsGetPostingaccounts")).toBe(true);
+      expect(
+        (client.call as ReturnType<typeof vi.fn>).mock.calls.every((c) => ["settingsGetPostingaccounts", "transactionsGet"].includes(c[0]))
+      ).toBe(true);
     });
 
     it("has no warning for the right code", async () => {
