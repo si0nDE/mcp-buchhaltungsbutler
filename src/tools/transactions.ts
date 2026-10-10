@@ -66,7 +66,7 @@ export function createTransactionsTools(
     booked: z
       .boolean()
       .optional()
-      .describe("true: only booked transactions, false: only open ones. Sweeps all pages of the date window like query; implies with_posting_status."),
+      .describe("true: only booked transactions, false: only open ones (transactions with unknown status, booked null after a cut-off sweep, stay in both). Sweeps all pages of the date window like query; implies with_posting_status."),
   };
 
   const listTransactions = defineTool({
@@ -115,7 +115,10 @@ export function createTransactionsTools(
       let fieldsOut: readonly string[] = SUMMARY_FIELDS;
       if (booked !== undefined || with_posting_status) {
         const st = await attachPostingStatus(client, matched);
-        matched = booked === undefined ? st.rows : st.rows.filter((r) => (r.posting_status as { booked: boolean }).booked === booked);
+        matched = booked === undefined ? st.rows : st.rows.filter((r) => {
+            const b = (r.posting_status as { booked: boolean | null }).booked;
+            return b === null || b === booked; // unknown stays in both filters
+          });
         statusNote = postingStatusNote(st.scanned, st.truncated);
         fieldsOut = [...SUMMARY_FIELDS, "posting_status"];
       }

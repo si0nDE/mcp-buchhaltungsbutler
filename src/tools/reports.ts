@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { compactRows, compactShape } from "../formatting/compact.js";
+import { TAX_ACCOUNTS } from "./vat-preview.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const BASE_GUIDE =
@@ -19,6 +20,12 @@ const LEDGER_CHECK_FIELDS = [
   "counterRecordPostingaccountNumber",
   "postingTextFull",
   "vatRate",
+  // How the posting was taxed. The code passed when booking (19_vat, 19_pre, ...) is not echoed by BHB; these fields are what
+  // it stores: tax_key_effective (e.g. 101 on a 19 % revenue line) and the tax account(s) the line posts its tax to.
+  "tax_key",
+  "tax_key_effective",
+  "vatPostingaccountNumbers",
+  "is_tax_line",
   "receipts_id_by_customer",
   // Free postings with an assigned receipt carry it ONLY here (receipts_id_by_customer is null; confirmed live).
   "receiptsAssignedFilenamesServerPlain",
@@ -108,7 +115,7 @@ export function createReportsTools(client: BBClient): [ToolDef, ToolDef, ToolDef
     name: "get_account_ledger",
     description:
       "Kontenblatt of ONE posting account for a period, built on the fly (no create_report needed; may take a while for " +
-      "an account with many postings). Entries are compact by default (check set: id, date, side, amount, counter account, text, vat rate, receipt ids and assigned receipt file names, transaction ids, " +
+      "an account with many postings). Entries are compact by default (check set: id, date, side, amount, counter account, text, vat rate, tax_key/tax_key_effective/vatPostingaccountNumbers (how BHB stored the tax; the booking code itself is not echoed), is_tax_line (line on a USt/VSt account), receipt ids and assigned receipt file names, transaction ids, " +
       "reversal ids, balance; fields: [...] picks other fields, compact: false returns the raw rows). Take account numbers from get_report type sums. With base " +
       "date_delivery_else_date postings follow the Leistungsdatum; the default is the Buchungsdatum.",
     annotations: { readOnlyHint: true, destructiveHint: false },
@@ -128,6 +135,13 @@ export function createReportsTools(client: BBClient): [ToolDef, ToolDef, ToolDef
       );
       const ledger = result.report_sums_postingaccount_ledger;
       if (!ledger || !Array.isArray(ledger.postingaccountLedger)) return ok(result);
+      // Lines on a USt/VSt account itself carry no vatRate and no tax account; mark them so they are not read as untaxed.
+      const isTaxAccount = TAX_ACCOUNTS.some((a) => a.skr03 === params.postingaccount_number || a.skr04 === params.postingaccount_number);
+      if (isTaxAccount) {
+        ledger.postingaccountLedger = ledger.postingaccountLedger.map((r: unknown) =>
+          r !== null && typeof r === "object" ? { ...(r as Record<string, unknown>), is_tax_line: true } : r
+        );
+      }
       return ok({
         ...result,
         report_sums_postingaccount_ledger: {

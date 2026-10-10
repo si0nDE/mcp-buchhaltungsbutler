@@ -139,3 +139,23 @@ describe("posting status on transactions", () => {
     expect(JSON.parse(result.content[0].text).data.posting_status.booked).toBe(true);
   });
 });
+
+describe("posting status when the sweep is cut off", () => {
+  it("returns booked null for transactions without a seen posting, true for found ones", async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => ({ id_by_customer: String(i), transaction_id_by_customer: i === 0 ? "5001" : null, fixed: "0" }));
+    const c = {
+      call: vi.fn(async (key: string) =>
+        key === "postingsGet"
+          ? { data: full }
+          : { data: [
+              { id_by_customer: "5001", to_from: "A", amount: "1", booking_date: "2026-03-03", purpose: "" },
+              { id_by_customer: "5002", to_from: "B", amount: "1", booking_date: "2026-03-03", purpose: "" },
+            ] }
+      ),
+    } as unknown as BBClient;
+    const [list] = createTransactionsTools(c);
+    const rows = JSON.parse((await list.handler({ with_posting_status: true })).content[0].text);
+    expect(rows[0].posting_status.booked).toBe(true);
+    expect(rows[1].posting_status.booked).toBeNull();
+  });
+});

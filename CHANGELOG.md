@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix: `posting_status.booked` ist `null` (unbekannt), wenn der Durchlauf der Buchungen abgebrochen wurde und zu einem Umsatz keine Buchung gesehen wurde; vorher `false`. Bei `list_transactions` mit `booked` bleiben solche Umsätze in beiden Filtern, damit eine mögliche Doppelbuchung nicht als „offen“ durchgeht.
+- Neu: `get_account_ledger` liefert im Standardsatz `tax_key`, `tax_key_effective` und `vatPostingaccountNumbers` (wie BHB die Steuer gespeichert hat) und markiert Zeilen auf USt-/VSt-Konten mit `is_tax_line: true`. Ein `vat_code` (19_vat usw.) wird bewusst nicht abgeleitet: BHB gibt den beim Buchen übergebenen Code nicht zurück, die Zuordnung Schlüssel ↔ Code ist nur für 101 ↔ 19_vat beobachtet.
+
 - Neu: Buchungsstatus je Bankumsatz. `get_transaction` liefert `posting_status` {booked, posting_ids, splits, fixed}; `list_transactions` mit `with_posting_status` ebenso, mit `booked: true|false` filtert es auf gebuchte bzw. offene Umsätze (Durchlauf des ganzen Datumsfensters wie bei `query`). Quelle ist ein Durchlauf von `postingsGet` über die Datumsspanne der Umsätze (Buchungen tragen `transaction_id_by_customer` und das Umsatzdatum, live geprüft); bei Abbruch nach 10 Seiten steht der Hinweis, dass `booked: false` falsch sein kann.
 - Neu: `list_postings` mit `transaction_id_by_customer` und `receipt_id_by_customer` (lokaler Filter nach Durchlauf des Datumsfensters; Antwort nennt gescannte und passende Buchungen). Für `get_account_ledger` nicht möglich: die Kontenblatt-Zeilen tragen keine Umsatz-ID.
 - Neu: `list_receipts` mit `invoicenumbers` (bis 20 Nummern, je Nummer und Richtung ein paralleler Abruf, `list_direction: both` deckt „any“ ab); Nummern ohne Treffer stehen in `missing_invoicenumbers`.

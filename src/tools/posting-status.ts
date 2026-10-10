@@ -4,7 +4,8 @@ const PAGE_SIZE = 1000;
 const MAX_PAGES = 10;
 
 export interface PostingStatus {
-  booked: boolean;
+  // null = unknown: the sweep was cut off and no posting for this transaction was seen.
+  booked: boolean | null;
   posting_ids: string[];
   splits: number;
   fixed: boolean;
@@ -48,7 +49,7 @@ export async function attachPostingStatus(
     rows: rows.map((r) => {
       const ps = byTx.get(String(r.id_by_customer)) ?? [];
       const posting_status: PostingStatus = {
-        booked: ps.length > 0,
+        booked: ps.length > 0 ? true : truncated ? null : false,
         posting_ids: ps.map((p) => String(p.id_by_customer)),
         splits: ps.length,
         fixed: ps.length > 0 && ps.every((p) => String(p.fixed) === "1"),
@@ -63,6 +64,6 @@ export async function attachPostingStatus(
 export function postingStatusNote(scanned: number, truncated: boolean): string {
   return (
     `posting_status: ${scanned} postings scanned over the transactions' date span` +
-    (truncated ? `; sweep stopped after ${MAX_PAGES} pages, "booked": false may be wrong - narrow the date window.` : ".")
+    (truncated ? `; sweep stopped after ${MAX_PAGES} pages, transactions without a posting seen come back as booked: null (unknown) - narrow the date window.` : ".")
   );
 }

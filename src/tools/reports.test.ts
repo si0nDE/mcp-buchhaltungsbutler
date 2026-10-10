@@ -105,4 +105,20 @@ describe("get_account_ledger compact", () => {
     const res = parse(await getAccountLedger.handler({ postingaccount_number: 4950, date_from: "2026-01-01", date_to: "2026-12-31" }));
     expect(res.report_sums_postingaccount_ledger.postingaccountLedger).toEqual([{ date: "2026-02-25", record_amount: "84.03" }]);
   });
+
+  it("keeps the stored tax fields and marks lines on a tax account", async () => {
+    const mk = (n: number) =>
+      mockClient({
+        success: true,
+        report_sums_postingaccount_ledger: {
+          postingaccount_number: n,
+          postingaccountLedger: [{ date: "2026-03-03", record_amount: "38.00", tax_key: "0", tax_key_effective: "101", vatPostingaccountNumbers: [1776] }],
+        },
+      });
+    const rev = parse(await createReportsTools(mk(8400))[2].handler({ postingaccount_number: 8400, date_from: "2026-03-03", date_to: "2026-03-03" }));
+    expect(rev.report_sums_postingaccount_ledger.postingaccountLedger[0]).toMatchObject({ tax_key_effective: "101", vatPostingaccountNumbers: [1776] });
+    expect(rev.report_sums_postingaccount_ledger.postingaccountLedger[0].is_tax_line).toBeUndefined();
+    const tax = parse(await createReportsTools(mk(1776))[2].handler({ postingaccount_number: 1776, date_from: "2026-03-03", date_to: "2026-03-03" }));
+    expect(tax.report_sums_postingaccount_ledger.postingaccountLedger[0].is_tax_line).toBe(true);
+  });
 });
