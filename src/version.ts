@@ -1,6 +1,6 @@
 // CalVer yyyy.mm.dd.count (count = running number of releases on that day).
 // Maintained by `npm run release` (scripts/release.ts); do not edit by hand.
-export const VERSION = "2026.10.10.022";
+export const VERSION = "2026.10.10.023";
 
 export const GITHUB_REPO = "si0nDE/mcp-buchhaltungsbutler";
 
