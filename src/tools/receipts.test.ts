@@ -369,3 +369,20 @@ describe("get_receipt_overview", () => {
     expect(res.postings_period).toEqual({ date_from: "2026-01-01", date_to: "2027-12-31" });
   });
 });
+
+describe("list_receipts invoicenumbers", () => {
+  it("looks up several numbers in both directions and names the ones without a hit", async () => {
+    const client = {
+      call: vi.fn(async (_k: string, p: { invoicenumber: string; list_direction: string }) => ({
+        data: p.invoicenumber === "RE-1" && p.list_direction === "outbound" ? [receipt("1", "Kunde")] : [],
+      })),
+    } as unknown as BBClient;
+    const [listReceipts] = createReceiptsTools(client);
+    const result = await listReceipts.handler({ list_direction: "both", invoicenumbers: ["RE-1", "RE-X"] });
+    const rows = JSON.parse(result.content[0].text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].list_direction).toBe("outbound");
+    expect(result.structuredContent?.missing_invoicenumbers).toEqual(["RE-X"]);
+    expect(client.call).toHaveBeenCalledTimes(4);
+  });
+});

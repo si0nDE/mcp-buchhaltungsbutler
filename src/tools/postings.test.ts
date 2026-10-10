@@ -1023,3 +1023,23 @@ describe("postings tools: compact, hints, free posting + receipt", () => {
     });
   });
 });
+
+describe("list_postings filters by transaction and receipt", () => {
+  const data = [
+    { id_by_customer: "1", transaction_id_by_customer: "5001", receipts_assigned_ids_by_customer: "9001", amount: "238.00" },
+    { id_by_customer: "2", transaction_id_by_customer: "5001", receipts_assigned_ids_by_customer: "9003,9004", amount: "-11.90" },
+    { id_by_customer: "3", transaction_id_by_customer: "5002", receipts_assigned_ids_by_customer: "", amount: "5.00" },
+  ];
+
+  it("keeps only the postings of one transaction", async () => {
+    const [listPostings] = createPostingsTools(mockClient({ data }));
+    const result = await listPostings.handler({ date_from: "2026-03-03", date_to: "2026-03-03", transaction_id_by_customer: 5001 });
+    expect(JSON.parse(result.content[0].text).map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["1", "2"]);
+  });
+
+  it("matches a receipt inside a comma separated assignment list", async () => {
+    const [listPostings] = createPostingsTools(mockClient({ data }));
+    const result = await listPostings.handler({ date_from: "2026-03-03", date_to: "2026-03-03", receipt_id_by_customer: 9004 });
+    expect(JSON.parse(result.content[0].text).map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["2"]);
+  });
+});

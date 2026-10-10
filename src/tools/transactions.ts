@@ -4,6 +4,7 @@ import { trimList } from "../formatting/trim.js";
 import { assertTransactionEntry } from "./bhb-systematik.js";
 import { cashbackHint, cashbackHintText, cashbackUnconfirmedText, resolveCashback } from "./cashback.js";
 import { getChart } from "./posting-accounts.js";
+import { attachPostingStatus, postingStatusNote } from "./posting-status.js";
 import { type CallToolResult, defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const QUERY_SWEEP_PAGE_SIZE = 500;
@@ -55,6 +56,17 @@ export function createTransactionsTools(
     limit: z.number().int().max(500).default(20),
     offset: z.number().int().default(0),
     full: z.boolean().default(false),
+    with_posting_status: z
+      .boolean()
+      .optional()
+      .describe(
+        "Add posting_status {booked, posting_ids, splits, fixed} per transaction (one sweep of postings over the rows' date span). " +
+          "Use before booking: the API has no booking flag on transactions."
+      ),
+    booked: z
+      .boolean()
+      .optional()
+      .describe("true: only booked transactions, false: only open ones. Sweeps all pages of the date window like query; implies with_posting_status."),
   };
 
   const listTransactions = defineTool({
@@ -69,16 +81,20 @@ export function createTransactionsTools(
     outputSchema: LIST_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { full, limit, offset, query, ...filters } = args;
-      if (query === undefined) {
+      const { full, limit, offset, query, with_posting_status, booked, ...filters } = args;
+      if (query === undefined && booked === undefined) {
         const result = await client.call<BBListResult>("transactionsGet", {
           ...filters,
           limit: limit ?? 20,
           offset: offset ?? 0,
         });
-        return withCashbackHint(client, ok(trimList(result.data, SUMMARY_FIELDS, full ?? false)), result.data);
+        if (!with_posting_status) return withCashbackHint(client, ok(trimList(result.data, SUMMARY_FIELDS, full ?? false)), result.data);
+        const st = await attachPostingStatus(client, result.data);
+        const response = ok(trimList(st.rows, [...SUMMARY_FIELDS, "posting_status"], full ?? false));
+        response.content.push({ type: "text", text: postingStatusNote(st.scanned, st.truncated) });
+        return withCashbackHint(client, response, result.data);
       }
-      const needle = query.toLowerCase();
+      const needle = (query ?? "").toLowerCase();
       const all: Record<string, unknown>[] = [];
       let truncated = false;
       for (let page = 0; page < QUERY_SWEEP_MAX_PAGES; page++) {
@@ -91,18 +107,28 @@ export function createTransactionsTools(
         if (result.data.length < QUERY_SWEEP_PAGE_SIZE) break;
         if (page === QUERY_SWEEP_MAX_PAGES - 1) truncated = true;
       }
-      const matched = all.filter((r) =>
-        QUERY_FIELDS.some((f) => typeof r[f] === "string" && (r[f] as string).toLowerCase().includes(needle))
-      );
+      let matched =
+        query === undefined
+          ? all
+          : all.filter((r) => QUERY_FIELDS.some((f) => typeof r[f] === "string" && (r[f] as string).toLowerCase().includes(needle)));
+      let statusNote: string | undefined;
+      let fieldsOut: readonly string[] = SUMMARY_FIELDS;
+      if (booked !== undefined || with_posting_status) {
+        const st = await attachPostingStatus(client, matched);
+        matched = booked === undefined ? st.rows : st.rows.filter((r) => (r.posting_status as { booked: boolean }).booked === booked);
+        statusNote = postingStatusNote(st.scanned, st.truncated);
+        fieldsOut = [...SUMMARY_FIELDS, "posting_status"];
+      }
       const page = matched.slice(offset ?? 0, (offset ?? 0) + (limit ?? 20));
       const counts = { scanned: all.length, matched: matched.length, returned: page.length, truncated };
-      const response = ok(trimList(page, SUMMARY_FIELDS, full ?? false), { query_counts: counts });
+      const response = ok(trimList(page, fieldsOut, full ?? false), { query_counts: counts });
       response.content.push({
         type: "text",
         text:
-          `query "${query}": ${counts.scanned} transactions scanned in the date window, ${counts.matched} matched, ${counts.returned} returned` +
+          `${query === undefined ? "no query" : `query "${query}"`}: ${counts.scanned} transactions scanned in the date window, ${counts.matched} matched, ${counts.returned} returned` +
           (truncated ? `. Sweep stopped after ${QUERY_SWEEP_MAX_PAGES} pages: matches may be missing, narrow date_from/date_to.` : "."),
       });
+      if (statusNote) response.content.push({ type: "text", text: statusNote });
       return withCashbackHint(client, response, page);
     },
   });
@@ -112,13 +138,25 @@ export function createTransactionsTools(
   const getTransaction = defineTool({
     name: "get_transaction",
     description:
-      "Get a single transaction by its id_by_customer. A recognised special case (PayPal Business Debit cashback) comes with booking_hints.",
+      "Get a single transaction by its id_by_customer, with posting_status {booked, posting_ids, splits, fixed} (looked up from the postings of that day). A recognised special case (PayPal Business Debit cashback) comes with booking_hints.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: getShape,
     async handler(args) {
       const result = await client.call<{ data?: Record<string, unknown> }>("transactionsGetIdByCustomer", {}, { idSuffix: args.id_by_customer });
-      return withCashbackHint(client, ok(result), result?.data ? [result.data] : []);
+      const row = result?.data;
+      if (row && typeof row === "object" && typeof row.booking_date === "string") {
+        try {
+          const st = await attachPostingStatus(client, [{ ...row, id_by_customer: row.id_by_customer ?? args.id_by_customer }]);
+          const { posting_status } = st.rows[0] as { posting_status: unknown };
+          return withCashbackHint(client, ok({ ...result, data: { ...row, posting_status } }), [row]);
+        } catch {
+          const response = ok(result);
+          response.content.push({ type: "text", text: "posting_status could not be determined (postings lookup failed); check list_postings before booking." });
+          return withCashbackHint(client, response, [row]);
+        }
+      }
+      return withCashbackHint(client, ok(result), row ? [row] : []);
     },
   });
 

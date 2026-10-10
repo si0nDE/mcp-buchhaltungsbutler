@@ -100,3 +100,42 @@ describe("transactions tools", () => {
     expect(result.structuredContent?.query_counts).toEqual({ scanned: 3, matched: 2, returned: 2, truncated: false });
   });
 });
+
+describe("posting status on transactions", () => {
+  const txs = [
+    { id_by_customer: "5001", to_from: "A", amount: "559.30", booking_date: "2026-03-03 00:00:00", purpose: "x" },
+    { id_by_customer: "5002", to_from: "B", amount: "-10.00", booking_date: "2026-03-03 00:00:00", purpose: "y" },
+  ];
+  const postings = [
+    { id_by_customer: "8001", transaction_id_by_customer: "5001", fixed: "0" },
+    { id_by_customer: "8002", transaction_id_by_customer: "5001", fixed: "0" },
+    { id_by_customer: "8003", transaction_id_by_customer: null, fixed: "0" },
+  ];
+  const client = (): BBClient => ({
+    call: vi.fn(async (key: string) => (key === "postingsGet" ? { data: postings } : { data: txs })),
+  }) as unknown as BBClient;
+
+  it("list_transactions with_posting_status marks booked and open transactions", async () => {
+    const c = client();
+    const [list] = createTransactionsTools(c);
+    const result = await list.handler({ with_posting_status: true });
+    const rows = JSON.parse(result.content[0].text);
+    expect(rows[0].posting_status).toEqual({ booked: true, posting_ids: ["8001", "8002"], splits: 2, fixed: false });
+    expect(rows[1].posting_status.booked).toBe(false);
+    expect(c.call).toHaveBeenCalledWith("postingsGet", expect.objectContaining({ date_from: "2026-03-03", date_to: "2026-03-03", posting_status: "all" }));
+  });
+
+  it("list_transactions booked=false returns only open transactions", async () => {
+    const [list] = createTransactionsTools(client());
+    const result = await list.handler({ booked: false });
+    const rows = JSON.parse(result.content[0].text);
+    expect(rows.map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["5002"]);
+  });
+
+  it("get_transaction adds posting_status", async () => {
+    const c = { call: vi.fn(async (key: string) => (key === "postingsGet" ? { data: postings } : { data: txs[0] })) } as unknown as BBClient;
+    const [, get] = createTransactionsTools(c);
+    const result = await get.handler({ id_by_customer: 5001 });
+    expect(JSON.parse(result.content[0].text).data.posting_status.booked).toBe(true);
+  });
+});

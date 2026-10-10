@@ -461,6 +461,16 @@ export function createPostingsTools(
       .optional(),
     limit: z.number().int().max(1000).default(20),
     offset: z.number().int().default(0),
+    transaction_id_by_customer: z
+      .number()
+      .int()
+      .optional()
+      .describe("Only postings of this bank transaction (all its splits). Filtered locally after sweeping the date window - keep it narrow."),
+    receipt_id_by_customer: z
+      .number()
+      .int()
+      .optional()
+      .describe("Only postings the receipt is assigned to. Filtered locally after sweeping the date window - keep it narrow."),
     ...compactShape,
   };
 
@@ -470,12 +480,48 @@ export function createPostingsTools(
       "List postings (Buchungen) within a required date range, with optional filters. Rows have ~40 fields; by default " +
       "(compact) empty fields and PDF links are left out - cheap enough for checks. fields: [...] keeps only the named " +
       "fields, include_links: true brings the PDF links back, compact: false returns the raw rows. Example: " +
-      '{"date_from":"2026-01-01","date_to":"2026-01-31","postingaccount":"4950","fields":["id_by_customer","date","amount","postingtext"]}.',
+      '{"date_from":"2026-01-01","date_to":"2026-01-31","postingaccount":"4950","fields":["id_by_customer","date","amount","postingtext"]}. ' +
+      "transaction_id_by_customer / receipt_id_by_customer return only the postings of that transaction or receipt (all splits; sweep of the date " +
+      "window, set date_from/date_to to the payment day).",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { compact, include_links, fields, ...filters } = args;
+      const { compact, include_links, fields, transaction_id_by_customer, receipt_id_by_customer, ...filters } = args;
+      if (transaction_id_by_customer !== undefined || receipt_id_by_customer !== undefined) {
+        const all: Array<Record<string, unknown>> = [];
+        let truncated = false;
+        for (let page = 0; page < 10; page++) {
+          const res = await client.call<{ data?: Array<Record<string, unknown>> }>("postingsGet", {
+            ...filters,
+            limit: 1000,
+            offset: page * 1000,
+          });
+          const batch = res.data ?? [];
+          all.push(...batch);
+          if (batch.length < 1000) break;
+          if (page === 9) truncated = true;
+        }
+        const hasReceipt = (p: Record<string, unknown>, id: number) =>
+          [p.receipt_id_by_customer, ...String(p.receipts_assigned_ids_by_customer ?? "").split(",")].some(
+            (v) => v !== null && v !== undefined && String(v).trim() === String(id)
+          );
+        const matched = all.filter(
+          (p) =>
+            (transaction_id_by_customer === undefined || String(p.transaction_id_by_customer ?? "") === String(transaction_id_by_customer)) &&
+            (receipt_id_by_customer === undefined || hasReceipt(p, receipt_id_by_customer))
+        );
+        const response = ok(compactRows(matched, { compact, include_links, fields }), {
+          counts: { scanned: all.length, matched: matched.length, truncated },
+        });
+        response.content.push({
+          type: "text",
+          text:
+            `${all.length} postings scanned in the date window, ${matched.length} matched` +
+            (truncated ? ". Sweep stopped after 10 pages: matches may be missing, narrow the date window." : "."),
+        });
+        return response;
+      }
       const result = await client.call<{ data?: unknown }>("postingsGet", {
         ...filters,
         limit: args.limit ?? 20,
@@ -617,8 +663,10 @@ export function createPostingsTools(
       "can only be booked against it, not against an expense/revenue account (and vice versa). Under Ist-Versteuerung the USt is " +
       "moved from 'nicht fällig' to 'fällig' automatically. " +
       "Give split amounts as positive numbers; the direction follows the transaction. A NEGATIVE split reverses " +
-      "Soll/Haben and is only for Skonto (negative split on the Skonto account with the receipt's tax rate) or for " +
-      "netting a receivable against a payable; the splits must then still add up to the transaction amount. The " +
+      "Soll/Haben and is only for Skonto (negative split on the Skonto account with the receipt's tax rate), for " +
+      "netting a receivable against a payable, or for a Rechnungskorrektur/Gutschrift paid within the same payment (positive splits for " +
+      "the invoices, negative splits with the correction's receipt_id_by_customer, same account and vat; verified in the BHB web UI, " +
+      "not yet through this connector - use dry_run first, fallback: one split per invoice with the amount net of the correction); the splits must then still add up to the transaction amount. The " +
       "connector passes amounts through unchanged. Observed live on one outgoing card payment: all-negative splits " +
       "were rejected with BuchhaltungsButler error 27 (sum does not match the transaction amount), positive ones " +
       "were accepted. Special cases (Skonto, Geldtransit, Storno, Trinkgeld, Rücklastschrift, 5.5%/10.7% VAT): see " +

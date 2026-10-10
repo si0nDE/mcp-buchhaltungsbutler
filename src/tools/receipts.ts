@@ -90,6 +90,14 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     payment_status: z.enum(["paid", "unpaid"]).optional(),
     counterparty: z.string().optional(),
     invoicenumber: z.string().optional().describe("Exact invoice number: the duplicate check before creating or uploading a receipt."),
+    invoicenumbers: z
+      .array(z.string())
+      .max(20)
+      .optional()
+      .describe(
+        "Several exact invoice numbers in one call (one lookup per number and direction, run in parallel); rows carry list_direction. " +
+          "Numbers without a hit are named in the answer. Overrides invoicenumber, limit/offset do not apply."
+      ),
     due_date: z.string().optional().describe("YYYY-MM-DD, receipts with this due date."),
     date_from: z.string().optional(),
     date_to: z.string().optional(),
@@ -174,7 +182,27 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     outputSchema: LIST_RECEIPTS_OUTPUT_SHAPE,
     inputSchema: listShape,
     async handler(args) {
-      const { full, limit, offset, counterparty, list_direction, ...filters } = args;
+      const { full, limit, offset, counterparty, list_direction, invoicenumbers, ...filters } = args;
+      if (invoicenumbers && invoicenumbers.length > 0) {
+        const dirs = list_direction === "both" ? (["inbound", "outbound"] as const) : ([list_direction] as const);
+        const lookups = await Promise.all(
+          invoicenumbers.flatMap((n) =>
+            dirs.map(async (dir) => ({
+              n,
+              dir,
+              rows: (await fetchDirection(dir, { ...filters, invoicenumber: n, counterparty, limit: 50, offset: 0 })).rows,
+            }))
+          )
+        );
+        const rows = lookups.flatMap((l) => l.rows.map((r) => ({ ...r, list_direction: l.dir })));
+        const missing = invoicenumbers.filter((n) => !lookups.some((l) => l.n === n && l.rows.length > 0));
+        const response = withListWarnings(
+          ok(trimList(rows, [...SUMMARY_FIELDS, "list_direction"], full ?? false), { missing_invoicenumbers: missing }),
+          listReceiptWarnings(rows, filters)
+        );
+        if (missing.length > 0) response.content.push({ type: "text", text: `No receipt found for: ${missing.join(", ")}.` });
+        return response;
+      }
       if (list_direction !== "both") {
         return listOneDirection(list_direction, { ...filters, full, limit, offset, counterparty });
       }

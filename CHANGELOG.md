@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Neu: Buchungsstatus je Bankumsatz. `get_transaction` liefert `posting_status` {booked, posting_ids, splits, fixed}; `list_transactions` mit `with_posting_status` ebenso, mit `booked: true|false` filtert es auf gebuchte bzw. offene Umsätze (Durchlauf des ganzen Datumsfensters wie bei `query`). Quelle ist ein Durchlauf von `postingsGet` über die Datumsspanne der Umsätze (Buchungen tragen `transaction_id_by_customer` und das Umsatzdatum, live geprüft); bei Abbruch nach 10 Seiten steht der Hinweis, dass `booked: false` falsch sein kann.
+- Neu: `list_postings` mit `transaction_id_by_customer` und `receipt_id_by_customer` (lokaler Filter nach Durchlauf des Datumsfensters; Antwort nennt gescannte und passende Buchungen). Für `get_account_ledger` nicht möglich: die Kontenblatt-Zeilen tragen keine Umsatz-ID.
+- Neu: `list_receipts` mit `invoicenumbers` (bis 20 Nummern, je Nummer und Richtung ein paralleler Abruf, `list_direction: both` deckt „any“ ab); Nummern ohne Treffer stehen in `missing_invoicenumbers`.
+- Doku: negative Splits für Rechnungskorrekturen/Gutschriften innerhalb derselben Zahlung in `add_transaction_postings` und im Guide `gutschrift_verrechnen` (in der BHB-Oberfläche verifiziert, über den Konnektor ungeprüft, daher `dry_run`; Rückfall: Betrag je Rechnung nach Verrechnung).
+
 - Neu: Warnung W1 bei `add_transaction_postings`/`add_free_postings`: ein PDF-Beleg nennt „Reverse-Charge“, „Steuerschuldner des Leistungsempfängers“ oder „§ 13b“, die Buchung trägt aber `vat 0_none`
   (Hinweis auf 19_both_511/506; Ausnahme Zahlung eines schon auf einem Kreditor gebuchten Belegs). Höchstens 5 PDF-Abrufe je Aufruf, nur Belege mit Textebene, nichts wird geändert.
   W2 (Lieferantenland) entfällt bewusst: die API liefert kein Land, Anschriften aus dem PDF-Text zu lesen ist zu unzuverlässig.
