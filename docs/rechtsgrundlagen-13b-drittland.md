@@ -33,6 +33,7 @@ Die USt-VA-Vorschau für 2026 trennt „sonstige Leistungen eines im übrigen Ge
 und „Andere Leistungen (§ 13b Abs. 2 Nr. 1, 2, 4 bis 11 UStG)“ (Kz 84/85); die Vorsteuer beider steht in Kz 67. Der Abgleich mit den Kontenblättern
 von 1787 nach Steuerschlüssel stimmt auf den Cent: Schlüssel `19_both_506` = Kz 46/47, Schlüssel `19_both_511` = Kz 84/85, Summe = Kz 67.
 Damit ist `19_both_511` der Schlüssel für Drittland-Leistungen nach Abs. 2 Nr. 1 (die Zeile fasst mehrere Nummern zusammen).
+Bestätigt auch von der Buchungsseite: Eine Zahlung, die im Ledger den Schlüssel 511 trägt, zeigt im Dialog „Zahlung buchen“ die Steuerauswahl „Drittland (§ 13b Abs. 2 Nr. 1)“.
 Nicht geprüft sind `19_both_1`, `19_both_6506`/`6511`/`6501` und die `_app`-Varianten. Der Vordruck selbst (BMF) wurde nicht gelesen,
 die Beschriftungen stammen aus der BHB-Vorschau.
 
