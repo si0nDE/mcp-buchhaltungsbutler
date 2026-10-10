@@ -147,7 +147,7 @@ async function run(client: BBClient, items: CheckItem[]): Promise<string[]> {
   if (outliers.length > 0) {
     warnings.push(
       `Kurs auffällig (> ${RATE_OUTLIER_THRESHOLD * 100} % vom Median der Nachbarbelege): ${outliers.join("; ")}. ` +
-        "Abbuchungsbetrag gegen den Bank-/Kartenumsatz prüfen, es kann ein echter Kartenumsatz mit Gebühren sein. Nichts wurde geändert."
+        "BHB setzt den Tageskurs automatisch, am Beleg lässt er sich manuell anpassen: Kurs, Rechnungsbetrag und Bank-/Kartenumsatz gegeneinander prüfen (ein manuell angepasster Kurs oder ein abweichender Kartenumsatz ist möglich). Nichts wurde geändert."
     );
   }
   return warnings;

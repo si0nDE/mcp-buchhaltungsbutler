@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Doku: Guide `reverse_charge_drittland` und `lieferantenportal_abgleich` nennen die Oberflächenoption „Drittland (§ 13b Abs. 2 Nr. 1)“ für Schlüssel 511 und erklären, dass BHB den Kurs eines USD-Belegs aus dem gebuchten Euro-Betrag der Zahlung ableitet (Kurs-Warnung nicht als Buchungsfehler lesen).
+- Doku: Guide `reverse_charge_drittland` und `lieferantenportal_abgleich` nennen die Oberflächenoption „Drittland (§ 13b Abs. 2 Nr. 1)“ für Schlüssel 511 und erklären die Kurs-Warnung: BHB setzt den Tageskurs automatisch, am Beleg ist er manuell anpassbar; ein auffälliger Kurs heißt „angepasst oder Rechnung/Kartenumsatz weichen ab“, kein Buchungsfehler an sich.
 
 - Neu: Warnungen beim Buchen mit Beleg (`add_transaction_postings`, `add_free_postings`, auch mit `dry_run`): (W4) § 13b-Schlüssel, aber Leistungs-/Belegdatum und Zahlungsdatum in verschiedenen
   Quartalen oder Jahren, Hinweis „Meldeperiode weicht ab“ (Zahllast neutral, nicht umdatieren); (W3) Fremdwährungsbeleg, dessen Kurs mehr als 5 % vom Median der bis zu 5 zeitlich
