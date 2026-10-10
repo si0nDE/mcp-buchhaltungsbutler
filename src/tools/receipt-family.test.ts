@@ -119,6 +119,33 @@ describe("pair_receipt_family", () => {
     expect(by[2].hints[0]).toMatch(/Drittzahlung/);
   });
 
+  it("reports receipts of one case without a common payment and a payment spanning two cases", async () => {
+    const c = client({
+      1: { text: "Abrechnung 2026-10004", amount: "80.00", tx: [{ id_by_customer: 808, amount: "80.00" }] },
+      2: { text: "Rechnungsnummer KR-2026-10004", amount: "388.12", tx: [{ id_by_customer: 807, amount: "80.00" }] },
+      3: { text: "Abrechnung 2026-10005", amount: "80.00", tx: [{ id_by_customer: 807, amount: "80.00" }] },
+      4: { text: "Rechnungsnummer KR-2026-10005", amount: "388.12", tx: [{ id_by_customer: 807, amount: "80.00" }] },
+    });
+    const [tool] = createReceiptFamilyTools(c);
+    const res = parse(await tool.handler({ receipt_ids: [1, 2, 3, 4], max_family_size: 4 }));
+    const a = res.cases.find((x: { shared_numbers: string[] }) => x.shared_numbers.includes("2026-10004"));
+    const b = res.cases.find((x: { shared_numbers: string[] }) => x.shared_numbers.includes("2026-10005"));
+    expect(a.case_gaps.join(" ")).toMatch(/keine gemeinsame Zahlung \(1: 808; 2: 807\)/);
+    expect(a.case_gaps.join(" ")).toMatch(/Zahlung 807 hängt auch an Belegen anderer Fälle \(2026-10005\)/);
+    expect(b.case_gaps).toHaveLength(1);
+    expect(b.case_gaps[0]).toMatch(/Zahlung 807 hängt auch an Belegen anderer Fälle \(2026-10004\)/);
+  });
+
+  it("has no case gaps when the receipts of a case share their payment", async () => {
+    const c = client({
+      1: { text: "Abrechnung 2026-10004", amount: "80.00", tx: [{ id_by_customer: 808, amount: "80.00" }] },
+      2: { text: "Rechnungsnummer KR-2026-10004", amount: "388.12", tx: [{ id_by_customer: 808, amount: "80.00" }] },
+    });
+    const [tool] = createReceiptFamilyTools(c);
+    const res = parse(await tool.handler({ receipt_ids: [1, 2], max_family_size: 4 }));
+    expect(res.cases[0].case_gaps).toBeUndefined();
+  });
+
   it("is read-only and only reads from BHB", async () => {
     const c = client({
       1: { text: "A 2026-10001", amount: "1.00", tx: [] },

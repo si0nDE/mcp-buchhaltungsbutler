@@ -85,7 +85,7 @@ export function createReceiptFamilyTools(client: BBClient): [ToolDef] {
     description:
       "Group the given receipts into cases (Abrechnung + Rechnung + Zahlung) by a number that appears in the receipt text of at least " +
       "two of them (PDF text layer needed), and list the gaps per case: no payment assigned, receipt without date, payments differ from " +
-      "the receipt amount, no text readable. Payments are the transactions actually assigned in BHB (never matched by amount). " +
+      "the receipt amount, no text readable, and cross-assigned payments (receipts of one case without a common payment, or one payment on receipts of different cases). Payments are the transactions actually assigned in BHB (never matched by amount). " +
       "Receipts that share no number with another one are listed under 'unassigned' with the question to put to the user - do not " +
       "guess the pairing. The grouping is a text heuristic: confirm the keys with the user before booking. Read-only.",
     annotations: { readOnlyHint: true, destructiveHint: false },
@@ -146,11 +146,33 @@ export function createReceiptFamilyTools(client: BBClient): [ToolDef] {
         };
       };
 
-      const cases = grouped.filter((g) => g.ids.length > 1).map((g) => ({
-        shared_numbers: g.keys,
-        receipts: g.ids.map((id) => describe(id, g.ids)),
-        ...(g.ids.length > args.max_family_size ? { note: "Gruppe größer als max_family_size: Schlüssel nicht eindeutig, bitte prüfen." } : {}),
-      }));
+      const multi = grouped.filter((g) => g.ids.length > 1);
+      // Eine Zahlung darf nicht an Belegen verschiedener Fälle hängen (BHB ordnet bei gleich hohen Beträgen über Kreuz zu).
+      const casesOfTx = new Map<string, number[]>();
+      multi.forEach((g, i) => {
+        for (const t of new Set(g.ids.flatMap(txIds))) casesOfTx.set(t, [...(casesOfTx.get(t) ?? []), i]);
+      });
+      const cases = multi.map((g, i) => {
+        const caseGaps: string[] = [];
+        const withTx = g.ids.filter((id) => txIds(id).length > 0);
+        if (withTx.length === g.ids.length && !txIds(g.ids[0]).some((t) => g.ids.every((id) => txIds(id).includes(t)))) {
+          caseGaps.push(
+            `Die Belege des Falls haben keine gemeinsame Zahlung (${g.ids.map((id) => `${id}: ${txIds(id).join("+")}`).join("; ")}): vermutlich über Kreuz zugeordnet. Mit get_receipt_transactions prüfen.`
+          );
+        }
+        for (const [t, idxs] of casesOfTx) {
+          if (idxs.length > 1 && idxs.includes(i) && g.ids.some((id) => txIds(id).includes(t))) {
+            const others = idxs.filter((x) => x !== i).map((x) => multi[x].keys.join("/"));
+            caseGaps.push(`Zahlung ${t} hängt auch an Belegen anderer Fälle (${others.join(", ")}): Kreuzzuordnung.`);
+          }
+        }
+        return {
+          shared_numbers: g.keys,
+          receipts: g.ids.map((id) => describe(id, g.ids)),
+          ...(caseGaps.length ? { case_gaps: caseGaps } : {}),
+          ...(g.ids.length > args.max_family_size ? { note: "Gruppe größer als max_family_size: Schlüssel nicht eindeutig, bitte prüfen." } : {}),
+        };
+      });
       const single = grouped.filter((g) => g.ids.length === 1).map((g) => g.ids[0]);
       const unassigned = [
         ...ids.filter((id) => !info.get(id)!.text).map((id) => ({
