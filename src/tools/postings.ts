@@ -13,6 +13,7 @@ import { getChart } from "./posting-accounts.js";
 import { vatWarnings } from "./vat-hints.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
 import { postingtextWarnings } from "./postingtext.js";
+import { thirdPartyPaymentWarnings } from "./third-party-payment.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -321,6 +322,7 @@ async function dryRunResult(
     assignReceipts?: Array<Record<string, unknown>>;
     taxAccountsOnly?: boolean;
     postingtexts?: Array<string | undefined>;
+    extraWarnings?: string[];
   } = {}
 ) {
   const chart = await getChart(client).catch(() => "unknown" as const);
@@ -328,6 +330,7 @@ async function dryRunResult(
     ...vatWarnings(splitRefs, chart, extras.taxAccountsOnly),
     ...anlagenWarnings(splitRefs.map((r) => r.account)),
     ...postingtextWarnings(extras.postingtexts ?? []),
+    ...(extras.extraWarnings ?? []),
   ];
   return ok({
     dry_run: true,
@@ -763,6 +766,7 @@ export function createPostingsTools(
             assignReceipts: wanted.map((w) => ({ index: w.index, receipt_id_by_customer: w.receipt })),
             taxAccountsOnly: true,
             postingtexts: args.free_postings.map((f) => f.postingtext),
+            extraWarnings: thirdPartyPaymentWarnings(args.free_postings),
           }
         );
       }
@@ -780,6 +784,7 @@ export function createPostingsTools(
             ...anlagenWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
             ...personenkontoWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
             ...postingtextWarnings(args.free_postings.map((f) => f.postingtext)),
+            ...thirdPartyPaymentWarnings(args.free_postings),
             ...(assignments.some((a) => a.status !== "assigned")
               ? [
                   "Mindestens eine Buchung wurde angelegt, aber der Beleg nicht zugeordnet (siehe receipt_assignments). " +

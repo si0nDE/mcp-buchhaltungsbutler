@@ -1007,5 +1007,17 @@ describe("postings tools: compact, hints, free posting + receipt", () => {
       );
       expect(free.warnings.join(" ")).toMatch(/Vorschlag: "Kanzlei Kosten"/);
     });
+
+    it("asks for the Zahlungsdatum when a free posting books Vorsteuer onto the Interimskonto (Dritter zahlt)", async () => {
+      const [, , , addFreePostings] = createPostingsTools(dryClient());
+      const run = async (debit: number, credit: number, vat: string) =>
+        JSON.parse(
+          (await addFreePostings.handler({ free_postings: [{ date: "2026-06-30", postingtext: "Kanzlei Kosten", amount: "388.12", postingaccount_debit: debit, postingaccount_credit: credit, vat: vat as never }], dry_run: true })).content[0].text
+        );
+      const hit = await run(4950, 1590, "19_pre");
+      expect(hit.warnings.join(" ")).toMatch(/Frage vor dem Buchen.*2026-06-30.*Zahlungsdatum erfragen/);
+      expect((await run(1590, 2700, "0_none")).warnings).toBeUndefined();
+      expect((await run(4950, 1890, "19_pre")).warnings).toBeUndefined();
+    });
   });
 });
