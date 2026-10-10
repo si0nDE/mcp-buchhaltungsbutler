@@ -151,7 +151,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     buchungen: ["Beispiel Artikel: Zahlung 59,50 € mit zugewiesener Rechnung 119,00 € und Gutschrift 59,50 €, gebucht gegen das Debitorenkonto 10000."],
     konnektor: [
       "create_invoice_correction erzeugt die Rechnungskorrektur zu einer Ausgangsrechnung.",
-      "Rechnung und Korrektur in derselben Zahlung (Bankbetrag schon netto nach Verrechnung): je Rechnung ein positiver Split, je Korrektur ein negativer Split, gleiches Konto und gleicher vat, receipt_id_by_customer des jeweiligen Belegs; die Summe der Splits ist der Bankbetrag. Beispiel: 238,00 + 357,00 − 11,90 − 23,80 = 559,30. In der BHB-Oberfläche so gebucht und über die Kontenblätter bestätigt (Korrektur erscheint als Soll-Zeile mit Beleg); über den Konnektor noch nicht geprüft, daher zuerst mit dry_run.",
+      "Rechnung und Korrektur in derselben Zahlung (Bankbetrag schon netto nach Verrechnung): je Rechnung ein positiver Split, je Korrektur ein negativer Split, gleiches Konto und gleicher vat, receipt_id_by_customer des jeweiligen Belegs; die Summe der Splits ist der Bankbetrag. Beispiel: 238,00 + 357,00 − 11,90 − 23,80 = 559,30. In der BHB-Oberfläche so gebucht und über die Kontenblätter bestätigt (Korrektur erscheint als Soll-Zeile mit Beleg); über den Konnektor noch nicht geprüft. dry_run prüft nur lokal und beweist nichts über BHB: einen Umsatz buchen, das Kontenblatt prüfen, erst dann weitere.",
       "Rückfall, wenn BHB den gemischten Satz ablehnt: je Rechnung ein Split mit dem Betrag nach Verrechnung (hier 226,10 und 333,20), die Korrekturbelege nur der Zahlung zuordnen. Durchweg negative Splits lehnt BHB mit Fehler 27 ab.",
     ],
   },

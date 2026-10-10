@@ -666,7 +666,7 @@ export function createPostingsTools(
       "Soll/Haben and is only for Skonto (negative split on the Skonto account with the receipt's tax rate), for " +
       "netting a receivable against a payable, or for a Rechnungskorrektur/Gutschrift paid within the same payment (positive splits for " +
       "the invoices, negative splits with the correction's receipt_id_by_customer, same account and vat; verified in the BHB web UI, " +
-      "not yet through this connector - use dry_run first, fallback: one split per invoice with the amount net of the correction); the splits must then still add up to the transaction amount. The " +
+      "not yet through this connector; dry_run only checks locally and does not prove BHB accepts it - book one transaction, check the result, fallback if BHB refuses: one split per invoice with the amount net of the correction); the splits must then still add up to the transaction amount. The " +
       "connector passes amounts through unchanged. Observed live on one outgoing card payment: all-negative splits " +
       "were rejected with BuchhaltungsButler error 27 (sum does not match the transaction amount), positive ones " +
       "were accepted. Special cases (Skonto, Geldtransit, Storno, Trinkgeld, Rücklastschrift, 5.5%/10.7% VAT): see " +
