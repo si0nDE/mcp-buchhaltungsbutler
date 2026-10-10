@@ -988,5 +988,24 @@ describe("postings tools: compact, hints, free posting + receipt", () => {
       expect(res.warnings).toBeUndefined();
       expect(res.would_assign_receipts).toEqual([{ index: 0, receipt_id_by_customer: 3001 }]);
     });
+
+    it("warns about an invoice number in the posting text and leaves the text unchanged", async () => {
+      const [, , addTransactionPostings, addFreePostings] = createPostingsTools(dryClient());
+      const tx = txEntry("19_pre");
+      tx.transactions[0].splits[0].postingtext = "Beispiel GmbH RE-0001 (privat)";
+      const res = JSON.parse((await addTransactionPostings.handler(tx)).content[0].text);
+      expect(res.warnings.join(" ")).toMatch(/Vorschlag: "Beispiel GmbH"/);
+      expect(res.would_send.body.transactions[0].postingtexts).toEqual(["Beispiel GmbH RE-0001 (privat)"]);
+
+      const free = JSON.parse(
+        (
+          await addFreePostings.handler({
+            free_postings: [{ date: "2026-03-10", postingtext: "Kanzlei 2026-12345 Kosten", amount: "20.00", postingaccount_debit: 4950, postingaccount_credit: 1590, vat: "19_pre" }],
+            dry_run: true,
+          })
+        ).content[0].text
+      );
+      expect(free.warnings.join(" ")).toMatch(/Vorschlag: "Kanzlei Kosten"/);
+    });
   });
 });

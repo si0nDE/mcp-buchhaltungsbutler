@@ -12,6 +12,7 @@ import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE
 import { getChart } from "./posting-accounts.js";
 import { vatWarnings } from "./vat-hints.js";
 import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation.js";
+import { postingtextWarnings } from "./postingtext.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -319,12 +320,14 @@ async function dryRunResult(
     hints?: Array<Record<string, unknown>>;
     assignReceipts?: Array<Record<string, unknown>>;
     taxAccountsOnly?: boolean;
+    postingtexts?: Array<string | undefined>;
   } = {}
 ) {
   const chart = await getChart(client).catch(() => "unknown" as const);
   const warnings = [
     ...vatWarnings(splitRefs, chart, extras.taxAccountsOnly),
     ...anlagenWarnings(splitRefs.map((r) => r.account)),
+    ...postingtextWarnings(extras.postingtexts ?? []),
   ];
   return ok({
     dry_run: true,
@@ -498,7 +501,7 @@ export function createPostingsTools(
     description:
       "Book one or more receipts onto posting accounts in a single batch call. Complete example (Bilanzierer, Eingangsrechnung " +
       'auf Kreditor): {"receipts":[{"receipt_id_by_customer":2001,"creditor":70001,"debtor":10001,"splits":[{"amount":"119.00",' +
-      '"postingaccount":4950,"postingtext":"Beispiel GmbH RE-0001","vat":"19_pre"}]}]}. ' +
+      '"postingaccount":4950,"postingtext":"Beispiel GmbH Beratung","vat":"19_pre"}]}]}. ' +
       "Use this when the " +
       "posting is backed by a receipt/invoice document; for a bank transaction use " +
       "add_transaction_postings, and for entries with no receipt or transaction (e.g. opening balances) use " +
@@ -553,13 +556,14 @@ export function createPostingsTools(
           args.receipts.flatMap((e) =>
             e.splits.map((s) => ({ account: s.postingaccount, vat: s.vat, label: `Beleg ${e.receipt_id_by_customer}` }))
           ),
-          { commentJobs, hints }
+          { commentJobs, hints, postingtexts: args.receipts.flatMap((e) => e.splits.map((s) => s.postingtext)) }
         );
       }
       const result = await withBookingHints(() => client.call("postingsAddBatchReceipts", { receipts }));
       const warnings = [
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.postingaccount))),
+        ...postingtextWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.postingtext))),
       ];
       return withExtras(result, { warnings, hints });
     },
@@ -582,7 +586,7 @@ export function createPostingsTools(
     description:
       "Book one or more transactions onto posting accounts in a single batch call. Complete example (Aufwand, bezahlt von " +
       'Bank): {"transactions":[{"transaction_id_by_customer":1001,"splits":[{"amount":"119.00","postingaccount":4950,' +
-      '"postingtext":"Beispiel GmbH RE-0001 Beratung","vat":"19_pre","receipt_id_by_customer":2001}]}]} - the array is ' +
+      '"postingtext":"Beispiel GmbH Beratung","vat":"19_pre","receipt_id_by_customer":2001}]}]} - the array is ' +
       "always transactions[] with splits[]; vat on an Aufwandskonto is 19_pre/7_pre (Vorsteuer), on an Erlöskonto " +
       "19_vat/7_vat, neutral 0_none. Run ONE call first, then parallelise: an error in six parallel calls costs six answers. " +
       "Use this for a bank " +
@@ -649,13 +653,14 @@ export function createPostingsTools(
           args.transactions.flatMap((e) =>
             e.splits.map((s) => ({ account: s.postingaccount, vat: s.vat, label: `Transaktion ${e.transaction_id_by_customer}` }))
           ),
-          { commentJobs, hints }
+          { commentJobs, hints, postingtexts: args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext)) }
         );
       }
       const result = await withBookingHints(() => client.call("postingsAddBatchTransactions", { transactions }));
       const warnings = [
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingaccount))),
+        ...postingtextWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext))),
       ];
       return withExtras(result, { warnings, hints });
     },
@@ -693,7 +698,7 @@ export function createPostingsTools(
     description:
       "Add one or more free-form postings (not tied to a receipt or transaction) in a single batch " +
       "call, e.g. opening balances. Complete example (Plattformverkauf, Auszahlung privat, Beleg gleich zugeordnet): " +
-      '{"free_postings":[{"date":"2026-03-10","postingtext":"Plattform RE-0100 - Gutschrift (Privat)","amount":"20.00",' +
+      '{"free_postings":[{"date":"2026-03-10","postingtext":"Plattform Gutschrift","amount":"20.00",' +
       '"postingaccount_debit":1800,"postingaccount_credit":8400,"vat":"19_vat","receipt_id_by_customer":3001}]} - the ' +
       "parameter is free_postings (not postings). receipt_id_by_customer is optional; with it the receipt is assigned in the " +
       "same call and the result lists receipt_assignments per entry. A free posting with a receipt does NOT count as payment " +
@@ -754,7 +759,11 @@ export function createPostingsTools(
             { account: f.postingaccount_debit, vat: f.vat, label: `Freie Buchung ${i + 1} (Soll)` },
             { account: f.postingaccount_credit, vat: f.vat, label: `Freie Buchung ${i + 1} (Haben)` },
           ]),
-          { assignReceipts: wanted.map((w) => ({ index: w.index, receipt_id_by_customer: w.receipt })), taxAccountsOnly: true }
+          {
+            assignReceipts: wanted.map((w) => ({ index: w.index, receipt_id_by_customer: w.receipt })),
+            taxAccountsOnly: true,
+            postingtexts: args.free_postings.map((f) => f.postingtext),
+          }
         );
       }
       const dates = [...new Set(wanted.map((w) => w.sent.date))];
@@ -770,6 +779,7 @@ export function createPostingsTools(
           [
             ...anlagenWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
             ...personenkontoWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
+            ...postingtextWarnings(args.free_postings.map((f) => f.postingtext)),
             ...(assignments.some((a) => a.status !== "assigned")
               ? [
                   "Mindestens eine Buchung wurde angelegt, aber der Beleg nicht zugeordnet (siehe receipt_assignments). " +

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Neu: `get_booking_guide` Themen `gegenertrag_interimskonto` (Aufwand mit Vorsteuer und Gegenertrag über 1590 in zwei freien Buchungen, vermeidet Fehler 31; Käuferzahlung als Privateinlage 1890; paarweise Prüfung statt Saldo; Rechenprobe der Abrechnung; Rückfrage nach dem Zahlungsdatum bei Drittzahlung; Risikohinweis Gewerblichkeit) und `buchungstexte` (konstante Texte je Fallart).
+- Neu: `add_receipt_postings`, `add_transaction_postings` und `add_free_postings` warnen (auch bei `dry_run`), wenn ein `postingtext` Rechnungsnummer, Datum oder Klammerzusatz enthält, und schlagen einen bereinigten Text vor. Der Text wird nie geändert. Beispieltexte in den Tool-Beschreibungen ohne Rechnungsnummer.
+
 - Fix: `npm audit fix` (Abhängigkeiten `proxy-addr`, `source-map-js`, `fast-uri` und `@modelcontextprotocol/sdk` auf gepatchte Versionen; nur `package-lock.json`).
 - Doku: `docs/bhb-systematik.md` um Parameter-Warnung, `query` bei `list_transactions` (live bestätigt: `to_from` ist kein Textfilter, HTTP 400) und `amount` als Zahl ergänzt; Tests für die Buchungsmuster Drittland-SaaS und Sammelzahlung.
 

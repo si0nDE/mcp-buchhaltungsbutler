@@ -361,6 +361,51 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
   },
   {
+    id: "gegenertrag_interimskonto",
+    titel: "Aufwand mit Vorsteuer und Gegenertrag ohne Vorsteuer (Kostenübernahme durch Dritte, z. B. Forderungskauf), über das Interimskonto",
+    quelle: "Übergabe des Teams (10.10.2026): Arbeitssitzung Forderungskauf + Anwaltskosten, am System beobachtet, Beispieldaten. Kein BHB-Artikel, keine Steuerberatung",
+    regeln: [
+      "Eine freie Buchung Aufwand an Ertrag mit 19_pre lehnt BHB ab (Fehler 31, 'no vat possible for specified combination'): das Aufwandskonto verlangt Vorsteuer, das Ertragskonto auf der Gegenseite verträgt keine. Weg: je Rechnung zwei freie Buchungen mit gleichem Datum und gleichem Bruttobetrag über das Interimskonto (SKR03 1590).",
+      "Buchung 1: Soll Aufwand (z. B. 4950) an Haben 1590, vat 19_pre. Im Kontenblatt: Steuerschlüssel 401, Aufwand netto, Vorsteuer auf 1576. Buchung 2: Soll 1590 an Haben Ertrag (z. B. 2700), vat 0_none, Schlüssel 0.",
+      "Beleg nur an Buchung 1 hängen (assign_receipt_to_free_posting). Die Rechnung bleibt so mit der Zahlung des Dritten verknüpfbar, Buchung 2 trägt keinen Beleg.",
+      "Prüfen paarweise, nicht über den Saldo: 1590 kann einen unabhängigen Saldo aus anderen Vorgängen haben. Je Rechnung muss auf dem Aufwandskonto eine Soll-Zeile und auf dem Ertragskonto eine Haben-Zeile mit identischem Bruttobetrag und Datum stehen; beide Kontenblätter gegeneinander abgleichen (Anzahl und Beträge).",
+      "Freie Buchungs-IDs sind nicht lückenlos und nie zu berechnen. Die ID immer aus der Antwort von add_free_postings lesen. Ein Posten je Aufruf; parallele Aufrufe liefern kollisionsfreie IDs in Antwortreihenfolge. Bei gleichen Beträgen und Daten die Reihenfolge der Antworten festhalten.",
+      "Zahlt ein Dritter (nicht das eigene Konto): VOR dem Buchen nach dem Zahlungsdatum fragen. Bei Ist-Versteuerung zählt der Zahlungszeitpunkt; ein Rechnungsdatum nahe am Quartalsende kann die Vorsteuer ins falsche Quartal legen. Ohne Zahlungsdatum mit Rechnungsdatum buchen und das am Beleg vermerken: add_comment mit comment_text 'Datum = Rechnungsdatum, Zahlungsdatum Dritter unbekannt'.",
+    ],
+    ablauf: [
+      "1. Vor dem Buchen bündeln und beim Nutzer klären: privat oder betrieblich (Kaufpreis), Buchungsdatum bei Drittzahlung, Beleg-Verknüpfung. Texte festlegen (Thema buchungstexte).",
+      "2. Belegfamilie vollständig paaren (Abrechnung, Kanzleirechnung, Zahlung), Lücken benennen, dann buchen. Paarung Beleg und Zahlung nie per Betrag raten: erst get_receipt_transactions; Betragsmatch nur als Fallback und als 'wahrscheinlich' melden.",
+      "3. Je Kanzleirechnung zwei add_free_postings-Aufrufe (Beispiel Buchung 1): {\"free_postings\":[{\"date\":\"2026-05-01\",\"postingtext\":\"Kanzlei Muster Anwaltskosten Prozessfinanzierung\",\"amount\":\"388.12\",\"postingaccount_debit\":4950,\"postingaccount_credit\":1590,\"vat\":\"19_pre\"}]}; Buchung 2 mit Soll 1590, Haben 2700, vat 0_none, Text 'Kanzlei Muster Kostenübernahme Kaufpartner'. Erst einen Fall komplett buchen und im Kontenblatt prüfen, dann den Rest.",
+      "4. Zahlung des Käufers (hier privat behandelt): add_transaction_postings, ein Split, Konto 1890, vat 0_none, Beleg am Split, Betrag = Kaufpreis der Abrechnung (nicht der Nennwert). BHB hängt bei Transaktionsbuchungen den Zahler an den Text an. Prüfen: Kontenblatt 1890.",
+      "5. Rechenprobe der Abrechnung: Kaufpreis = Nennwert − Provision netto − USt auf Provision (Beispiel 100,00 − 16,81 − 3,19 = 80,00). Kaufpreis gegen die eingegangene Zahlung stellen, Abweichung melden.",
+    ],
+    achtung: [
+      "Wessen USt steht auf der Abrechnung? In der Beobachtung ist der Käufer Leistungserbringer und der Mandant Leistungsempfänger; die USt bezieht sich auf die Provision des Käufers. Fachlich wahrscheinlich: der Mandant führt sie nicht ab, Vorsteuer entsteht nur bei unternehmerischer Behandlung, bei privater Behandlung (1890, 0_none) gibt es keine. Der Titel 'Gutschrift' ändert das nicht. Keine Steuerberatung, verbindlich ist das Finanzamt.",
+      "Risiko einmal VOR dem Buchen nennen, nicht entscheiden, nicht bei jedem Fall wiederholen: Gehen die Anspruchsgründe an eine geschäftliche Adresse, spricht das eher für betriebliche Betroffenheit. Mischbehandlung (Kaufpreis privat, Kanzleikosten betrieblich) und viele Wiederholungen erhöhen das Gewerblichkeitsrisiko (§ 15 EStG). Die Entscheidung des Mandanten als Notiz festhalten.",
+      "Nicht verifiziert: ob der Käufer die Kanzlei direkt zahlt (nur aus der Aktennotiz eines Schwesterunternehmens, am Beleg nicht belegt); steuerliche Würdigung (privat/betrieblich, Gewerblichkeit).",
+    ],
+    konnektor: [
+      "add_free_postings, assign_receipt_to_free_posting, add_transaction_postings, get_receipt_transactions, get_account_ledger (Pflicht: postingaccount_number, date_from, date_to), add_comment.",
+    ],
+  },
+  {
+    id: "buchungstexte",
+    titel: "Buchungstexte: konstant je Fallart, ohne Rechnungsnummer (Buchungsvorschläge in BHB)",
+    quelle: "Übergabe des Teams (10.10.2026): Beobachtung des Mandanten, die Aufblähung der Vorschläge selbst wurde in der Oberfläche nicht geprüft",
+    regeln: [
+      "Nach Beobachtung des Mandanten wird jeder unterschiedliche Buchungstext in BHB zu einem dauerhaften Buchungsvorschlag. Texte mit Rechnungsnummer erzeugen pro Fall einen eigenen Vorschlag, obwohl die Nummer nur einmal vorkommt.",
+      "1. Konstanter Text je Fallart, ohne Rechnungs-, Beleg-, Aktenzeichen- oder Datumsanteile. Gut: 'Kaufpartner Forderungskaufpreis Art. 82 DSGVO'. Schlecht: 'Kaufpartner 2026-12345 Forderungskaufpreis Art. 82 DSGVO (privat)'.",
+      "2. Die Nummer steckt im angehängten Beleg, nicht im Text. 3. Zusätze wie '(privat)' weglassen, wenn das Konto die Information trägt (1890).",
+      "4. Bei Transaktionsbuchungen hängt BHB den Gegenpartner automatisch an ('... - <Gegenpartner>'), bei freien Buchungen nicht: dort den Partnernamen in den konstanten Text aufnehmen.",
+      "Texte vor dem ersten Buchen festlegen. Ein gebuchter Text lässt sich vermutlich nicht ändern (nicht geprüft); Korrektur hieße cancel_posting (erst Vorschau, dann Freigabe) und Neubuchung.",
+    ],
+    achtung: [
+      "Die Buchungstools warnen (warnings, auch bei dry_run), wenn ein Text Rechnungsnummer, Datum oder Klammerzusatz enthält, und schlagen einen bereinigten Text vor. Der Text wird nie automatisch geändert.",
+      "Altbuchungen mit langen Texten: keinen Massenlauf. Betroffene Buchungen auflisten, je Fall einen Vorschlag machen, Freigabe einzeln.",
+    ],
+    konnektor: ["add_free_postings, add_transaction_postings, add_receipt_postings (dry_run: true zeigt die Warnung ohne Buchung), cancel_posting."],
+  },
+  {
     id: "lieferantenportal_abgleich",
     titel: "Alle Belege eines wiederkehrenden Lieferanten prüfen und mit dessen Rechnungsportal abgleichen",
     quelle: "Übergabe des Teams (09.10.2026): Prüfsitzung zu einem Auslands-SaaS-Anbieter, Beispielwerte. Kein BHB-Artikel",

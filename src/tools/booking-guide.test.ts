@@ -63,6 +63,17 @@ describe("booking guide data", () => {
   });
 });
 
+describe("Playbooks der Übergabe vom 10.10.2026", () => {
+  it("documents the Interimskonto route and the constant posting texts", () => {
+    const g = JSON.stringify(findBookingGuide("gegenertrag_interimskonto"));
+    expect(g).toMatch(/Fehler 31/);
+    expect(g).toMatch(/1590/);
+    expect(g).toMatch(/paarweise/);
+    expect(g).toMatch(/Zahlungsdatum/);
+    expect(JSON.stringify(findBookingGuide("buchungstexte"))).toMatch(/ohne Rechnungs-, Beleg-, Aktenzeichen- oder Datumsanteile/);
+  });
+});
+
 describe("get_booking_guide", () => {
   it("is read-only and makes no API call", () => {
     expect(tool.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
