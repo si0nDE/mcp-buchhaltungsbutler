@@ -1,6 +1,6 @@
 // Usage: npm run release
 // Bumps to the next CalVer yyyy.mm.dd.NNN (NNN = existing tags of today + 1), writes src/version.ts and
-// package.json/package-lock.json (semver form yyyy.mmdd.N, since npm rejects leading zeros), commits and tags.
+// package.json/package-lock.json (semver form yyyy.mmdd.N, since npm rejects leading zeros), commits, tags and rebuilds dist.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -30,4 +30,6 @@ for (const file of ["package.json", "package-lock.json"]) {
 git("add", "src/version.ts", "package.json", "package-lock.json");
 git("commit", "-m", `release: v${version}`);
 git("tag", `v${version}`);
+// dist is gitignored and what the local connector runs: rebuild it so it carries the released version.
+execFileSync("npm", ["run", "build"], { stdio: "inherit" });
 console.log(`Released v${version}. Publish with: git push && git push origin v${version}`);

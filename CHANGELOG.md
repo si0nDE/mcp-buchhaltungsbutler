@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Neu: `npm run release` baut `dist` nach dem Tag neu (`dist` ist gitignored, der lokale Konnektor läuft daraus; ohne Build blieb er nach dem Release auf altem Stand).
+
 - Fix: `check_receipt_fields` meldete bei einer Mobilfunk-Rechnung zwei Fehlalarme. Rechnungsnummer mit Leerzeichen im PDF („56 1670 …“) gegen die Nummer ohne Leerzeichen in BHB gilt jetzt als gleich (Vergleich ohne Leerzeichen und Trennzeichen). Der Betrag aus BHB wird nicht mehr gegen ein beschriftetes „Brutto“ verglichen (eine Zeile „EUR brutto 100,00“ im Guthabenhinweis täuschte einen Betragsfehler vor), sondern gilt als auffällig nur, wenn er nirgends im Text steht. Die Rechenprobe erkennt „Summe Netto 19 % 46,86“, „+19 % USt. auf 46,86 € 8,90 €“ und „Betrag 55,76 €“ und schlägt nur an, wenn keiner der Brutto-Kandidaten zu Netto + Steuer passt.
 
 - Neu: Tool `check_receipt_fields` (49 Tools, schreibgeschützt): Heuristik auf dem PDF-Text eines Belegs für auffällige oder fehlende Pflichtangaben nach § 14 Abs. 4 UStG: Steuernummer/USt-IdNr. (Platzhalter wie „folgt“, „beantragt“, „wird nachgereicht“ werden erkannt), Anschrift, Datum, Rechnungsnummer (auch gegen die Nummer in BHB), Leistungsdatum/-zeitraum, Steuersatz oder Befreiungshinweis, Rechenprobe Netto + Steuer = Brutto (±0,01 €) und Vergleich mit dem Betrag in BHB. Die Antwort enthält nur Auffälligkeiten (`auffaellig`) und nicht Prüfbares (`nicht_pruefbar`), nie eine Freigabe; ohne Textebene steht „nichts geprüft“. Grenzen: Aussteller und Empfänger der Steuernummer sind nicht zu trennen, keine Steuerberatung, Plausibilität bei verbundenen Unternehmen bleibt beim Nutzer.
