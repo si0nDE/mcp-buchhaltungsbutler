@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix: Antworten mit Zusatzfeldern neben `data` (`missing_invoicenumbers`, `query_counts`, `booking_hints`, `warnings`, ...) scheiterten im Client mit „Structured content does not match the tool's output schema: data must NOT have additional properties“ (live: `list_receipts` mit `invoicenumbers`, `list_transactions` mit `booked`). Der Server nimmt `additionalProperties: false` jetzt aus allen Output-Schemas. Neue Tests in `server-schema.test.ts` rufen die Tools über einen echten MCP-Client auf, der gegen das Schema validiert; die bisherigen Tests prüften nur die Handler und sahen den Fehler nicht.
+
 - Fix: `posting_status.booked` ist `null` (unbekannt), wenn der Durchlauf der Buchungen abgebrochen wurde und zu einem Umsatz keine Buchung gesehen wurde; vorher `false`. Bei `list_transactions` mit `booked` bleiben solche Umsätze in beiden Filtern, damit eine mögliche Doppelbuchung nicht als „offen“ durchgeht.
 - Neu: `get_account_ledger` liefert im Standardsatz `tax_key`, `tax_key_effective` und `vatPostingaccountNumbers` (wie BHB die Steuer gespeichert hat) und markiert Zeilen auf USt-/VSt-Konten mit `is_tax_line: true`. Ein `vat_code` (19_vat usw.) wird bewusst nicht abgeleitet: BHB gibt den beim Buchen übergebenen Code nicht zurück, die Zuordnung Schlüssel ↔ Code ist nur für 101 ↔ 19_vat beobachtet.
 

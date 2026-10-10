@@ -54,7 +54,13 @@ function stripDraft07Dialect(server: McpServer): void {
     };
     for (const tool of result.tools) {
       if (tool.inputSchema) delete tool.inputSchema.$schema;
-      if (tool.outputSchema) delete tool.outputSchema.$schema;
+      if (tool.outputSchema) {
+        delete tool.outputSchema.$schema;
+        // Tools add metadata next to data (query_counts, booking_hints, missing_invoicenumbers, warnings, ...). Zod renders
+        // additionalProperties:false, and clients validating structuredContent reject every extra key with
+        // "data must NOT have additional properties". Extra keys are intended, so allow them at the top level.
+        if (tool.outputSchema.additionalProperties === false) delete tool.outputSchema.additionalProperties;
+      }
     }
     return result;
   });
