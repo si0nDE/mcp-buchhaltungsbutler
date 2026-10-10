@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Neu: Tool `check_receipt_fields` (49 Tools, schreibgeschützt): Heuristik auf dem PDF-Text eines Belegs für auffällige oder fehlende Pflichtangaben nach § 14 Abs. 4 UStG: Steuernummer/USt-IdNr. (Platzhalter wie „folgt“, „beantragt“, „wird nachgereicht“ werden erkannt), Anschrift, Datum, Rechnungsnummer (auch gegen die Nummer in BHB), Leistungsdatum/-zeitraum, Steuersatz oder Befreiungshinweis, Rechenprobe Netto + Steuer = Brutto (±0,01 €) und Vergleich mit dem Betrag in BHB. Die Antwort enthält nur Auffälligkeiten (`auffaellig`) und nicht Prüfbares (`nicht_pruefbar`), nie eine Freigabe; ohne Textebene steht „nichts geprüft“. Grenzen: Aussteller und Empfänger der Steuernummer sind nicht zu trennen, keine Steuerberatung, Plausibilität bei verbundenen Unternehmen bleibt beim Nutzer.
+
 - Fix: Antworten mit Zusatzfeldern neben `data` (`missing_invoicenumbers`, `query_counts`, `booking_hints`, `warnings`, ...) scheiterten im Client mit „Structured content does not match the tool's output schema: data must NOT have additional properties“ (live: `list_receipts` mit `invoicenumbers`, `list_transactions` mit `booked`). Der Server nimmt `additionalProperties: false` jetzt aus allen Output-Schemas. Neue Tests in `server-schema.test.ts` rufen die Tools über einen echten MCP-Client auf, der gegen das Schema validiert; die bisherigen Tests prüften nur die Handler und sahen den Fehler nicht.
 
 - Fix: `posting_status.booked` ist `null` (unbekannt), wenn der Durchlauf der Buchungen abgebrochen wurde und zu einem Umsatz keine Buchung gesehen wurde; vorher `false`. Bei `list_transactions` mit `booked` bleiben solche Umsätze in beiden Filtern, damit eine mögliche Doppelbuchung nicht als „offen“ durchgeht.
