@@ -3,7 +3,7 @@ import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
 import { assertDeliveryDate, DATE_DELIVERY_GUIDE } from "./bhb-systematik.js";
 import { extractReceiptText } from "./receipt-text-extraction.js";
-import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type CallToolResult, type ToolDef } from "./types.js";
 
 interface ReceiptGetResult {
   data?: {
@@ -46,6 +46,41 @@ const SUMMARY_FIELDS = [
 ] as const;
 
 const RECEIPT_TYPE = z.enum(["invoice inbound", "invoice outbound", "credit inbound", "credit outbound"]);
+
+const MAX_LISTED_IDS = 10;
+
+// Zwei stille Fehlerquellen beim Auflisten: Belege ohne Datum und date_since_last_modified (in der Praxis fehlten damit neue Belege, Ursache unklar). Nur Hinweise, die Liste bleibt unverändert.
+function listReceiptWarnings(
+  rows: Array<Record<string, unknown>>,
+  filters: { date_since_last_modified?: string }
+): string[] {
+  const warnings: string[] = [];
+  const undated = rows.filter((r) => r.date === null || r.date === undefined || String(r.date).trim() === "");
+  if (undated.length > 0) {
+    const ids = undated.slice(0, MAX_LISTED_IDS).map((r) => String(r.id_by_customer)).join(", ");
+    warnings.push(
+      `${undated.length} Beleg(e) ohne Datum in dieser Liste (id_by_customer: ${ids}${undated.length > MAX_LISTED_IDS ? ", ..." : ""}). ` +
+        "Vor dem Buchen melden und klären; sie nicht über Datumsfilter suchen."
+    );
+  }
+  if (filters.date_since_last_modified) {
+    warnings.push(
+      "date_since_last_modified ist für 'was ist neu' nicht verlässlich: beobachtet wurden alte Belege in der Liste, aber 13 neue fehlten " +
+        "(Ursache unklar). Neue Belege zusätzlich über counterparty/invoicenumber oder einen ID-Bereich suchen und beide Abfragen vergleichen. " +
+        "0 oder auffällig wenige Treffer zuerst als Abfrageproblem behandeln."
+    );
+  }
+  return warnings;
+}
+
+function withListWarnings(result: CallToolResult, warnings: string[]): CallToolResult {
+  if (warnings.length === 0) return result;
+  return {
+    ...result,
+    content: [...result.content, ...warnings.map((text) => ({ type: "text" as const, text: `Warnung: ${text}` }))],
+    structuredContent: { ...result.structuredContent, warnings },
+  };
+}
 
 export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
   const listShape = {
@@ -120,7 +155,10 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
   ) {
     const { full, ...rest } = args;
     const { rows, truncated } = await fetchDirection(direction, rest);
-    return ok(trimList(rows, SUMMARY_FIELDS, full ?? false), truncated ? { truncated } : undefined);
+    return withListWarnings(
+      ok(trimList(rows, SUMMARY_FIELDS, full ?? false), truncated ? { truncated } : undefined),
+      listReceiptWarnings(rows, rest)
+    );
   }
 
   const listReceipts = defineTool({
@@ -129,7 +167,9 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "List receipts (Belege), inbound or outbound, with optional filters. counterparty matches as a " +
       "case-insensitive substring (e.g. \"muster\" matches \"Musterfirma GmbH\"), unlike the underlying " +
       "API's exact match — this sweeps every page internally to filter, so results may take longer for " +
-      "a wide date range.",
+      "a wide date range. Receipts without a date (date null) are probably left out by date_from/date_to (not verified): " +
+      "list them without a date filter before booking. The answer warns about undated rows and about date_since_last_modified " +
+      "(unreliable for 'what is new').",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: LIST_RECEIPTS_OUTPUT_SHAPE,
     inputSchema: listShape,
@@ -151,9 +191,9 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const merged = [...tag(inbound.rows, "inbound"), ...tag(outbound.rows, "outbound")].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
       const paged = merged.slice(offset ?? 0, win);
       const truncated = inbound.truncated || outbound.truncated;
-      return ok(
-        trimList(paged, [...SUMMARY_FIELDS, "list_direction"], full ?? false),
-        truncated ? { truncated } : undefined
+      return withListWarnings(
+        ok(trimList(paged, [...SUMMARY_FIELDS, "list_direction"], full ?? false), truncated ? { truncated } : undefined),
+        listReceiptWarnings(paged, filters)
       );
     },
   });

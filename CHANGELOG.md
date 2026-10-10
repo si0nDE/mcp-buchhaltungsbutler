@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Neu: `list_receipts` warnt (zusätzlicher Textblock und `structuredContent.warnings`) bei Belegen ohne Datum in der Liste und bei `date_since_last_modified` (nicht verlässlich für „was ist neu“, beobachtet: neue Belege fehlten). Die Liste selbst bleibt unverändert.
 - Neu: `get_booking_guide` Themen `gegenertrag_interimskonto` (Aufwand mit Vorsteuer und Gegenertrag über 1590 in zwei freien Buchungen, vermeidet Fehler 31; Käuferzahlung als Privateinlage 1890; paarweise Prüfung statt Saldo; Rechenprobe der Abrechnung; Rückfrage nach dem Zahlungsdatum bei Drittzahlung; Risikohinweis Gewerblichkeit) und `buchungstexte` (konstante Texte je Fallart).
 - Neu: `add_receipt_postings`, `add_transaction_postings` und `add_free_postings` warnen (auch bei `dry_run`), wenn ein `postingtext` Rechnungsnummer, Datum oder Klammerzusatz enthält, und schlagen einen bereinigten Text vor. Der Text wird nie geändert. Beispieltexte in den Tool-Beschreibungen ohne Rechnungsnummer.
 

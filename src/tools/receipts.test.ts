@@ -300,6 +300,34 @@ describe("receipts tools", () => {
 
 });
 
+describe("list_receipts warnings", () => {
+  const row = (id: string, date: string | null) => ({ id_by_customer: id, type: "invoice inbound", date, counterparty: "ACME", amount: "10.00" });
+
+  it("warns about receipts without a date and keeps the list unchanged", async () => {
+    const client = mockClient({ success: true, rows: 2, data: [row("1", "2026-01-01"), row("2", null)] });
+    const [listReceipts] = createReceiptsTools(client);
+    const result = await listReceipts.handler({ list_direction: "inbound", date_from: "2026-01-01" });
+    expect(JSON.parse(result.content[0].text)).toHaveLength(2);
+    expect(result.structuredContent?.warnings).toHaveLength(1);
+    expect((result.structuredContent?.warnings as string[])[0]).toMatch(/1 Beleg\(e\) ohne Datum.*: 2/);
+  });
+
+  it("warns that date_since_last_modified is not reliable for 'what is new'", async () => {
+    const client = mockClient({ success: true, rows: 1, data: [row("1", "2026-01-01")] });
+    const [listReceipts] = createReceiptsTools(client);
+    const result = await listReceipts.handler({ list_direction: "inbound", date_since_last_modified: "2026-10-01" });
+    expect((result.structuredContent?.warnings as string[])[0]).toMatch(/nicht verlässlich.*13 neue/);
+  });
+
+  it("stays silent for a normal list", async () => {
+    const client = mockClient({ success: true, rows: 1, data: [row("1", "2026-01-01")] });
+    const [listReceipts] = createReceiptsTools(client);
+    const result = await listReceipts.handler({ list_direction: "inbound", date_from: "2026-01-01" });
+    expect(result.structuredContent?.warnings).toBeUndefined();
+    expect(result.content).toHaveLength(1);
+  });
+});
+
 describe("list_receipts list_direction both", () => {
   it("queries both directions, tags rows and merges by date", async () => {
     const call = vi.fn((_k: string, p: { list_direction: string }) =>
