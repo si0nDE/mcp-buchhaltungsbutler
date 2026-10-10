@@ -56,6 +56,21 @@ describe("checkReceiptFields", () => {
     expect(checkReceiptFields(t).some((x) => x.code === "arithmetic_unchecked")).toBe(false);
   });
 
+  it("does not mistake a per-position Zwischensumme for the net total", () => {
+    const t = `Muster IT, Weg 1, 12345 Ort
+ Rechnung Belegnr. 4711 Datum 28.11.2025
+ Steuernummer 12/345/67890
+ 1  2,00  100  25,00  50,00
+ Abrechnungszeitraum: 01.11.2025 - 30.11.2025
+ Zwischensumme   50,00
+ 2  1,00  101  10,00  10,00
+ Zwischensumme   10,00
+ Nettobetrag  60,00 €
+ MwSt. 19,00 % auf 60,00 11,40 €
+ Gesamtsumme  71,40 €`;
+    expect(codes(t, { invoicenumber: "4711", amount: 71.4 })).toEqual([]);
+  });
+
   it("still flags when no gross candidate matches net plus tax", () => {
     expect(codes("Rechnung Nr. 1 vom 01.01.2026\n12345 Ort\nSteuernummer 12/345/67890\nLeistung am 01.01.2026\nSumme Netto 10,00\n19 % USt 1,90\nBetrag 15,00")).toContain("arithmetic");
   });

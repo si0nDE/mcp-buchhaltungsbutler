@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix: `check_receipt_fields` meldete bei einer Rechnung mit mehreren Positionen einen Rechenfehler, weil die erste „Zwischensumme“ (je Position) als Netto galt. Jetzt werden alle Kandidaten für Netto, Steuer und Brutto geprüft; die Meldung `arithmetic` erscheint nur, wenn keine Kombination Netto + Steuer = Brutto aufgeht, und nennt alle gefundenen Beträge.
+
 - Neu: `npm run release` baut `dist` nach dem Tag neu (`dist` ist gitignored, der lokale Konnektor läuft daraus; ohne Build blieb er nach dem Release auf altem Stand).
 
 - Fix: `check_receipt_fields` meldete bei einer Mobilfunk-Rechnung zwei Fehlalarme. Rechnungsnummer mit Leerzeichen im PDF („56 1670 …“) gegen die Nummer ohne Leerzeichen in BHB gilt jetzt als gleich (Vergleich ohne Leerzeichen und Trennzeichen). Der Betrag aus BHB wird nicht mehr gegen ein beschriftetes „Brutto“ verglichen (eine Zeile „EUR brutto 100,00“ im Guthabenhinweis täuschte einen Betragsfehler vor), sondern gilt als auffällig nur, wenn er nirgends im Text steht. Die Rechenprobe erkennt „Summe Netto 19 % 46,86“, „+19 % USt. auf 46,86 € 8,90 €“ und „Betrag 55,76 €“ und schlägt nur an, wenn keiner der Brutto-Kandidaten zu Netto + Steuer passt.

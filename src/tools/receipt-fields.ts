@@ -83,15 +83,16 @@ export function checkReceiptFields(text: string, ctx: FieldContext = {}): Findin
   if (!hasRate && !hasExemption) add("tax_rate_missing", "auffaellig", "Weder Steuersatz mit Steuerbetrag noch Hinweis auf Steuerbefreiung erkennbar");
 
   // 7. Rechenprobe Netto + Steuer = Brutto und Vergleich mit BHB
-  const net = labelledAll(text, "Netto(?:betrag)?|Summe\\s+netto|Gesamt\\s*netto|Zwischensumme|Nettosumme")[0];
+  // Je Etikett mehrere Kandidaten: Rechnungen mit Positionen tragen je Position eine "Zwischensumme", ein Guthabenhinweis kann
+  // "EUR brutto 100,00" enthalten. Die Rechenprobe schlägt nur an, wenn keine Kombination Netto + Steuer = Brutto aufgeht.
+  const nets = labelledAll(text, "Netto(?:betrag)?|Summe\\s+netto|Gesamt\\s*netto|Zwischensumme|Nettosumme");
   const taxes = labelledAll(text, "(?:zzgl\\.?\\s*|\\+\\s*)?(?:USt\\.?|MwSt\\.?|Umsatzsteuer|Mehrwertsteuer)");
-  // Mehrere Kandidaten für Brutto (z. B. "EUR brutto 100,00" in einem Guthabenhinweis): die Rechenprobe schlägt nur an,
-  // wenn kein einziger zu Netto + Steuer passt.
   const grosses = labelledAll(text, "Brutto(?:betrag)?|Gesamtbetrag|Rechnungsbetrag|Endbetrag|Gesamtsumme|Summe\\s+brutto|zu\\s+zahlen(?:der\\s+Betrag)?|^\\s*Betrag");
-  const tax = taxes.find((t) => net !== undefined && grosses.some((g) => Math.abs(round(net + t) - round(g)) <= 0.011)) ?? taxes[0];
-  if (net !== undefined && tax !== undefined && grosses.length > 0) {
-    if (!grosses.some((g) => Math.abs(round(net + tax) - round(g)) <= 0.011)) {
-      add("arithmetic", "auffaellig", `Netto ${net.toFixed(2)} + Steuer ${tax.toFixed(2)} = ${round(net + tax).toFixed(2)}, im Text steht Brutto ${grosses.map((g) => g.toFixed(2)).join(" / ")} (Rundung bis 0,01 € zulässig)`);
+  if (nets.length > 0 && taxes.length > 0 && grosses.length > 0) {
+    const fits = nets.some((n) => taxes.some((t) => grosses.some((g) => Math.abs(round(n + t) - round(g)) <= 0.011)));
+    if (!fits) {
+      const [n, t] = [nets[nets.length - 1], taxes[taxes.length - 1]];
+      add("arithmetic", "auffaellig", `Keine Kombination aus Netto (${nets.map((x) => x.toFixed(2)).join(" / ")}), Steuer (${taxes.map((x) => x.toFixed(2)).join(" / ")}) und Brutto (${grosses.map((x) => x.toFixed(2)).join(" / ")}) geht auf, z. B. ${n.toFixed(2)} + ${t.toFixed(2)} = ${round(n + t).toFixed(2)} (Rundung bis 0,01 € zulässig)`);
     }
   } else {
     add("arithmetic_unchecked", "nicht_pruefbar", "Rechenprobe nicht möglich: Netto, Steuer und Brutto sind nicht alle eindeutig beschriftet im Text zu finden");
