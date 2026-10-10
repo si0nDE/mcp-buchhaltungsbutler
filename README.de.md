@@ -8,7 +8,7 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 ## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-- **46 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **47 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
 - **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
 - **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
 - **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
@@ -109,7 +109,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 | Kostenstellen | `list_cost_locations`, `manage_cost_location` |
 | Kontakte (Debitoren/Kreditoren) | `list_contacts`, `create_contacts`, `update_contact` |
 | Buchungskonten | `list_posting_accounts`, `manage_posting_account` |
-| Belege | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions` |
+| Belege | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions`, `pair_receipt_family` |
 | Transaktionen | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts` |
 | Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_einvoice` |

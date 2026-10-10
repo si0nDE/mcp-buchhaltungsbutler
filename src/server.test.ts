@@ -21,7 +21,7 @@ describe("createServer", () => {
     const server = createServer(mockClient({}));
     const registeredTools = (server as unknown as { _registeredTools: Record<string, unknown> })
       ._registeredTools;
-    expect(Object.keys(registeredTools)).toHaveLength(46);
+    expect(Object.keys(registeredTools)).toHaveLength(47);
   });
 
   it("wires list_accounts through to the given client", async () => {

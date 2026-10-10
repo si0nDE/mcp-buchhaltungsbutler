@@ -9,6 +9,7 @@ import { createInvoicesTools } from "./invoices.js";
 import { createMonthEndTools } from "./month-end.js";
 import { createPostingAccountsTools } from "./posting-accounts.js";
 import { createPostingsTools } from "./postings.js";
+import { createReceiptFamilyTools } from "./receipt-family.js";
 import { createReceiptsTools } from "./receipts.js";
 import { createReportsTools } from "./reports.js";
 import { createTransactionsTools } from "./transactions.js";
@@ -25,6 +26,7 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createEntertainmentReceiptTools(client),
     ...createPostingAccountsTools(client),
     ...createReceiptsTools(client),
+    ...createReceiptFamilyTools(client),
     ...createTransactionsTools(client),
     ...createPostingsTools(client),
     ...createInvoicesTools(client),
