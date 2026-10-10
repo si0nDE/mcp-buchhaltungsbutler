@@ -60,4 +60,19 @@ describe("structuredContent with extra keys passes the client's output-schema va
     const res = await client.callTool({ name: "list_transactions", arguments: { with_posting_status: true } });
     expect(res.isError).toBeFalsy();
   });
+
+  it("list_postings filtered by transaction", async () => {
+    const client = await connect(() => ({
+      data: [
+        { id_by_customer: "1", transaction_id_by_customer: "5001", amount: "1.00" },
+        { id_by_customer: "2", transaction_id_by_customer: "5002", amount: "2.00" },
+      ],
+    }));
+    const res = await client.callTool({
+      name: "list_postings",
+      arguments: { date_from: "2026-03-04", date_to: "2026-03-04", transaction_id_by_customer: 5001 },
+    });
+    expect(res.isError).toBeFalsy();
+    expect((res.structuredContent as { data: { data: unknown[] } }).data.data).toHaveLength(1);
+  });
 });

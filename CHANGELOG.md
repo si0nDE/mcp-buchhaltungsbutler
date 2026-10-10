@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix: `list_postings` mit `transaction_id_by_customer`/`receipt_id_by_customer` scheiterte live mit „Output validation error: expected record, received array“ (der Filterweg lieferte ein Array statt des Objekts `{success, rows, data}`). Antwortform jetzt wie ohne Filter; ein Test ruft das Tool über einen MCP-Client auf.
+- Neu: Guide-Thema `zahlung_buchen` (Vorab-Prüfung vor jeder Zahlungsbuchung: alle Umsätze der Gegenpartei am Datum, `posting_status`, Zuordnungen, `check_receipt_fields`, Prüfen nach dem Buchen). Server-Instruktionen und `docs/bhb-systematik.md` kennen `posting_status`, `booked`, `check_receipt_fields` und die Grenzen von `dry_run`.
+
 - Fix: `check_receipt_fields` meldete bei einer Rechnung mit mehreren Positionen einen Rechenfehler, weil die erste „Zwischensumme“ (je Position) als Netto galt. Jetzt werden alle Kandidaten für Netto, Steuer und Brutto geprüft; die Meldung `arithmetic` erscheint nur, wenn keine Kombination Netto + Steuer = Brutto aufgeht, und nennt alle gefundenen Beträge.
 
 - Neu: `npm run release` baut `dist` nach dem Tag neu (`dist` ist gitignored, der lokale Konnektor läuft daraus; ohne Build blieb er nach dem Release auf altem Stand).

@@ -511,7 +511,8 @@ export function createPostingsTools(
             (transaction_id_by_customer === undefined || String(p.transaction_id_by_customer ?? "") === String(transaction_id_by_customer)) &&
             (receipt_id_by_customer === undefined || hasReceipt(p, receipt_id_by_customer))
         );
-        const response = ok(compactRows(matched, { compact, include_links, fields }), {
+        // Same shape as the unfiltered answer ({ success, rows, data: [...] }): the output schema of this tool wants an object.
+        const response = ok({ success: true, rows: matched.length, data: compactRows(matched, { compact, include_links, fields }) }, {
           counts: { scanned: all.length, matched: matched.length, truncated },
         });
         response.content.push({

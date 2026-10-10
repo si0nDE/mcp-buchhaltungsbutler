@@ -367,6 +367,32 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
   },
   {
+    id: "zahlung_buchen",
+    titel: "Vorab-Prüfung vor jeder Zahlungsbuchung (Schutz vor Doppelbuchung)",
+    quelle: "Übergabe des Teams (10.10.2026), Teil 2, Abschnitt 6.1: am System beobachtet, Beispieldaten. Kein BHB-Artikel, keine Steuerberatung",
+    regeln: [
+      "Eine Anfrage wie „die Zahlung buchen“ kann zwei gegenläufige Umsätze derselben Gegenpartei am selben Tag meinen (Eingang und Ausgang zwischen verbundenen Unternehmen). Erst alle Umsätze der Gegenpartei am Datum listen, dann entscheiden.",
+      "Buchungsstatus je Umsatz zuerst klären, nie buchen, bevor er bekannt ist. BHB hat kein Buchungs-Flag am Umsatz; der Konnektor liefert posting_status {booked, posting_ids, splits, fixed} aus den Buchungen. booked null heißt unbekannt (Abfrage abgebrochen): dann Zeitraum verkleinern, nicht annehmen, dass der Umsatz offen ist.",
+      "Zuordnungen sind Tatsachen, vermutete Zuordnungen werden nicht gebucht: get_transaction_receipts je Umsatz lesen. Bei Behördenzahlungen Konto und Steuerschlüssel nicht raten, nachfragen.",
+      "Belegtext lesen: check_receipt_fields meldet Auffälligkeiten bei Pflichtangaben (z. B. USt-IdNr. „folgt“, Rechenprobe). Auffälligkeiten zuerst dem Nutzer nennen. Nur eine Heuristik, nie eine Freigabe.",
+      "Je Bankumsatz ein eigener Aufruf, je Beleg ein Split. Die Summe der Splits ist der Bankbetrag.",
+      "Danach prüfen: Kontenblatt des Erlös-/Aufwandskontos und des Steuerkontos (Netto, Steuer, Brutto, Rundung bis 0,01 €), Belegzuordnung vorhanden, keine zweite Buchung zum Umsatz.",
+    ],
+    ablauf: [
+      "1. list_transactions mit date_from/date_to und query (Gegenpartei), with_posting_status: true; offene Umsätze eines Tages mit booked: false.",
+      "2. get_transaction_receipts je Umsatz, get_receipt (extract_text: true) oder check_receipt_fields je Beleg.",
+      "3. Mehrere Rechnungsnummern aus dem Auftrag in einem Zug: list_receipts mit invoicenumbers (Richtung both).",
+      "4. add_transaction_postings (zuerst dry_run für die lokalen Prüfungen; er beweist nichts über BHB), danach list_postings mit transaction_id_by_customer und dem Zahlungstag gegen die Sollwerte prüfen.",
+    ],
+    achtung: [
+      "Ist-Versteuerung: das Quartal richtet sich nach dem Zahlungsdatum. Vorjahresrechnungen, die im Folgejahr bezahlt werden, gehören ins Zahlungsjahr.",
+      "Der Zahlungsstand im Zweitsystem (z. B. Lexware) kann vom Stand in BHB abweichen: Vorjahresanteile getrennt halten, was dort schon gemeldet ist, fließt nicht in eine neue Voranmeldung.",
+    ],
+    konnektor: [
+      "get_transaction liefert posting_status immer mit; list_transactions mit with_posting_status oder booked. list_postings filtert mit transaction_id_by_customer/receipt_id_by_customer (Sweep des Datumsfensters, Fenster eng halten). Gemischte Vorzeichen bei Rechnung plus Korrektur: Thema gutschrift_verrechnen.",
+    ],
+  },
+  {
     id: "gegenertrag_interimskonto",
     titel: "Aufwand mit Vorsteuer und Gegenertrag ohne Vorsteuer (Kostenübernahme durch Dritte, z. B. Forderungskauf), über das Interimskonto",
     quelle: "Übergabe des Teams (10.10.2026): Arbeitssitzung Forderungskauf + Anwaltskosten, am System beobachtet, Beispieldaten. Kein BHB-Artikel, keine Steuerberatung",

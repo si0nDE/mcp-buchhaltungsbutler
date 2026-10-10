@@ -74,6 +74,16 @@ describe("Playbooks der Übergabe vom 10.10.2026", () => {
   });
 });
 
+describe("zahlung_buchen", () => {
+  it("holds the pre-booking checks with the tools that exist", () => {
+    const g = JSON.stringify(findBookingGuide("zahlung_buchen"));
+    expect(g).toMatch(/posting_status/);
+    expect(g).toMatch(/booked null/);
+    expect(g).toMatch(/check_receipt_fields/);
+    expect(g).toMatch(/invoicenumbers/);
+  });
+});
+
 describe("get_booking_guide", () => {
   it("is read-only and makes no API call", () => {
     expect(tool.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });

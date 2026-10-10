@@ -1034,12 +1034,12 @@ describe("list_postings filters by transaction and receipt", () => {
   it("keeps only the postings of one transaction", async () => {
     const [listPostings] = createPostingsTools(mockClient({ data }));
     const result = await listPostings.handler({ date_from: "2026-03-03", date_to: "2026-03-03", transaction_id_by_customer: 5001 });
-    expect(JSON.parse(result.content[0].text).map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["1", "2"]);
+    expect(JSON.parse(result.content[0].text).data.map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["1", "2"]);
   });
 
   it("matches a receipt inside a comma separated assignment list", async () => {
     const [listPostings] = createPostingsTools(mockClient({ data }));
     const result = await listPostings.handler({ date_from: "2026-03-03", date_to: "2026-03-03", receipt_id_by_customer: 9004 });
-    expect(JSON.parse(result.content[0].text).map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["2"]);
+    expect(JSON.parse(result.content[0].text).data.map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["2"]);
   });
 });

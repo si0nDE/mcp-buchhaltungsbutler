@@ -268,6 +268,9 @@ export const SERVER_INSTRUCTIONS = [
   "- PayPal Business Debit cashback (to_from 'PayPal Inc Debit Card', type 'Cash Back Bonus'): one split on Sonstige Erträge " +
     "2700 | 4830, vat 0_none, no receipt, text 'PayPal Business Debit Cashback' - not steuerbar, no Vorsteuer correction " +
     "(get_booking_guide paypal_cashback). list_transactions/get_transaction flag it as booking_hints.",
+  "- Before booking a payment: get_booking_guide zahlung_buchen. BHB has no booking flag on transactions; get_transaction and " +
+    "list_transactions (with_posting_status, booked) return posting_status {booked, posting_ids, splits, fixed}, booked null = unknown " +
+    "(never treat as open). check_receipt_fields reports conspicuous mandatory invoice details, never an approval.",
   "- Transfers between Zahlungskonten are never booked directly: both sides go against Geldtransit 1360 | 1460. Skonto " +
     "is a negative split with the receipt's tax rate on the settling payment, never a reduced receipt.",
   "- Fixed (festgeschrieben) postings are corrected by a reversal posting (cancel_posting does this only for ids the user " +
