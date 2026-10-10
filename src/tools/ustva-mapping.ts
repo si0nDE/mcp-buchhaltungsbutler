@@ -115,7 +115,8 @@ export const UST_VA_BY_RATE: ReadonlyArray<{ schluessel: string; position: strin
   { schluessel: "i.g.E. 7% USt./VSt.", position: "Kz 93 (USt.) und Kz 61 (VSt.)" },
   { schluessel: "19% VSt.", position: "Kz 66" },
   { schluessel: "7% VSt.", position: "Kz 66" },
-  { schluessel: "§13b 19% USt./VSt.", position: "Kz 46 (USt.) und Kz 67 (VSt.); ein anderes Konto kann ein anderes Mapping auslösen" },
+  { schluessel: "§13b EU 19% USt./VSt. (Code 19_both_506)", position: "Kz 46 (Bemessung), Kz 47 (USt.) und Kz 67 (VSt.), „sonstige Leistungen eines im übrigen Gemeinschaftsgebiet ansässigen Unternehmens (§ 13b Abs. 1)“; im USt-VA-Entwurf bestätigt. Für 19_both_1 nicht geprüft" },
+  { schluessel: "§13b Andere Leistungen 19% USt./VSt. (Code 19_both_511, u. a. Drittland nach § 13b Abs. 2 Nr. 1)", position: "Kz 84 (Bemessung), Kz 85 (USt.) und Kz 67 (VSt.), „Andere Leistungen (§ 13b Abs. 2 Nr. 1, 2, 4 bis 11 UStG)“; im USt-VA-Entwurf bestätigt. Ein anderes Konto kann ein anderes Mapping auslösen" },
 ];
 
 export interface UstVaMatch {

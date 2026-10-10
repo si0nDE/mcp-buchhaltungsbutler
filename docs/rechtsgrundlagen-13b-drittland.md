@@ -27,18 +27,23 @@ Finanzamt oder ein Steuerberater. Das zugehörige Buchungsmuster steht im Thema 
 | „Bei Ist-Versteuerung entsteht alles mit der Zahlung.“ | Für § 13b gelten die Entstehungsregeln der Abs. 1 bis 4. Die EÜR-Ausgabe selbst folgt dem Abfluss (EStG-Regeln nicht gelesen). |
 | „Ohne Zahlung kein Vorsteuerabzug.“ | § 15 Abs. 1 S. 1 Nr. 4 kennt keine Zahlungsbedingung, außer bei Vorauszahlung. |
 
+## Verifiziert im BHB-Entwurf (10.10.2026)
+
+Die USt-VA-Vorschau für 2026 trennt „sonstige Leistungen eines im übrigen Gemeinschaftsgebiet ansässigen Unternehmens (§ 13b Abs. 1)“ (Kz 46/47)
+und „Andere Leistungen (§ 13b Abs. 2 Nr. 1, 2, 4 bis 11 UStG)“ (Kz 84/85); die Vorsteuer beider steht in Kz 67. Der Abgleich mit den Kontenblättern
+von 1787 nach Steuerschlüssel stimmt auf den Cent: Schlüssel `19_both_506` = Kz 46/47, Schlüssel `19_both_511` = Kz 84/85, Summe = Kz 67.
+Damit ist `19_both_511` der Schlüssel für Drittland-Leistungen nach Abs. 2 Nr. 1 (die Zeile fasst mehrere Nummern zusammen).
+Nicht geprüft sind `19_both_1`, `19_both_6506`/`6511`/`6501` und die `_app`-Varianten. Der Vordruck selbst (BMF) wurde nicht gelesen,
+die Beschriftungen stammen aus der BHB-Vorschau.
+
 ## Nicht verifiziert (nicht als Tatsache weitergeben)
 
-- **Kennziffern** der USt-VA für Drittland (Abs. 2 Nr. 1): aus der Erinnerung Kz 84/85 (Bemessung/Steuer) und Kz 67 (Vorsteuer), Kz 46/47 für EU-Fälle.
-  Nicht aus dem BMF-Vordruck gelesen. `get_ustva_position` kennt nur „§13b 19 % USt./VSt.“ mit Kz 46 und 67.
-- **Zuordnung Oberfläche ↔ API:** die BHB-Oberfläche trennt „EU-Mitgliedstaat (§ 13b Abs. 1)“ und „Drittland (§ 13b Abs. 2 Nr. 1)“. Ob `19_both_511`
-  der Drittland-Option, der EU-Option oder beiden entspricht, ist nicht bestätigt. Die `vat`-Beschreibung des Konnektors sagt deshalb nur „§13b, Zuordnung EU/Drittland unbestätigt“ (früher stand dort „= §13b Drittland“, ohne Beleg).
 - **Verwaltungsauffassung** (UStAE 13b.1, 13b.15, 3a.12): nicht gelesen.
 - **Periode:** BHB ordnet Buchungen nach Zahlungsdatum, § 13b Abs. 2 knüpft an die Rechnung. Ob BHB für § 13b nach Rechnungsdatum melden kann,
   und ob bei EÜR/Ist ein Beleg ohne Zahlung kreditorisch gebucht werden kann, ist offen (Anhaltspunkt: Thema `ust_va_zm`, Bilanzierer buchen
   periodenübergreifend bezahlte Belege kreditorisch).
 
-Diese Punkte lassen sich nur im BHB-Entwurf der USt-VA in der Oberfläche oder beim BHB-Support klären.
+Die Periodenfrage lässt sich nur beim BHB-Support oder im Entwurf eines Quartals mit abweichenden Rechnungs- und Zahlungsdaten klären.
 
 ## Quellenhinweis zur Recherche
 

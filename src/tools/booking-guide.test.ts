@@ -121,7 +121,7 @@ describe("get_booking_guide", () => {
     expect(JSON.stringify(findBookingGuide("erste_schritte"))).toMatch(/Kontenrahmen und Länge der Sachkonten/);
   });
 
-  it("documents the § 13b Drittland pattern and marks the unverified points", () => {
+  it("documents the § 13b Drittland pattern, the verified Kennziffern and what is still unchecked", () => {
     const entry = findBookingGuide("reverse_charge_drittland");
     const e = JSON.stringify(entry);
     expect(entry?.quelle).toMatch(/^Übergabe des Teams/);
@@ -129,7 +129,10 @@ describe("get_booking_guide", () => {
     expect(e).toMatch(/1577/);
     expect(e).toMatch(/1787/);
     expect(e).toMatch(/§ 13b Abs\. 2 Nr\. 1/);
-    expect(e).toMatch(/NICHT VERIFIZIERT/);
+    expect(e).toMatch(/VERIFIZIERT am 10\.10\.2026/);
+    expect(e).toMatch(/Kz 84\/85/);
+    expect(e).toMatch(/Kz 46\/47/);
+    expect(e).toMatch(/19_both_1 und die 65xx/);
     expect(findBookingGuide("lieferantenportal_abgleich")).toBeDefined();
     expect(JSON.stringify(findBookingGuide("pfaendung_zahlung_buchen"))).toMatch(/comment_text/);
   });

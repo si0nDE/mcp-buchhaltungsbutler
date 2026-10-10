@@ -40,6 +40,9 @@ describe("USt-VA Kennziffer lookup", () => {
     const none = parse(await tool.handler({}));
     expect(none.nach_steuerschluessel).toEqual(UST_VA_BY_RATE);
     expect(none.nach_steuerschluessel.map((r: any) => r.position)).toContain("Kz 81");
+    const positions = none.nach_steuerschluessel.map((r: any) => r.position).join(" | ");
+    expect(positions).toMatch(/Kz 46 \(Bemessung\), Kz 47 \(USt\.\) und Kz 67/);
+    expect(positions).toMatch(/Kz 84 \(Bemessung\), Kz 85 \(USt\.\) und Kz 67/);
     const miss = parse(await tool.handler({ account: 4930 }));
     expect(miss.treffer).toEqual([]);
     expect(miss.hinweis).toMatch(/Steuerschlüssel/);

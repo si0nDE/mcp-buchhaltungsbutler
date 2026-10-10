@@ -10,7 +10,7 @@ export const VAT_CODE_GUIDE =
   "19_vat/7_vat = Umsatzsteuer (Erlöskonten); 19_pre/7_pre = Vorsteuer (Aufwandskonten) - Aufwandskonten only take " +
   "Vorsteuer, Ertragskonten only Umsatzsteuer. Reverse charge: *_both_2 / 7_both = i.g.E. (innergemeinschaftlicher " +
   "Erwerb) - ONLY for goods bought in the EU, never for services; 19_both_1 / 19_both_506 = §13b sonstige Leistung of an " +
-  "EU business (Sachverhalt 7), 19_both_511 = §13b sonstige Leistung, Zuordnung EU/Drittland von BHB NICHT bestätigt (Oberfläche trennt Abs. 1 und Abs. 2 Nr. 1, Kennziffern im USt-VA-Entwurf prüfen, get_booking_guide reverse_charge_drittland); suffix _no_pre / 65xx = Umsatzsteuer without Vorsteuer; " +
+  "EU business (Sachverhalt 7), 19_both_511 = §13b \"Andere Leistungen\" (u. a. Drittland, § 13b Abs. 2 Nr. 1; USt-VA Kz 84/85 + Vorsteuer Kz 67, im Entwurf bestätigt; 19_both_506 landet in Kz 46/47, 19_both_1 nicht geprüft; get_booking_guide reverse_charge_drittland); suffix _no_pre / 65xx = Umsatzsteuer without Vorsteuer; " +
   "suffix _app / *_pre_app = aufzuteilende Vorsteuer (parked on a receivables account, reclassified to Abziehbare " +
   "Vorsteuer at year end). Other §13b cases (e.g. Bauleistungen, Gebäudereinigung) are NOT reachable via the code - " +
   "book them on the matching DATEV Automatikkonto (find it via list_posting_accounts search). For 2020 bookings " +
@@ -247,7 +247,7 @@ export const SERVER_INSTRUCTIONS = [
   "- Abweichendes Leistungsdatum (date_delivery) must not be after the receipt date and only counts for receipts booked " +
     "on Debitor/Kreditor.",
   "- vat is a code (see add_*_postings), not a percentage. Foreign VAT -> 0_none; i.g.E. only for goods; code §13b: " +
-    "19_both_1/19_both_506 for EU services (Sachverhalt 7), 19_both_511 §13b with EU/Drittland mapping unconfirmed, other §13b cases need the DATEV Automatikkonto.",
+    "19_both_1/19_both_506 for EU services (Sachverhalt 7, Kz 46/47), 19_both_511 for \"Andere Leistungen\" incl. Drittland (Kz 84/85), other §13b cases need the DATEV Automatikkonto.",
   "- Year change: Erlös/Aufwand and all USt/VSt accounts start at 0; Bestandskonten, Basiskonten and Debitoren/Kreditoren " +
     "carry over. Opening balances (EB-Werte) go against 9000 (Saldenvortrag; 9090 for in-year totals) dated 31.12. of " +
     "the previous year; bank/cash opening balance = manual transaction on that day, posted against 9000. A USt/VSt " +
