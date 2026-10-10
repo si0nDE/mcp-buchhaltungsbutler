@@ -30,7 +30,7 @@ describe("checkReceiptFields", () => {
     expect(codes(good.replace("Gesamtbetrag 238,00", "Gesamtbetrag 238,01"))).not.toContain("arithmetic");
   });
 
-  it("flags a gross amount that differs from BHB and a foreign invoice number", () => {
+  it("flags an amount from BHB that appears nowhere in the text and a foreign invoice number", () => {
     const c = codes(good, { amount: 119, invoicenumber: "RE-9" });
     expect(c).toContain("amount_differs");
     expect(c).toContain("invoicenumber_differs");
@@ -39,6 +39,25 @@ describe("checkReceiptFields", () => {
   it("flags a missing Leistungsdatum and missing tax rate", () => {
     expect(codes(good.replace(/Leistungszeitraum.*\n/, ""))).toContain("service_date_missing");
     expect(codes("Rechnung Nr. 1 vom 01.01.2026\n12345 Ort\nSteuernummer 12/345/67890\nLeistung am 01.01.2026\nSumme 10,00")).toContain("tax_rate_missing");
+  });
+
+  it("handles a layout with spaced invoice number, 'Betrag' as gross and a distracting 'brutto' line", () => {
+    const t = `Muster AG, Postfach 1, 53184 Bonn Datum 08.10.2026
+ Rechnungsnummer   70 1234 5678 9012
+ Rechnungsübersicht USt. Betrag
+ Summe Netto   19 %   46,86 €
++19 % USt. auf 46,86 €   8,90 €
+ Betrag   55,76 €
+ Steuernummer: 12/345/67890 | USt-IdNr.: DE123456789
+ Leistungen Details Datum/Zeitraum USt. Betrag
+ Grundpreise 01.09.26 - 30.09.26 19 %
+ Treuebonus EUR brutto 100,00   20.10.2021   84,03 €`;
+    expect(codes(t, { invoicenumber: "70123456789012", amount: 55.76 })).toEqual([]);
+    expect(checkReceiptFields(t).some((x) => x.code === "arithmetic_unchecked")).toBe(false);
+  });
+
+  it("still flags when no gross candidate matches net plus tax", () => {
+    expect(codes("Rechnung Nr. 1 vom 01.01.2026\n12345 Ort\nSteuernummer 12/345/67890\nLeistung am 01.01.2026\nSumme Netto 10,00\n19 % USt 1,90\nBetrag 15,00")).toContain("arithmetic");
   });
 
   it("never returns an approval and marks what it could not check", () => {

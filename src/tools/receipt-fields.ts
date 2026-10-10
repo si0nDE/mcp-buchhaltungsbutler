@@ -32,10 +32,13 @@ function parseAmount(s: string): number {
   return Number(t);
 }
 
-function labelled(text: string, labels: string): number | undefined {
-  const m = new RegExp(`(?:${labels})[^\\d\\n-]{0,40}?${AMOUNT}`, "i").exec(text);
-  return m ? parseAmount(m[1]) : undefined;
+// Betrag hinter einem Etikett; dazwischen dürfen ein Steuersatz ("19 %") und "auf <Betrag>" stehen (Telekom: "+19 % USt. auf 46,86 €   8,90 €").
+function labelledAll(text: string, labels: string): number[] {
+  const re = new RegExp(`(?:${labels})(?:[^\\d\\n-]{0,40}?\\d{1,2}(?:[,.]\\d+)?\\s?%)?(?:\\s*auf\\s*${AMOUNT})?[^\\d\\n-]{0,40}?${AMOUNT}`, "gim");
+  return [...text.matchAll(re)].map((m) => parseAmount(m[m.length - 1]));
 }
+
+const digitsOnly = (s: string) => s.replace(/[\s\-_/.]/g, "").toLowerCase();
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
@@ -63,7 +66,7 @@ export function checkReceiptFields(text: string, ctx: FieldContext = {}): Findin
 
   // 4. fortlaufende Rechnungsnummer
   const hasLabelNo = /Rechnungs?\s*-?\s*(?:nummer|nr\.?)\s*[:.]?\s*\S+|Rechnung\s+(?:Nr\.?|Nummer)\s*[:.]?\s*\S+|Invoice\s*(?:No\.?|number)\s*[:.]?\s*\S+/i.test(text);
-  const hasCtxNo = ctx.invoicenumber ? text.includes(ctx.invoicenumber) : false;
+  const hasCtxNo = ctx.invoicenumber ? text.includes(ctx.invoicenumber) || digitsOnly(text).includes(digitsOnly(ctx.invoicenumber)) : false;
   if (!hasLabelNo && !hasCtxNo) add("invoicenumber_missing", "auffaellig", "Keine Rechnungsnummer erkennbar");
   else if (ctx.invoicenumber && !hasCtxNo) {
     add("invoicenumber_differs", "auffaellig", `Rechnungsnummer laut BHB „${ctx.invoicenumber}“ steht nicht im Text`);
@@ -80,18 +83,27 @@ export function checkReceiptFields(text: string, ctx: FieldContext = {}): Findin
   if (!hasRate && !hasExemption) add("tax_rate_missing", "auffaellig", "Weder Steuersatz mit Steuerbetrag noch Hinweis auf Steuerbefreiung erkennbar");
 
   // 7. Rechenprobe Netto + Steuer = Brutto und Vergleich mit BHB
-  const net = labelled(text, "Netto(?:betrag)?|Summe\\s+netto|Gesamt\\s*netto|Zwischensumme|Nettosumme");
-  const tax = labelled(text, "(?:zzgl\\.?\\s*)?(?:\\d{1,2}(?:[,.]\\d+)?\\s?%\\s*)?(?:USt\\.?|MwSt\\.?|Umsatzsteuer|Mehrwertsteuer)(?:\\s*\\d{1,2}(?:[,.]\\d+)?\\s?%)?");
-  const gross = labelled(text, "Brutto(?:betrag)?|Gesamtbetrag|Rechnungsbetrag|Endbetrag|Gesamtsumme|Summe\\s+brutto|zu\\s+zahlen(?:der\\s+Betrag)?");
-  if (net !== undefined && tax !== undefined && gross !== undefined) {
-    if (Math.abs(round(net + tax) - round(gross)) > 0.011) {
-      add("arithmetic", "auffaellig", `Netto ${net.toFixed(2)} + Steuer ${tax.toFixed(2)} = ${round(net + tax).toFixed(2)}, im Text steht Brutto ${gross.toFixed(2)} (Rundung bis 0,01 € zulässig)`);
+  const net = labelledAll(text, "Netto(?:betrag)?|Summe\\s+netto|Gesamt\\s*netto|Zwischensumme|Nettosumme")[0];
+  const taxes = labelledAll(text, "(?:zzgl\\.?\\s*|\\+\\s*)?(?:USt\\.?|MwSt\\.?|Umsatzsteuer|Mehrwertsteuer)");
+  // Mehrere Kandidaten für Brutto (z. B. "EUR brutto 100,00" in einem Guthabenhinweis): die Rechenprobe schlägt nur an,
+  // wenn kein einziger zu Netto + Steuer passt.
+  const grosses = labelledAll(text, "Brutto(?:betrag)?|Gesamtbetrag|Rechnungsbetrag|Endbetrag|Gesamtsumme|Summe\\s+brutto|zu\\s+zahlen(?:der\\s+Betrag)?|^\\s*Betrag");
+  const tax = taxes.find((t) => net !== undefined && grosses.some((g) => Math.abs(round(net + t) - round(g)) <= 0.011)) ?? taxes[0];
+  if (net !== undefined && tax !== undefined && grosses.length > 0) {
+    if (!grosses.some((g) => Math.abs(round(net + tax) - round(g)) <= 0.011)) {
+      add("arithmetic", "auffaellig", `Netto ${net.toFixed(2)} + Steuer ${tax.toFixed(2)} = ${round(net + tax).toFixed(2)}, im Text steht Brutto ${grosses.map((g) => g.toFixed(2)).join(" / ")} (Rundung bis 0,01 € zulässig)`);
     }
   } else {
     add("arithmetic_unchecked", "nicht_pruefbar", "Rechenprobe nicht möglich: Netto, Steuer und Brutto sind nicht alle eindeutig beschriftet im Text zu finden");
   }
-  if (gross !== undefined && ctx.amount !== undefined && Math.abs(Math.abs(round(gross)) - Math.abs(round(ctx.amount))) > 0.005) {
-    add("amount_differs", "auffaellig", `Brutto im Text ${gross.toFixed(2)}, Betrag am Beleg in BHB ${ctx.amount.toFixed(2)}`);
+  // Der Betrag aus BHB muss irgendwo im Text stehen (deutsches oder englisches Format); sonst auffällig.
+  if (ctx.amount !== undefined) {
+    const abs = Math.abs(round(ctx.amount));
+    const de = abs.toFixed(2).replace(".", ",");
+    const deThousands = de.replace(/\B(?=(\d{3})+(?!\d),)/g, ".");
+    if (!text.includes(de) && !text.includes(deThousands) && !text.includes(abs.toFixed(2))) {
+      add("amount_differs", "auffaellig", `Der Betrag aus BHB (${abs.toFixed(2)}) steht nirgends im Text`);
+    }
   }
   return out;
 }
