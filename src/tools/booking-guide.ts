@@ -358,6 +358,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
     konnektor: [
       "add_transaction_postings, add_free_postings, assign_receipt_to_free_posting, cancel_posting, get_account_ledger, get_receipt. list_receipts: Filter counterparty und limit greifen, ein Parameter search wird ignoriert.",
+      "add_transaction_postings und add_free_postings warnen (auch mit dry_run, nur Hinweis, nichts wird geändert) bei einem §13b-Schlüssel, wenn Leistungs-/Belegdatum und Zahlungsdatum in verschiedenen Quartalen oder Jahren liegen (\"Meldeperiode weicht ab\"), und bei einem Fremdwährungsbeleg, dessen Kurs mehr als 5 % vom Median der nächsten Belege desselben Lieferanten abweicht (\"Kurs auffällig\"). Dafür liest der Konnektor die Belege (höchstens 24 Abrufe je Aufruf); ohne Beleg an der Buchung, bei Abruffehlern oder mit weniger als 3 Vergleichsbelegen gibt es keine Warnung.",
     ],
   },
   {

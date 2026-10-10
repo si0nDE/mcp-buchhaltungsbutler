@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Neu: Warnungen beim Buchen mit Beleg (`add_transaction_postings`, `add_free_postings`, auch mit `dry_run`): (W4) § 13b-Schlüssel, aber Leistungs-/Belegdatum und Zahlungsdatum in verschiedenen
+  Quartalen oder Jahren, Hinweis „Meldeperiode weicht ab“ (Zahllast neutral, nicht umdatieren); (W3) Fremdwährungsbeleg, dessen Kurs mehr als 5 % vom Median der bis zu 5 zeitlich
+  nächsten Belege desselben Lieferanten abweicht (mindestens 3 Vergleichsbelege). Nur Hinweise, nichts wird geändert; höchstens 24 Beleg-Abrufe je Aufruf, Abruffehler erzeugen keine Warnung.
+  W1/W2 (Beleg-Volltext, Lieferantenland) bleiben offen.
 - Verifiziert: Zuordnung der §13b-Schlüssel zur USt-VA (Entwurf 2026 in BHB, Abgleich mit den Kontenblättern von 1787 nach Steuerschlüssel, stimmt auf den Cent):
   `19_both_506` = Kz 46/47 (§ 13b Abs. 1, übriges Gemeinschaftsgebiet), `19_both_511` = Kz 84/85 („Andere Leistungen“, § 13b Abs. 2 Nr. 1, 2, 4 bis 11, u. a. Drittland),
   Vorsteuer beider = Kz 67. `get_ustva_position` liefert beide Zeilen getrennt; `vat`-Beschreibung, Server-Instruktionen, Guide und Doku tragen die Zuordnung statt „unbestätigt“.

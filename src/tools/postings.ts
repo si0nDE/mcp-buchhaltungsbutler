@@ -15,6 +15,7 @@ import { amountsMatch, buildSettlementPostingText } from "./payment-confirmation
 import { postingtextWarnings } from "./postingtext.js";
 import { thirdPartyPaymentWarnings } from "./third-party-payment.js";
 import { cashbackPostingWarnings, fetchCashbackIds } from "./cashback.js";
+import { receiptCheckWarnings } from "./receipt-checks.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -654,6 +655,14 @@ export function createPostingsTools(
         cashbackIds.size === 0
           ? []
           : cashbackPostingWarnings(args.transactions, cashbackIds, await getChart(client).catch(() => "unknown" as const));
+      const receiptWarnings = await receiptCheckWarnings(
+        client,
+        args.transactions.map((e) => ({
+          label: `Transaktion ${e.transaction_id_by_customer}`,
+          transactionId: e.transaction_id_by_customer,
+          splits: e.splits,
+        }))
+      );
       if (args.dry_run) {
         return dryRunResult(
           client,
@@ -666,13 +675,14 @@ export function createPostingsTools(
             commentJobs,
             hints,
             postingtexts: args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext)),
-            extraWarnings: cashbackWarnings,
+            extraWarnings: [...cashbackWarnings, ...receiptWarnings],
           }
         );
       }
       const result = await withBookingHints(() => client.call("postingsAddBatchTransactions", { transactions }));
       const warnings = [
         ...cashbackWarnings,
+        ...receiptWarnings,
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingaccount))),
         ...postingtextWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext))),
@@ -765,6 +775,14 @@ export function createPostingsTools(
       const wanted = args.free_postings.flatMap((f, i) =>
         f.receipt_id_by_customer === undefined ? [] : [{ index: i, receipt: f.receipt_id_by_customer, sent: free_postings[i] }]
       );
+      const receiptWarnings = await receiptCheckWarnings(
+        client,
+        args.free_postings.map((f, i) => ({
+          label: `Freie Buchung ${i + 1}`,
+          paymentDate: f.date,
+          splits: [{ vat: f.vat, receipt_id_by_customer: f.receipt_id_by_customer }],
+        }))
+      );
       if (args.dry_run) {
         return dryRunResult(
           client,
@@ -778,7 +796,7 @@ export function createPostingsTools(
             assignReceipts: wanted.map((w) => ({ index: w.index, receipt_id_by_customer: w.receipt })),
             taxAccountsOnly: true,
             postingtexts: args.free_postings.map((f) => f.postingtext),
-            extraWarnings: thirdPartyPaymentWarnings(args.free_postings),
+            extraWarnings: [...thirdPartyPaymentWarnings(args.free_postings), ...receiptWarnings],
           }
         );
       }
@@ -797,6 +815,7 @@ export function createPostingsTools(
             ...personenkontoWarnings(args.free_postings.flatMap((f) => [f.postingaccount_debit, f.postingaccount_credit])),
             ...postingtextWarnings(args.free_postings.map((f) => f.postingtext)),
             ...thirdPartyPaymentWarnings(args.free_postings),
+            ...receiptWarnings,
             ...(assignments.some((a) => a.status !== "assigned")
               ? [
                   "Mindestens eine Buchung wurde angelegt, aber der Beleg nicht zugeordnet (siehe receipt_assignments). " +

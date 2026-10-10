@@ -965,7 +965,7 @@ describe("postings tools: compact, hints, free posting + receipt", () => {
       expect(res.would_send.body.transactions[0].vats).toEqual(["19_vat"]);
       expect(res.warnings[0]).toMatch(/19_vat.*4950.*19_pre/);
       expect(
-        (client.call as ReturnType<typeof vi.fn>).mock.calls.every((c) => ["settingsGetPostingaccounts", "transactionsGet"].includes(c[0]))
+        (client.call as ReturnType<typeof vi.fn>).mock.calls.every((c) => ["settingsGetPostingaccounts", "transactionsGet", "receiptsGetIdByCustomer", "transactionsGetIdByCustomer", "receiptsGet"].includes(c[0]))
       ).toBe(true);
     });
 
