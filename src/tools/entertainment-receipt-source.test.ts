@@ -312,3 +312,80 @@ describe("legacy flows are unchanged", () => {
     expect(uploads()[0].params).toMatchObject({ link_to_receipt_id_by_customer: 1001, file_name: "Bewirtungsangaben_000001.pdf" });
   });
 });
+
+describe("generate_and_upload_entertainment_receipt without an invoice, with source_receipt_id_by_customer", () => {
+  const noInvoice = {
+    original_invoice_status: "missing_requested",
+    entertainment_type: "business",
+    missing_invoice_treatment: "practice_70_30_no_vat",
+    gross_amount: 44,
+    payment_evidence: { description: "Kartenzahlung Beispielbank vom 14.03.2026" },
+    invoice_requests: [{ date: "2026-03-15", channel: "E-Mail" }],
+    food_net: 0,
+    food_vat: 0,
+    drinks_net: 0,
+    drinks_vat: 0,
+    tip: 0,
+  };
+
+  it("checks gross_amount against the source receipt and appends BOTH cover pages", async () => {
+    const { run, uploads } = setup();
+    const data = dataOf(await run(noInvoice));
+    expect(uploads()).toHaveLength(1);
+    expect(uploads()[0].params).toMatchObject({ amount: 44, vat_rate: "" });
+    expect(data.pages_before).toBe(1);
+    expect(data.pages_after).toBe(3);
+    expect(JSON.stringify(data.booking_hint)).toContain("0_none");
+    expect(JSON.stringify(data.warnings)).toContain("X R 57/09");
+  });
+
+  it("aborts with Betragsabweichung when gross_amount differs from the source receipt and uploads nothing", async () => {
+    const { run, uploads } = setup({ data: { amount: "40.00" } });
+    await expect(run(noInvoice)).rejects.toThrow(/Betragsabweichung/);
+    expect(uploads()).toHaveLength(0);
+  });
+
+  it("validates the missing-invoice fields before loading the original", async () => {
+    const { run, calls } = setup();
+    await expect(run({ ...noInvoice, gross_amount: undefined })).rejects.toThrow(/gross_amount/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not assign the transaction itself, but says so in next_step_hint", async () => {
+    const { run, calls, call } = setup();
+    // The mock throws on unknown keys: answer the transaction lookup, everything else as before.
+    const original = call.getMockImplementation()!;
+    call.mockImplementation(async (key: string, params: Record<string, unknown>) => {
+      if (key === "transactionsGetIdByCustomer") {
+        calls.push({ key, params });
+        return { data: { amount: "-44.00", booking_date: "2026-03-16 00:00:00" } };
+      }
+      return original(key, params);
+    });
+    const data = dataOf(await run({ ...noInvoice, payment_evidence: { transaction_id_by_customer: 2002 } }));
+    expect(calls.map((c) => c.key)).toContain("transactionsGetIdByCustomer");
+    expect(calls.map((c) => c.key)).not.toContain("transactionsAssignBatchReceipt");
+    expect(data.next_step_hint).toContain("assign_receipts_to_transactions");
+    expect(data.next_step_hint).toContain("2002");
+  });
+});
+
+describe("source receipt without a text layer", () => {
+  it("warns that a scan/photo/handwritten original may be excluded", async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([300, 300]);
+    const { run } = setup({ original: await doc.save() });
+    const data = dataOf(await run());
+    expect(data.warnings.join(" ")).toContain("keine Textebene");
+  });
+
+  it("does not warn for a PDF with text", async () => {
+    const data = dataOf(await setup().run());
+    expect(data.warnings.join(" ")).not.toContain("keine Textebene");
+  });
+
+  it("returns the invoice net total as booking_hint with an invoice present", async () => {
+    const data = dataOf(await setup().run());
+    expect(data.booking_hint).toMatchObject({ invoice_net_total: "40.00", reclass_amount: "12.00" });
+  });
+});

@@ -100,6 +100,25 @@ describe("generate_entertainment_receipt", () => {
     // kleinunternehmer had wrongly defaulted to true).
     expect(data.deductible).toBeCloseTo(52.5, 2);
   });
+
+  it("returns the invoice net total and reclass amount as booking_hint when the invoice is present", async () => {
+    const result = await generateReceipt.handler(baseArgs as never);
+    const text = JSON.stringify(result);
+    expect(text).toContain('"invoice_net_total":"75.00"');
+    expect(text).toContain('"reclass_amount":"22.50"');
+  });
+
+  it("returns no booking_hint for a Kleinunternehmer (split on gross, no net reclass)", async () => {
+    const result = await generateReceipt.handler({ ...baseArgs, kleinunternehmer: true } as never);
+    const data = result.structuredContent!.data as Record<string, unknown>;
+    expect(data).not.toHaveProperty("booking_hint");
+  });
+
+  it("warns (no error) when entertainment_type is missing with an invoice present", async () => {
+    const result = await generateReceipt.handler(baseArgs as never);
+    const data = result.structuredContent!.data as { warnings?: string[] };
+    expect(data.warnings?.join(" ")).toContain("entertainment_type fehlt");
+  });
 });
 
 describe("formatGermanDate", () => {
@@ -258,5 +277,207 @@ describe("generate_and_upload_entertainment_receipt", () => {
       generateAndUpload.handler({ ...uploadArgs, occasion: "Geschäftsessen" } as never)
     ).rejects.toThrow(/zu unkonkret/);
     expect(client.call).not.toHaveBeenCalled();
+  });
+});
+
+describe("Modus Rechnung fehlt (ohne Quell-Beleg)", () => {
+  const baseArgs = {
+    date: "2026-07-29",
+    location: "Beispiel-Gaststätte, Musterstadt",
+    occasion: "Nachbesprechung der Vertriebsplanung 2026 mit Abstimmung der nächsten Schritte",
+    participants: [{ name: "Max Mustermann", company: "Beispiel GmbH", relation: "external" }],
+    host_name: "Max Mustermann",
+    original_invoice_status: "missing_requested",
+    entertainment_type: "business",
+    missing_invoice_treatment: "practice_70_30_no_vat",
+    gross_amount: 37.5,
+    payment_evidence: { transaction_id_by_customer: 1001 },
+    invoice_requests: [{ date: "2026-07-31", channel: "E-Mail" }],
+    counterparty: "Beispiel-Gaststätte",
+    kleinunternehmer: false,
+  };
+
+  function missingClient(txAmount = "-37.50", txDate = "2026-07-31", chartRows: unknown[] = []) {
+    return {
+      call: vi.fn(async (key: string) => {
+        if (key === "transactionsGetIdByCustomer") return { data: { id_by_customer: "1001", amount: txAmount, booking_date: `${txDate} 00:00:00` } };
+        if (key === "receiptsUpload") return { id_by_customer: 7001 };
+        if (key === "transactionsAssignBatchReceipt") return { success: true };
+        if (key === "settingsGetPostingaccounts") return { success: true, data: chartRows };
+        return { success: true, data: [] };
+      }) as BBClient["call"],
+    };
+  }
+
+  it("uploads ONE receipt with amount = gross_amount and an empty vat_rate, then assigns it to the transaction", async () => {
+    const c = missingClient();
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler(baseArgs as never);
+    const uploadCall = vi.mocked(c.call).mock.calls.find((x) => x[0] === "receiptsUpload")!;
+    expect(uploadCall[1]).toMatchObject({ amount: 37.5, vat_rate: "", date: "2026-07-29", counterparty: "Beispiel-Gaststätte", currency: "EUR" });
+    expect((uploadCall[1] as Record<string, unknown>).link_to_receipt_id_by_customer).toBeUndefined();
+    expect(vi.mocked(c.call).mock.calls.filter((x) => x[0] === "receiptsUpload")).toHaveLength(1);
+    expect(vi.mocked(c.call)).toHaveBeenCalledWith("transactionsAssignBatchReceipt", {
+      transactions_to_receipts: [{ transaction_id_by_customer: 1001, receipt_id_by_customer: 7001 }],
+    });
+    const data = result.structuredContent!.data as Record<string, unknown>;
+    expect(data.assigned_to_transaction).toBe(true);
+    const text = JSON.stringify(result);
+    expect(text).toContain("booking_hint");
+    expect(text).toContain("X R 57/09");
+  });
+
+  it("the uploaded PDF has the page plus the notes page", async () => {
+    const c = missingClient();
+    const [, upload] = createEntertainmentReceiptTools(c);
+    await upload.handler(baseArgs as never);
+    const uploadCall = vi.mocked(c.call).mock.calls.find((x) => x[0] === "receiptsUpload")!;
+    const doc = await PDFDocument.load(Buffer.from((uploadCall[1] as { file: string }).file, "base64"));
+    expect(doc.getPageCount()).toBeGreaterThanOrEqual(2);
+  });
+
+  it("gives SKR03 accounts 4650/4654 with amounts and 0_none when the chart is SKR03", async () => {
+    const c = missingClient("-37.50", "2026-07-31", [{ postingaccount_number: "8400", name: "Erlöse 19 % USt" }]);
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler(baseArgs as never);
+    const data = result.structuredContent!.data as { booking_hint: Record<string, unknown> };
+    expect(data.booking_hint).toMatchObject({
+      chart: "SKR03",
+      vat: "0_none",
+      splits: [
+        { kind: "deductible", postingaccount: 4650, amount: "26.25" },
+        { kind: "non_deductible", postingaccount: 4654, amount: "11.25" },
+      ],
+    });
+  });
+
+  it("gives no account numbers when the chart cannot be determined", async () => {
+    const c = missingClient();
+    vi.mocked(c.call).mockImplementation((async (key: string) => {
+      if (key === "transactionsGetIdByCustomer") return { data: { amount: "-37.50", booking_date: "2026-07-31 00:00:00" } };
+      if (key === "receiptsUpload") return { id_by_customer: 7001 };
+      if (key === "transactionsAssignBatchReceipt") return { success: true };
+      throw new Error("HTTP 500");
+    }) as BBClient["call"]);
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler(baseArgs as never);
+    const data = result.structuredContent!.data as { booking_hint: { chart: string; splits: Array<Record<string, unknown>> } };
+    expect(data.booking_hint.chart).toBe("unknown");
+    expect(data.booking_hint.splits.every((s) => !("postingaccount" in s))).toBe(true);
+  });
+
+  it("lists all missing fields in one error and uploads nothing", async () => {
+    const c = missingClient();
+    const [, upload] = createEntertainmentReceiptTools(c);
+    await expect(
+      upload.handler({
+        ...baseArgs,
+        gross_amount: undefined,
+        counterparty: undefined,
+        missing_invoice_treatment: undefined,
+        payment_evidence: undefined,
+        invoice_requests: undefined,
+      } as never)
+    ).rejects.toThrow(/gross_amount[\s\S]*counterparty|counterparty[\s\S]*gross_amount/);
+    expect(vi.mocked(c.call).mock.calls.some((x) => x[0] === "receiptsUpload")).toBe(false);
+  });
+
+  it("does not ask for link_to_receipt_id_by_customer and rejects it in this mode", async () => {
+    const c = missingClient();
+    const [, upload] = createEntertainmentReceiptTools(c);
+    await expect(upload.handler({ ...baseArgs, link_to_receipt_id_by_customer: 5 } as never)).rejects.toThrow(/source_receipt_id_by_customer/);
+    expect(vi.mocked(c.call)).not.toHaveBeenCalled();
+  });
+
+  it("aborts before the upload when the transaction amount differs", async () => {
+    const c = missingClient("-40.00");
+    const [, upload] = createEntertainmentReceiptTools(c);
+    await expect(upload.handler(baseArgs as never)).rejects.toThrow(/Betrag/);
+    expect(vi.mocked(c.call).mock.calls.some((x) => x[0] === "receiptsUpload")).toBe(false);
+  });
+
+  it("accepts a difference of exactly 0,01 € to the transaction", async () => {
+    const c = missingClient("-37.51");
+    const [, upload] = createEntertainmentReceiptTools(c);
+    await upload.handler(baseArgs as never);
+    expect(vi.mocked(c.call).mock.calls.some((x) => x[0] === "receiptsUpload")).toBe(true);
+  });
+
+  it("aborts before the upload when the transaction cannot be loaded", async () => {
+    const c = missingClient();
+    vi.mocked(c.call).mockImplementation((async (key: string) => {
+      if (key === "transactionsGetIdByCustomer") throw new Error("HTTP 404");
+      return { id_by_customer: 7001 };
+    }) as BBClient["call"]);
+    const [, upload] = createEntertainmentReceiptTools(c);
+    await expect(upload.handler(baseArgs as never)).rejects.toThrow(/Transaktion 1001/);
+    expect(vi.mocked(c.call).mock.calls.some((x) => x[0] === "receiptsUpload")).toBe(false);
+  });
+
+  it("warns (no abort) when the transaction date is more than 3 days after the Bewirtung", async () => {
+    const c = missingClient("-37.50", "2026-08-05");
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler(baseArgs as never);
+    expect(JSON.stringify(result)).toContain("Kalendertage");
+  });
+
+  it("does not warn about the date within 3 days", async () => {
+    const c = missingClient("-37.50", "2026-08-01");
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler(baseArgs as never);
+    expect(JSON.stringify(result)).not.toContain("Kalendertage");
+  });
+
+  it("turns a failed assignment into a warning and keeps the upload", async () => {
+    const c = missingClient();
+    vi.mocked(c.call).mockImplementation((async (key: string) => {
+      if (key === "transactionsGetIdByCustomer") return { data: { amount: "-37.50", booking_date: "2026-07-31 00:00:00" } };
+      if (key === "receiptsUpload") return { id_by_customer: 7001 };
+      if (key === "transactionsAssignBatchReceipt") throw new Error("boom");
+      return { data: [] };
+    }) as BBClient["call"]);
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler(baseArgs as never);
+    const data = result.structuredContent!.data as Record<string, unknown>;
+    expect(data.id_by_customer).toBe(7001);
+    expect(data.assigned_to_transaction).toBe(false);
+    expect(JSON.stringify(result)).toContain("Zuordnung");
+    expect(vi.mocked(c.call).mock.calls.filter((x) => x[0] === "receiptsUpload")).toHaveLength(1);
+  });
+
+  it("works with a payment description only (no transaction, no assignment)", async () => {
+    const c = missingClient();
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler({ ...baseArgs, payment_evidence: { description: "Barzahlung, Kassenbuch Nr. 12" } } as never);
+    const keys = vi.mocked(c.call).mock.calls.map((x) => x[0]);
+    expect(keys).not.toContain("transactionsGetIdByCustomer");
+    expect(keys).not.toContain("transactionsAssignBatchReceipt");
+    expect(result.structuredContent!.data).not.toHaveProperty("assigned_to_transaction");
+  });
+
+  it("rejects sole_proprietor_self in both tools", async () => {
+    const c = missingClient();
+    const [generate, upload] = createEntertainmentReceiptTools(c);
+    await expect(generate.handler({ ...baseArgs, entertainment_type: "sole_proprietor_self", date: "29.07.2026" } as never)).rejects.toThrow(/Verpflegungs/);
+    await expect(upload.handler({ ...baseArgs, entertainment_type: "sole_proprietor_self" } as never)).rejects.toThrow(/Verpflegungs/);
+    expect(vi.mocked(c.call)).not.toHaveBeenCalled();
+  });
+
+  it("rejects sole_proprietor_self also with an invoice present", async () => {
+    await expect(
+      generateReceipt.handler({ ...(baseArgs as Record<string, unknown>), date: "24.09.2026", entertainment_type: "sole_proprietor_self", original_invoice_status: "present", gross_amount: undefined, food_net: 10, food_vat: 0.7 } as never)
+    ).rejects.toThrow(/Verpflegungs/);
+  });
+
+  it("the pure generator returns pdf, warnings and a booking_hint without account numbers", async () => {
+    const c = missingClient();
+    const [generate] = createEntertainmentReceiptTools(c);
+    const result = await generate.handler({ ...baseArgs, date: "29.07.2026" } as never);
+    const text = JSON.stringify(result);
+    expect(text).toContain("pdf_base64");
+    expect(text).toContain("booking_hint");
+    expect(text).toContain("warnings");
+    expect(text).not.toContain('"postingaccount"');
+    expect(vi.mocked(c.call)).not.toHaveBeenCalled();
   });
 });

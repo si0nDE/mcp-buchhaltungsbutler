@@ -4,6 +4,7 @@ import {
   assertOccasionIsConcrete,
   computeAmounts,
   type ComputedAmounts,
+  type EntertainmentReceiptFields,
   mergeWithBillFile,
   type Participant,
   renderEntertainmentReceiptCover,
@@ -15,6 +16,26 @@ import {
   runDryChecks,
   sha256Hex,
 } from "./entertainment-receipt-append.js";
+import { assertGeneratorType, planMissingInvoice, type MissingInvoicePlan } from "./entertainment-missing-invoice.js";
+import {
+  ENTERTAINMENT_TYPES,
+  type EntertainmentType,
+  INVOICE_STATUSES,
+  type InvoiceStatus,
+  MISSING_INVOICE_TREATMENT_HELP,
+  MISSING_INVOICE_TREATMENTS,
+  type MissingInvoiceTreatment,
+  PARTICIPANT_RELATIONS,
+  type ParticipantRelation,
+  SHAREHOLDER_MANAGER_TREATMENT_HELP,
+  SHAREHOLDER_MANAGER_TREATMENTS,
+  type ShareholderManagerTreatment,
+  consistencyWarnings,
+  typeFromParticipants,
+} from "./entertainment-policy.js";
+import { transactionDateWarnings } from "./bewirtung-plausibility.js";
+import { getChart } from "./posting-accounts.js";
+import { extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type CallToolResult, type ToolDef } from "./types.js";
 
 // Converts an ISO date ("2026-09-17") to the German display format used on
@@ -94,7 +115,7 @@ interface EntertainmentReceiptDocumentArgs {
   date: string;
   location: string;
   occasion: string;
-  participants: Participant[];
+  participants: Array<Participant & { relation?: ParticipantRelation }>;
   host_name: string;
   host_role?: string;
   food_net?: number;
@@ -109,6 +130,137 @@ interface EntertainmentReceiptDocumentArgs {
   bill_reference?: string;
   bill_file?: string;
   bill_file_type?: "pdf" | "png" | "jpeg";
+  entertainment_type?: EntertainmentType;
+  original_invoice_status?: InvoiceStatus;
+  gross_amount?: number;
+  payment_evidence?: { transaction_id_by_customer?: number; description?: string };
+  invoice_requests?: Array<{ date: string; channel: string }>;
+  missing_invoice_treatment?: MissingInvoiceTreatment;
+  shareholder_manager_treatment?: ShareholderManagerTreatment;
+  acknowledge_practice_over_250?: boolean;
+}
+
+type CoverArgs = EntertainmentReceiptDocumentArgs & { counterparty?: string; source_receipt_id_by_customer?: number };
+
+// Validated, computed content of the Bewirtungsseite, before rendering. Pure (no API, no PDF), so every
+// validation error is thrown before anything is loaded from or sent to BuchhaltungsButler.
+interface PlannedCover {
+  fields: EntertainmentReceiptFields;
+  amounts: ComputedAmounts;
+  kleinunternehmer: boolean;
+  warnings: string[];
+  // Only in the mode "Rechnung fehlt" (original_invoice_status missing_requested | lost).
+  plan?: MissingInvoicePlan;
+}
+
+function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): PlannedCover {
+  assertGeneratorType(args.entertainment_type);
+  assertOccasionIsConcrete(args.occasion);
+  const kleinunternehmer = args.kleinunternehmer ?? false;
+  const relations = args.participants.map((p) => p.relation).filter((r): r is ParticipantRelation => r !== undefined);
+  const knownRelations = relations.length > 0 ? relations : undefined;
+  const status = args.original_invoice_status ?? "present";
+  const baseFields = {
+    date: args.date,
+    location: args.location,
+    occasion: args.occasion,
+    participants: args.participants,
+    hostName: args.host_name,
+    hostRole: args.host_role,
+    companyName: args.company_name,
+    companyAddress: args.company_address,
+    receiptNumber: args.receipt_number,
+    billReference: args.bill_reference,
+  };
+
+  if (status !== "present") {
+    const plan = planMissingInvoice(
+      {
+        original_invoice_status: status,
+        entertainment_type: args.entertainment_type,
+        missing_invoice_treatment: args.missing_invoice_treatment,
+        shareholder_manager_treatment: args.shareholder_manager_treatment,
+        participant_relations: knownRelations,
+        gross_amount: args.gross_amount,
+        tip: args.tip,
+        food_net: args.food_net,
+        food_vat: args.food_vat,
+        drinks_net: args.drinks_net,
+        drinks_vat: args.drinks_vat,
+        payment_evidence: args.payment_evidence,
+        invoice_requests: args.invoice_requests,
+        counterparty: args.counterparty,
+        source_receipt_id_by_customer: args.source_receipt_id_by_customer,
+        acknowledge_practice_over_250: args.acknowledge_practice_over_250,
+      },
+      { requireCounterparty: opts.requireCounterparty }
+    );
+    return {
+      fields: { ...baseFields, foodNet: 0, foodVat: 0, drinksNet: 0, drinksVat: 0, tip: plan.tip },
+      amounts: {
+        grossTotal: plan.gross,
+        vatTotal: 0,
+        deductibleBase: plan.gross,
+        deductible: plan.deductible,
+        nonDeductible: plan.nonDeductible,
+      },
+      kleinunternehmer,
+      warnings: [...plan.warnings],
+      plan,
+    };
+  }
+
+  const amounts = computeAmounts({
+    foodNet: args.food_net ?? 0,
+    foodVat: args.food_vat ?? 0,
+    drinksNet: args.drinks_net ?? 0,
+    drinksVat: args.drinks_vat ?? 0,
+    tip: args.tip ?? 0,
+    kleinunternehmer,
+  });
+  const warnings: string[] = [];
+  if (args.entertainment_type === undefined) {
+    const suggested = knownRelations ? typeFromParticipants(knownRelations) : undefined;
+    warnings.push(
+      "entertainment_type fehlt: ohne Bewirtungsart kann der Konnektor Konto, Lohnsteuer und vGA-Risiko nicht einordnen." +
+        (suggested ? ` Vorschlag aus den Teilnehmern: ${suggested}.` : "")
+    );
+  }
+  warnings.push(...consistencyWarnings(args.entertainment_type, knownRelations, args.shareholder_manager_treatment));
+  const ignored = (
+    ["gross_amount", "payment_evidence", "invoice_requests", "missing_invoice_treatment", "acknowledge_practice_over_250"] as const
+  ).filter((key) => args[key] !== undefined);
+  if (ignored.length > 0) {
+    warnings.push(
+      `${ignored.join(", ")} gilt nur ohne Originalrechnung (original_invoice_status missing_requested | lost) und wurde ignoriert.`
+    );
+  }
+  return {
+    fields: {
+      ...baseFields,
+      foodNet: args.food_net ?? 0,
+      foodVat: args.food_vat ?? 0,
+      drinksNet: args.drinks_net ?? 0,
+      drinksVat: args.drinks_vat ?? 0,
+      tip: args.tip ?? 0,
+    },
+    amounts,
+    kleinunternehmer,
+    warnings,
+  };
+}
+
+function renderCover(
+  planned: PlannedCover,
+  options: { attachmentFollows?: boolean; attachmentPrecedes?: boolean; originalSha256?: string }
+): Promise<Uint8Array> {
+  return renderEntertainmentReceiptCover(planned.fields, planned.amounts, {
+    kleinunternehmer: planned.kleinunternehmer,
+    attachmentFollows: options.attachmentFollows,
+    attachmentPrecedes: options.attachmentPrecedes,
+    originalSha256: options.originalSha256,
+    ...(planned.plan ? { missingInvoice: planned.plan.page } : {}),
+  });
 }
 
 // Shared by both tools below: the pure "build the PDF" step (validate,
@@ -118,50 +270,105 @@ interface EntertainmentReceiptDocumentArgs {
 // plain function (no BuchhaltungsButler access) so it stays exactly as
 // testable without network-mocking as it was before this tool existed.
 async function buildEntertainmentReceiptDocument(
-  args: EntertainmentReceiptDocumentArgs
-): Promise<{ pdfBytes: Uint8Array; amounts: ComputedAmounts; mergedWithBill: boolean }> {
+  args: CoverArgs,
+  opts: { requireCounterparty?: boolean } = {}
+): Promise<{
+  pdfBytes: Uint8Array;
+  amounts: ComputedAmounts;
+  mergedWithBill: boolean;
+  warnings: string[];
+  plan?: MissingInvoicePlan;
+}> {
   assertBillFileFieldsPaired(args.bill_file, args.bill_file_type);
-  assertOccasionIsConcrete(args.occasion);
-
-  const kleinunternehmer = args.kleinunternehmer ?? false;
-  const amounts = computeAmounts({
-    foodNet: args.food_net ?? 0,
-    foodVat: args.food_vat ?? 0,
-    drinksNet: args.drinks_net ?? 0,
-    drinksVat: args.drinks_vat ?? 0,
-    tip: args.tip ?? 0,
-    kleinunternehmer,
-  });
-
-  const cover = await renderEntertainmentReceiptCover(
-    {
-      date: args.date,
-      location: args.location,
-      occasion: args.occasion,
-      participants: args.participants,
-      hostName: args.host_name,
-      hostRole: args.host_role,
-      companyName: args.company_name,
-      companyAddress: args.company_address,
-      receiptNumber: args.receipt_number,
-      billReference: args.bill_reference,
-      foodNet: args.food_net ?? 0,
-      foodVat: args.food_vat ?? 0,
-      drinksNet: args.drinks_net ?? 0,
-      drinksVat: args.drinks_vat ?? 0,
-      tip: args.tip ?? 0,
-    },
-    amounts,
-    { kleinunternehmer, attachmentFollows: Boolean(args.bill_file) }
-  );
+  const planned = planCover(args, { requireCounterparty: opts.requireCounterparty ?? false });
+  const cover = await renderCover(planned, { attachmentFollows: Boolean(args.bill_file) });
 
   const pdfBytes =
     args.bill_file && args.bill_file_type
       ? await mergeWithBillFile(cover, args.bill_file, args.bill_file_type)
       : cover;
 
-  return { pdfBytes, amounts, mergedWithBill: Boolean(args.bill_file) };
+  return {
+    pdfBytes,
+    amounts: planned.amounts,
+    mergedWithBill: Boolean(args.bill_file),
+    warnings: planned.warnings,
+    plan: planned.plan,
+  };
 }
+
+type Chart = Awaited<ReturnType<typeof getChart>> | "SKR04";
+
+interface BookingHint {
+  chart: Chart;
+  vat: "0_none";
+  splits: Array<{ kind: "deductible" | "non_deductible" | "internal"; postingaccount?: number; amount: string }>;
+  note: string;
+}
+
+// Without an invoice: the splits for the booking tools, always without input VAT. Account numbers only
+// when the chart is known (SKR03 4650/4654/4140; SKR04 6640/6644, no internal account documented).
+function buildBookingHint(plan: MissingInvoicePlan, chart: Chart): BookingHint {
+  const acc =
+    chart === "SKR03"
+      ? { d: 4650, n: 4654, i: 4140 }
+      : chart === "SKR04"
+        ? { d: 6640, n: 6644, i: undefined }
+        : undefined;
+  const split = (kind: BookingHint["splits"][number]["kind"], amount: number, postingaccount: number | undefined) => ({
+    kind,
+    ...(postingaccount !== undefined ? { postingaccount } : {}),
+    amount: amount.toFixed(2),
+  });
+  const splits: BookingHint["splits"] = [];
+  if (plan.business) {
+    if (plan.deductible > 0) splits.push(split("deductible", plan.deductible, acc?.d));
+    if (plan.nonDeductible > 0) splits.push(split("non_deductible", plan.nonDeductible, acc?.n));
+  } else {
+    splits.push(split("internal", plan.deductible, acc?.i));
+  }
+  return {
+    chart,
+    vat: "0_none",
+    splits,
+    note:
+      "Splits mit vat 0_none buchen (keine Vorsteuer ohne Rechnung), entertainment_split_mode gross_split. " +
+      (acc === undefined || splits.some((s) => s.postingaccount === undefined)
+        ? "Kontenrahmen bzw. Konto nicht ermittelbar: Kontonummern selbst wählen. "
+        : "") +
+      "original_invoice_status, entertainment_type und die gewählten Varianten an das Buchungs-Tool weitergeben.",
+  };
+}
+
+// With an invoice: the exact net total and reclass amount of the page, to be passed on as invoice_net_total.
+function buildPresentHint(amounts: ComputedAmounts, kleinunternehmer: boolean) {
+  if (kleinunternehmer) return undefined; // Kleinunternehmer split on gross, there is no net reclass
+  return {
+    invoice_net_total: amounts.deductibleBase.toFixed(2),
+    reclass_amount: amounts.nonDeductible.toFixed(2),
+    note:
+      "Bei entertainment_split_mode net_reclass invoice_net_total an das Buchungs-Tool übergeben; die Umbuchung 4654 an 4650 " +
+      "beträgt reclass_amount (vat 0_none) und stimmt mit der Bewirtungsseite überein.",
+  };
+}
+
+async function bookingHintFor(
+  client: BBClient,
+  planned: { plan?: MissingInvoicePlan; amounts: ComputedAmounts },
+  kleinunternehmer: boolean
+): Promise<{ booking_hint?: unknown }> {
+  if (planned.plan) {
+    const chart: Chart = await getChart(client).catch(() => "unknown" as const);
+    return { booking_hint: buildBookingHint(planned.plan, chart) };
+  }
+  const hint = buildPresentHint(planned.amounts, kleinunternehmer);
+  return hint ? { booking_hint: hint } : {};
+}
+
+const NO_TEXT_LAYER_WARNING =
+  "Der Originalbeleg hat keine Textebene (Scan, Foto oder handschriftlich): bei Kassensystem sind handschriftliche oder nur " +
+  "maschinell erstellte Belege vom Abzug ausgeschlossen (BMF 19.11.2025 Rn. 13; Dennerlein Q32/Q57 sehen das milder). " +
+  "Thermopapier: dauerhafte Kopie beifügen.";
 
 // This shape makes no BuchhaltungsButler API calls when used by
 // generate_entertainment_receipt below - it's a pure generation function
@@ -185,6 +392,10 @@ const generateShape = {
       z.object({
         name: z.string().min(1),
         company: z.string().optional(),
+        relation: z
+          .enum(PARTICIPANT_RELATIONS)
+          .optional()
+          .describe("Beziehung zum bewirtenden Unternehmen (external | employee | shareholder_manager | shareholder | freelancer)."),
       })
     )
     .min(1)
@@ -229,6 +440,41 @@ const generateShape = {
       "Nur die Rechnungsnummer der Original-Rechnung selbst, z. B. \"92119\" - kein zusammengesetzter Satz " +
         "wie \"Rechnung-Nr. 92119 / Beleg-Nr. ...\", das wird im Beleg automatisch als \"Ergänzung zu Rechnung " +
         '92119" formatiert.'
+    ),
+  entertainment_type: z
+    .enum(ENTERTAINMENT_TYPES)
+    .optional()
+    .describe(
+      "Bewirtungsart. Pflicht, wenn original_invoice_status nicht present ist, sonst optional (ohne Angabe nur eine Warnung). " +
+        "sole_proprietor_self wird abgelehnt: Einzelunternehmer allein erhalten keinen Bewirtungsbeleg (nur Verpflegungspauschale 14/28 €)."
+    ),
+  original_invoice_status: z
+    .enum(INVOICE_STATUSES)
+    .default("present")
+    .describe(
+      "present (Default, bisheriges Verhalten) | missing_requested (beim Gastwirt angefordert, nicht erhalten) | lost (verloren/unleserlich). " +
+        "Ohne Rechnung: gross_amount, payment_evidence und ggf. missing_invoice_treatment Pflicht; Speisen/Getränke-Beträge müssen leer sein."
+    ),
+  gross_amount: z.number().positive().optional().describe("Nur ohne Rechnung: Zahlbetrag inklusive Trinkgeld."),
+  payment_evidence: z
+    .object({ transaction_id_by_customer: z.number().int().optional(), description: z.string().optional() })
+    .optional()
+    .describe(
+      "Nur ohne Rechnung, Pflicht: Zahlungsnachweis (Banktransaktion und/oder Beschreibung). Mit Transaktion wird der Betrag geprüft " +
+        "und der Beleg zugeordnet (beim Hochladen ohne source_receipt_id_by_customer)."
+    ),
+  invoice_requests: z
+    .array(z.object({ date: z.string(), channel: z.string().min(1) }))
+    .optional()
+    .describe("Nur ohne Rechnung: Anforderungen der Rechnung beim Gastwirt (Datum, Kanal). Bei missing_requested mindestens eine."),
+  missing_invoice_treatment: z.enum(MISSING_INVOICE_TREATMENTS).optional().describe(MISSING_INVOICE_TREATMENT_HELP),
+  shareholder_manager_treatment: z.enum(SHAREHOLDER_MANAGER_TREATMENTS).optional().describe(SHAREHOLDER_MANAGER_TREATMENT_HELP),
+  acknowledge_practice_over_250: z
+    .boolean()
+    .optional()
+    .describe(
+      "Nur practice_70_30_no_vat über 250 €: ausdrückliche Bestätigung des Nutzers (Dennerlein Q42 nennt nur Beträge unter 250 €). " +
+        "Beim Nutzer erfragen, nicht ableiten."
     ),
   bill_file: z
     .string()
@@ -314,6 +560,37 @@ const readUploadedFilename = (r: UploadResponse): string | undefined => r.filena
 
 const formatDe = (n: number) => n.toFixed(2).replace(".", ",");
 
+// Mode "Rechnung fehlt" with payment_evidence.transaction_id_by_customer: the amount check aborts before
+// anything is uploaded; the date check only warns. Returns the warnings.
+async function verifyPaymentEvidence(
+  client: BBClient,
+  args: { date: string; payment_evidence?: { transaction_id_by_customer?: number } },
+  plan: MissingInvoicePlan
+): Promise<string[]> {
+  const id = args.payment_evidence?.transaction_id_by_customer;
+  if (id === undefined) return [];
+  let row: Record<string, unknown> | undefined;
+  try {
+    const result = await client.call<{ data?: Record<string, unknown> }>("transactionsGetIdByCustomer", {}, { idSuffix: id });
+    row = result?.data;
+  } catch (error) {
+    throw new Error(
+      `Transaktion ${id} (payment_evidence) konnte nicht geladen werden (${error instanceof Error ? error.message : String(error)}). ` +
+        "Es wurde nichts hochgeladen."
+    );
+  }
+  if (!row) throw new Error(`Transaktion ${id} (payment_evidence) nicht gefunden. Es wurde nichts hochgeladen.`);
+  const txAmount = row.amount === undefined || row.amount === null || row.amount === "" ? NaN : Math.abs(Number(row.amount));
+  if (!Number.isFinite(txAmount) || Math.abs(txAmount - plan.gross) > AMOUNT_TOLERANCE + 1e-9) {
+    throw new Error(
+      `Betragsabweichung: gross_amount ${formatDe(plan.gross)} € ≠ Betrag der Transaktion ${id} ` +
+        `(${Number.isFinite(txAmount) ? `${formatDe(txAmount)} €` : `unbekannt: ${String(row.amount)}`}). Es wurde nichts hochgeladen. ` +
+        "gross_amount (inkl. Trinkgeld) und die Transaktion mit dem Nutzer abgleichen."
+    );
+  }
+  return transactionDateWarnings(args.date, typeof row.booking_date === "string" ? row.booking_date : undefined);
+}
+
 type SourceArgs = EntertainmentReceiptDocumentArgs & {
   source_receipt_id_by_customer: number;
   counterparty?: string;
@@ -355,9 +632,11 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
         "wieder ein verknüpfter Zweitbeleg statt eines Belegs."
     );
   }
-  assertOccasionIsConcrete(args.occasion);
+  // All validation (occasion, Bewirtungsart, mode "Rechnung fehlt") before the original is loaded.
+  const planned = planCover({ ...args, date: formatGermanDate(args.date) }, { requireCounterparty: false });
+  const { amounts, plan } = planned;
   const keep = args.keep_original_metadata ?? true;
-  const warnings: string[] = [];
+  const warnings: string[] = [...planned.warnings];
 
   let original: OriginalReceiptData;
   try {
@@ -387,51 +666,36 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
   const kind = classifyOriginal(originalBytes);
   const originalSha256 = sha256Hex(originalBytes);
 
-  const kleinunternehmer = args.kleinunternehmer ?? false;
-  const amounts = computeAmounts({
-    foodNet: args.food_net ?? 0,
-    foodVat: args.food_vat ?? 0,
-    drinksNet: args.drinks_net ?? 0,
-    drinksVat: args.drinks_vat ?? 0,
-    tip: args.tip ?? 0,
-    kleinunternehmer,
-  });
   const originalAmount = original.amount === undefined || original.amount === "" ? NaN : Number(original.amount);
   if (Number.isFinite(originalAmount)) {
     const diff = Math.round((amounts.grossTotal - originalAmount) * 100) / 100;
     if (Math.abs(diff) > AMOUNT_TOLERANCE + 1e-9) {
       throw new Error(
-        `Betragsabweichung: Summe der Teilbeträge ${formatDe(amounts.grossTotal)} € ≠ Betrag des Originalbelegs ` +
-          `${formatDe(originalAmount)} € (Differenz ${formatDe(diff)} €). Es wurde nichts hochgeladen. ` +
-          "Beträge (Speisen/Getränke/Trinkgeld) mit der Rechnung abgleichen."
+        plan
+          ? `Betragsabweichung: gross_amount ${formatDe(amounts.grossTotal)} € ≠ Betrag des Quell-Belegs ` +
+              `${formatDe(originalAmount)} € (Differenz ${formatDe(diff)} €). Es wurde nichts hochgeladen. ` +
+              "Zahlbetrag (inkl. Trinkgeld) mit dem Quell-Beleg abgleichen."
+          : `Betragsabweichung: Summe der Teilbeträge ${formatDe(amounts.grossTotal)} € ≠ Betrag des Originalbelegs ` +
+              `${formatDe(originalAmount)} € (Differenz ${formatDe(diff)} €). Es wurde nichts hochgeladen. ` +
+              "Beträge (Speisen/Getränke/Trinkgeld) mit der Rechnung abgleichen."
       );
     }
   } else {
-    warnings.push("Der Originalbeleg hat keinen Betrag - Betragsprüfung übersprungen, Betrag aus den Teilbeträgen verwendet.");
+    warnings.push(
+      plan
+        ? "Der Quell-Beleg hat keinen Betrag - Betragsprüfung übersprungen, gross_amount verwendet."
+        : "Der Originalbeleg hat keinen Betrag - Betragsprüfung übersprungen, Betrag aus den Teilbeträgen verwendet."
+    );
+  }
+  if (plan) warnings.push(...(await verifyPaymentEvidence(client, args, plan)));
+  if (kind !== "pdf" || (await extractReceiptText(original.file_content)) === undefined) {
+    warnings.push(NO_TEXT_LAYER_WARNING);
   }
 
   const billReference = args.bill_reference ?? (keep ? original.invoicenumber || undefined : undefined);
-  const cover = await renderEntertainmentReceiptCover(
+  const cover = await renderCover(
+    { ...planned, fields: { ...planned.fields, billReference } },
     {
-      date: formatGermanDate(args.date),
-      location: args.location,
-      occasion: args.occasion,
-      participants: args.participants,
-      hostName: args.host_name,
-      hostRole: args.host_role,
-      companyName: args.company_name,
-      companyAddress: args.company_address,
-      receiptNumber: args.receipt_number,
-      billReference,
-      foodNet: args.food_net ?? 0,
-      foodVat: args.food_vat ?? 0,
-      drinksNet: args.drinks_net ?? 0,
-      drinksVat: args.drinks_vat ?? 0,
-      tip: args.tip ?? 0,
-    },
-    amounts,
-    {
-      kleinunternehmer,
       attachmentPrecedes: true,
       originalSha256: (args.include_original_hash ?? true) ? originalSha256 : undefined,
     }
@@ -462,12 +726,15 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
     date: keep && original.date ? original.date : args.date,
     amount: keep && Number.isFinite(originalAmount) ? originalAmount : amounts.grossTotal,
     currency: "EUR",
-    vat_rate: deriveVatRate({
-      foodNet: args.food_net ?? 0,
-      foodVat: args.food_vat ?? 0,
-      drinksNet: args.drinks_net ?? 0,
-      drinksVat: args.drinks_vat ?? 0,
-    }),
+    // Without an invoice there is no rate: "" is BuchhaltungsButler's "not available" signal.
+    vat_rate: plan
+      ? ""
+      : deriveVatRate({
+          foodNet: args.food_net ?? 0,
+          foodVat: args.food_vat ?? 0,
+          drinksNet: args.drinks_net ?? 0,
+          drinksVat: args.drinks_vat ?? 0,
+        }),
   };
 
   let newId: string | number | undefined;
@@ -547,6 +814,15 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
     );
   }
 
+  const hint = await bookingHintFor(client, planned, planned.kleinunternehmer);
+  // The new receipt replaces the original, which may already be assigned to the payment: no automatic assignment here.
+  const txId = plan ? args.payment_evidence?.transaction_id_by_customer : undefined;
+  const assignHint =
+    txId !== undefined
+      ? ` Danach die Transaktion ${txId} dem neuen Beleg zuordnen (assign_receipts_to_transactions), falls BuchhaltungsButler das ` +
+        "nicht selbst tut; eine Zuordnung zum Original vorher lösen (unassign_receipt)."
+      : "";
+
   return ok({
     status: "ok",
     new_receipt_id_by_customer: newId ?? null,
@@ -565,12 +841,20 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
       non_deductible: amounts.nonDeductible,
     },
     warnings,
+    ...hint,
     next_step_hint:
-      newId !== undefined
+      (newId !== undefined
         ? `Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf ${newId} buchen.`
-        : `Neue Beleg-ID per list_receipts ermitteln. Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf den neuen Beleg buchen.`,
+        : `Neue Beleg-ID per list_receipts ermitteln. Original ${sourceId} nach Bestätigung des Anwenders mit set_receipt_deleted entfernen, dann auf den neuen Beleg buchen.`) +
+      assignHint,
   });
 }
+
+const MISSING_INVOICE_DESCRIPTION =
+  "Ohne Gaststättenrechnung (original_invoice_status = missing_requested | lost): gross_amount, payment_evidence, " +
+  "Bewirtungsart und bei geschäftlichen Typen missing_invoice_treatment angeben (beim Nutzer erfragen). Die erzeugte Seite ist " +
+  "dann selbst der Beleg (ein Upload), ohne Vorsteuer. source_receipt_id_by_customer bleibt optional. Die Antwort enthält " +
+  "booking_hint mit den Splits für die Buchungs-Tools.";
 
 export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, ToolDef] {
   const generateEntertainmentReceipt = defineTool({
@@ -581,12 +865,15 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
       "Without bill_file: returns a standalone page to upload via upload_receipt's link_to_receipt_id_by_customer " +
       "against an already-existing receipt. Makes no BuchhaltungsButler API calls itself - prefer " +
       "generate_and_upload_entertainment_receipt when the PDF doesn't need to be inspected before upload, it " +
-      "avoids round-tripping the full base64 PDF through the model twice.",
+      "avoids round-tripping the full base64 PDF through the model twice. " +
+      MISSING_INVOICE_DESCRIPTION,
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
     async handler(args) {
-      const { pdfBytes, amounts, mergedWithBill } = await buildEntertainmentReceiptDocument(args);
+      const { pdfBytes, amounts, mergedWithBill, warnings, plan } = await buildEntertainmentReceiptDocument(args);
+      // No API calls here, so the chart stays unknown (no account numbers in the hint).
+      const presentHint = plan ? undefined : buildPresentHint(amounts, args.kleinunternehmer ?? false);
       return ok({
         pdf_base64: Buffer.from(pdfBytes).toString("base64"),
         merged_with_bill: mergedWithBill,
@@ -594,6 +881,8 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
         vat_total: amounts.vatTotal,
         deductible: amounts.deductible,
         non_deductible: amounts.nonDeductible,
+        ...(warnings.length > 0 ? { warnings } : {}),
+        ...(plan ? { booking_hint: buildBookingHint(plan, "unknown") } : presentHint ? { booking_hint: presentHint } : {}),
       });
     },
   });
@@ -611,7 +900,8 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
       "receipt and is only a fallback. Returns the new receipt's " +
       "id_by_customer, not the PDF itself. BuchhaltungsButler does not deduplicate by invoice number - if " +
       "this is a re-upload (e.g. a previous send failed), check list_receipts for an existing duplicate " +
-      "first and remove it with set_receipt_deleted (see docs/bewirtungsbeleg-faq.md).",
+      "first and remove it with set_receipt_deleted (see docs/bewirtungsbeleg-faq.md). " +
+      MISSING_INVOICE_DESCRIPTION,
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
@@ -619,32 +909,48 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
       if (args.source_receipt_id_by_customer !== undefined) {
         return uploadWithSourceReceipt(client, { ...args, source_receipt_id_by_customer: args.source_receipt_id_by_customer });
       }
-      if (args.counterparty === undefined) {
-        throw new Error("counterparty is required unless source_receipt_id_by_customer is given.");
-      }
-      if (args.bill_file === undefined && args.link_to_receipt_id_by_customer === undefined) {
+      const status = args.original_invoice_status ?? "present";
+      if (status === "present") {
+        if (args.counterparty === undefined) {
+          throw new Error("counterparty is required unless source_receipt_id_by_customer is given.");
+        }
+        if (args.bill_file === undefined && args.link_to_receipt_id_by_customer === undefined) {
+          throw new Error(
+            "link_to_receipt_id_by_customer is required when no bill_file is given (Fall B) - otherwise the " +
+              "standalone Bewirtungsangaben page would be uploaded as its own unlinked receipt."
+          );
+        }
+      } else if (args.link_to_receipt_id_by_customer !== undefined) {
         throw new Error(
-          "link_to_receipt_id_by_customer is required when no bill_file is given (Fall B) - otherwise the " +
-            "standalone Bewirtungsangaben page would be uploaded as its own unlinked receipt."
+          "Ohne Originalrechnung ist die Bewirtungsseite selbst der Beleg: link_to_receipt_id_by_customer würde einen verknüpften " +
+            "Zweitbeleg mit demselben Betrag anlegen. Liegt ein Quell-Beleg (z. B. Kartenbeleg) in BuchhaltungsButler, " +
+            "source_receipt_id_by_customer verwenden, sonst link_to_receipt_id_by_customer weglassen. Es wurde nichts hochgeladen."
         );
       }
 
-      const { pdfBytes, amounts, mergedWithBill } = await buildEntertainmentReceiptDocument({
-        ...args,
-        date: formatGermanDate(args.date),
-      });
+      // Without a source receipt the page itself is the receipt in the mode "Rechnung fehlt", so the
+      // counterparty is mandatory there (reported together with all other missing fields).
+      const { pdfBytes, amounts, mergedWithBill, warnings, plan } = await buildEntertainmentReceiptDocument(
+        { ...args, date: formatGermanDate(args.date) },
+        { requireCounterparty: true }
+      );
+      if (plan) warnings.push(...(await verifyPaymentEvidence(client, args, plan)));
 
-      const vatRate = deriveVatRate({
-        foodNet: args.food_net ?? 0,
-        foodVat: args.food_vat ?? 0,
-        drinksNet: args.drinks_net ?? 0,
-        drinksVat: args.drinks_vat ?? 0,
-      });
+      const vatRate = plan
+        ? ""
+        : deriveVatRate({
+            foodNet: args.food_net ?? 0,
+            foodVat: args.food_vat ?? 0,
+            drinksNet: args.drinks_net ?? 0,
+            drinksVat: args.drinks_vat ?? 0,
+          });
 
       const result = await client.call<UploadResponse>("receiptsUpload", {
         file: Buffer.from(pdfBytes).toString("base64"),
         type: "invoice inbound",
-        file_name: `Bewirtungsangaben${args.bill_reference ? `_${args.bill_reference}` : ""}.pdf`,
+        file_name: plan
+          ? `Bewirtungsbeleg_ohne_Rechnung_${args.date}.pdf`
+          : `Bewirtungsangaben${args.bill_reference ? `_${args.bill_reference}` : ""}.pdf`,
         account: args.account,
         creditor_debtor: args.creditor_debtor,
         counterparty: args.counterparty,
@@ -656,6 +962,34 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
         link_to_receipt_id_by_customer: args.link_to_receipt_id_by_customer,
       });
 
+      // Mode "Rechnung fehlt": assign the new receipt to the payment. The upload has happened, so a failure here
+      // only becomes a warning - never retry the upload.
+      let assigned = false;
+      const txId = plan ? args.payment_evidence?.transaction_id_by_customer : undefined;
+      if (txId !== undefined) {
+        const newId = toId(readUploadedId(result));
+        if (typeof newId === "number") {
+          try {
+            const assignResult = await client.call<{ success?: boolean; message?: string }>("transactionsAssignBatchReceipt", {
+              transactions_to_receipts: [{ transaction_id_by_customer: txId, receipt_id_by_customer: newId }],
+            });
+            if (assignResult?.success === false) throw new Error(assignResult.message || "success: false");
+            assigned = true;
+          } catch (error) {
+            warnings.push(
+              `Zuordnung zur Transaktion ${txId} fehlgeschlagen (${error instanceof Error ? error.message : String(error)}). ` +
+                `Der Beleg ${newId} ist hochgeladen - mit assign_receipts_to_transactions nachtragen, nicht erneut hochladen.`
+            );
+          }
+        } else {
+          warnings.push(
+            `Die Beleg-ID des neuen Belegs ist unbekannt: Zuordnung zur Transaktion ${txId} bitte selbst vornehmen ` +
+              "(Beleg per list_receipts suchen, dann assign_receipts_to_transactions). Nicht erneut hochladen."
+          );
+        }
+      }
+      const hint = await bookingHintFor(client, { plan, amounts }, args.kleinunternehmer ?? false);
+
       return ok({
         id_by_customer: readUploadedId(result) ?? null,
         merged_with_bill: mergedWithBill,
@@ -663,6 +997,9 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
         vat_total: amounts.vatTotal,
         deductible: amounts.deductible,
         non_deductible: amounts.nonDeductible,
+        ...(txId !== undefined ? { assigned_to_transaction: assigned } : {}),
+        ...hint,
+        ...(warnings.length > 0 ? { warnings } : {}),
       });
     },
   });
