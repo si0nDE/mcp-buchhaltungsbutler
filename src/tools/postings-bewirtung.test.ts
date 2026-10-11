@@ -499,11 +499,66 @@ describe("final review: Nahtstellen in den Buchungs-Tools", () => {
     });
   });
 
-  it("item 10: net_reclass without invoice is rejected for internal_employees too", async () => {
-    const c = client();
-    const [, , addTx] = createPostingsTools(c);
-    await expect(
-      addTx.handler({
+  describe("net_reclass without an invoice (100 % on 4650, 30 % reclassified)", () => {
+    const base = {
+      transaction_id_by_customer: 1001,
+      participants: "Max Mustermann, Erika Beispiel",
+      occasion: "Besprechung zur Angebotsplanung 2026",
+      bewirtungsangaben_signed: true,
+      original_invoice_status: "lost",
+      entertainment_type: "business",
+      missing_invoice_treatment: "practice_70_30_no_vat",
+      entertainment_split_mode: "net_reclass",
+    };
+    const book37 = [{ postingaccount: 4650, postingtext: "Bewirtung", vat: "0_none", amount: "37.50" }];
+
+    it("37.50 EUR without an invoice -> hint 11.25 from 4654 to 4650, 0_none (base = gross = net)", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({ transactions: [{ ...base, splits: book37 }] } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({
+        net_total: "37.50",
+        amount: "11.25",
+        postingaccount_debit: 4654,
+        postingaccount_credit: 4650,
+        vat: "0_none",
+      });
+      const sent = vi.mocked(c.call).mock.calls.find((x) => x[0] === "postingsAddBatchTransactions")![1] as {
+        transactions: Array<{ amounts: string[]; vats: string[] }>;
+      };
+      expect(sent.transactions[0]).toMatchObject({ amounts: ["37.50"], vats: ["0_none"] });
+    });
+
+    it("conservative variant: the whole amount is reclassified", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({
+        transactions: [{ ...base, missing_invoice_treatment: "conservative_100_nondeductible", splits: book37 }],
+      } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({ amount: "37.50" });
+    });
+
+    it("also works for add_receipt_postings", async () => {
+      const c = client();
+      const [, addReceipt] = createPostingsTools(c);
+      const { transaction_id_by_customer, ...rest } = base;
+      const result = await addReceipt.handler({
+        receipts: [{ ...rest, receipt_id_by_customer: 521, creditor: 0, debtor: 0, splits: book37 }],
+      } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({ amount: "11.25" });
+    });
+
+    it("ignores invoice_net_total when there is no invoice", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({ transactions: [{ ...base, invoice_net_total: "20,60", splits: book37 }] } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({ net_total: "37.50", amount: "11.25" });
+    });
+
+    it("internal_employees without an invoice: allowed, 50.00 -> 15.00", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({
         transactions: [
           {
             transaction_id_by_customer: 1001,
@@ -515,8 +570,39 @@ describe("final review: Nahtstellen in den Buchungs-Tools", () => {
             splits: [{ postingaccount: 4650, postingtext: "Teamessen", vat: "0_none", amount: "50.00" }],
           },
         ],
-      } as never)
-    ).rejects.toThrow(/net_reclass/);
-    expect(c.call).not.toHaveBeenCalled();
+      } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({ amount: "15.00" });
+    });
+
+    it("keeps blocking an input-VAT code and any VAT code other than 0_none, before anything is sent", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      await expect(
+        addTx.handler({ transactions: [{ ...base, splits: [{ ...book37[0], vat: "19_pre" }] }] } as never)
+      ).rejects.toThrow(/Vorsteuer ohne Rechnung/);
+      await expect(
+        addTx.handler({ transactions: [{ ...base, splits: [{ ...book37[0], vat: "19_vat" }] }] } as never)
+      ).rejects.toThrow(/0_none/);
+      expect(c.call).not.toHaveBeenCalled();
+    });
+
+    it("with an invoice present the net-based hint is unchanged", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({
+        transactions: [
+          {
+            transaction_id_by_customer: 1002,
+            participants: "Max Mustermann",
+            occasion: "Besprechung zur Angebotsplanung 2026",
+            bewirtungsangaben_signed: true,
+            entertainment_split_mode: "net_reclass",
+            invoice_net_total: 20.6,
+            splits: [{ postingaccount: 4650, postingtext: "Bewirtung", vat: "19_pre", amount: "24.51" }],
+          },
+        ],
+      } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({ net_total: "20.60", amount: "6.18" });
+    });
   });
 });

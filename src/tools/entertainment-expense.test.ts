@@ -284,13 +284,30 @@ describe("guardEntertainmentBooking", () => {
     ).toThrow(/4654/);
   });
 
-  it("rejects net_reclass without an invoice (no net amount exists)", () => {
+  it("allows net_reclass without an invoice when every split is 0_none (the gross amount is the net, there is no VAT)", () => {
+    const result = guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "0_none" }], {
+      ...noInvoicePractice,
+      entertainment_split_mode: "net_reclass",
+    });
+    expect(result.entertainment).toBe(true);
+  });
+
+  it("rejects net_reclass without an invoice when a split carries a VAT code other than 0_none", () => {
     expect(() =>
-      guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "0_none" }], {
+      guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "19_vat" }], {
         ...noInvoicePractice,
         entertainment_split_mode: "net_reclass",
       })
-    ).toThrow(/net_reclass/);
+    ).toThrow(/0_none/);
+  });
+
+  it("still blocks an input-VAT code with net_reclass without an invoice", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "19_pre" }], {
+        ...noInvoicePractice,
+        entertainment_split_mode: "net_reclass",
+      })
+    ).toThrow(/Vorsteuer ohne Rechnung/);
   });
 
   it("keeps the legacy alias path unchanged: host_confirmed true with a 70/30 split and an input VAT code", () => {
@@ -364,6 +381,42 @@ describe("computeEntertainmentReclass with invoice_net_total", () => {
     expect(hint.net_total).toBe("20.62");
     expect(hint.amount).toBe("6.19");
     expect(hint.note).toContain("invoice_net_total");
+  });
+});
+
+describe("computeEntertainmentReclass without an invoice", () => {
+  const split = [{ postingaccount: 4650, amount: "37.50", vat: "0_none" }];
+
+  it("uses the gross amount (= net, no VAT) and splitGross: 37.50 -> 11.25 from 4654 to 4650, 0_none", () => {
+    const hint = computeEntertainmentReclass(split, undefined, { withoutInvoice: true })!;
+    expect(hint).toMatchObject({ net_total: "37.50", amount: "11.25", postingaccount_debit: 4654, postingaccount_credit: 4650, vat: "0_none" });
+    expect(hint.note).toContain("ohne Rechnung");
+    expect(hint.note).not.toContain("invoice_net_total");
+  });
+
+  it("books everything over for the conservative variant (100 % non-deductible)", () => {
+    const hint = computeEntertainmentReclass(split, undefined, { withoutInvoice: true, treatment: "conservative_100_nondeductible" })!;
+    expect(hint.amount).toBe("37.50");
+  });
+
+  it("ignores invoice_net_total when there is no invoice", () => {
+    const hint = computeEntertainmentReclass(split, 20.6, { withoutInvoice: true })!;
+    expect(hint).toMatchObject({ net_total: "37.50", amount: "11.25" });
+  });
+
+  it("uses the SKR04 accounts for 6640", () => {
+    const hint = computeEntertainmentReclass([{ postingaccount: 6640, amount: "37.50", vat: "0_none" }], undefined, { withoutInvoice: true })!;
+    expect(hint).toMatchObject({ postingaccount_debit: 6644, postingaccount_credit: 6640, amount: "11.25" });
+  });
+
+  it("with an invoice nothing changes (6.19 derived)", () => {
+    const hint = computeEntertainmentReclass(
+      [
+        { postingaccount: 4650, amount: "14.15", vat: "7_pre" },
+        { postingaccount: 4650, amount: "8.80", vat: "19_pre" },
+      ]
+    )!;
+    expect(hint.amount).toBe("6.19");
   });
 });
 

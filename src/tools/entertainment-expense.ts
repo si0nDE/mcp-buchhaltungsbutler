@@ -4,6 +4,8 @@ import {
   HOST_CONFIRMED_DEPRECATED,
   noInvoiceWarnings,
   resolveEntertainmentContext,
+  splitGross,
+  type MissingInvoiceTreatment,
   type PolicyFields,
   variantNote,
 } from "./entertainment-policy.js";
@@ -127,12 +129,17 @@ export function guardEntertainmentBooking(
           `wenn die Rechnung vorliegt (Ablauf in docs/bewirtungsbeleg-faq.md).`
       );
     }
-    // For every type: without an invoice there is no net amount the 30 % could be computed from.
+    // net_reclass without an invoice: allowed as long as every split is 0_none. There is no VAT, so the gross
+    // amount is the net, and the 30 % are computed from it (computeEntertainmentReclass, withoutInvoice).
     if (fields.entertainment_split_mode === "net_reclass") {
-      throw new Error(
-        `entertainment_split_mode "net_reclass" ist ohne Rechnung nicht möglich: es gibt kein Netto, auf dem die 30 % ` +
-          `berechnet werden könnten. gross_split verwenden (booking_hint des Generators nutzen).`
-      );
+      const other = splits.find((s) => s.vat !== undefined && s.vat !== "0_none");
+      if (other) {
+        throw new Error(
+          `entertainment_split_mode "net_reclass" ist ohne Rechnung nur mit vat 0_none auf allen Splits möglich (gefunden: ` +
+            `${other.vat} auf Konto ${other.postingaccount}): ohne Rechnung gibt es keine Vorsteuer, der Bruttobetrag ist ` +
+            `zugleich das Netto, auf dem die 30 % berechnet werden.`
+        );
+      }
     }
     if (context.type !== "sole_proprietor_self") warnings.push(...noInvoiceWarnings(context));
   }
@@ -299,16 +306,41 @@ export interface EntertainmentReclassHint {
   note: string;
 }
 
+export interface EntertainmentReclassOptions {
+  // No restaurant invoice: there is no VAT, so the gross amount of the 4650/6640 splits is the net.
+  withoutInvoice?: boolean;
+  treatment?: MissingInvoiceTreatment;
+}
+
 // The 30 % non-deductible share of the NET amount (booked amounts are gross;
-// net is derived from each split's VAT code). Hint only - nothing is booked.
+// net is derived from each split's VAT code). Without an invoice (options.withoutInvoice, all splits 0_none) the
+// gross amount is the base and splitGross computes the share (100 % for conservative_100_nondeductible).
+// Hint only - nothing is booked.
 export function computeEntertainmentReclass(
   splits: Array<{ postingaccount: number; amount: string; vat: string }>,
-  invoiceNetTotal?: number
+  invoiceNetTotal?: number,
+  options?: EntertainmentReclassOptions
 ): EntertainmentReclassHint | undefined {
   const deductible = splits.filter((s) => matchEntertainmentAccount(s.postingaccount) === "deductible");
   if (deductible.length === 0) return undefined;
   const skr04 = deductible.some((s) => s.postingaccount === 6640);
   const accounts = skr04 ? { debit: 6644, credit: 6640 } : { debit: 4654, credit: 4650 };
+
+  if (options?.withoutInvoice) {
+    const gross = round2(deductible.reduce((sum, s) => sum + Number(s.amount), 0));
+    const { nonDeductible } = splitGross(gross, options.treatment ?? "standard");
+    return {
+      net_total: gross.toFixed(2),
+      postingaccount_debit: accounts.debit,
+      postingaccount_credit: accounts.credit,
+      amount: nonDeductible.toFixed(2),
+      vat: "0_none",
+      note:
+        "Nicht automatisch gebucht (ohne Rechnung, keine Vorsteuer): Basis ist der Bruttobetrag der Splits auf " +
+        `${accounts.credit} (= Netto), der nicht abziehbare Anteil ist mit splitGross berechnet. Umbuchung per add_free_postings ` +
+        `(Soll ${accounts.debit} an Haben ${accounts.credit}, vat 0_none).`,
+    };
+  }
 
   let net: number | null = 0;
   if (invoiceNetTotal !== undefined && Number.isFinite(invoiceNetTotal)) {

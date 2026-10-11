@@ -16,6 +16,7 @@ import {
   PARTICIPANT_RELATIONS,
   SHAREHOLDER_MANAGER_TREATMENT_HELP,
   SHAREHOLDER_MANAGER_TREATMENTS,
+  type MissingInvoiceTreatment,
 } from "./entertainment-policy.js";
 import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE, withBookingHints, withWarnings } from "./bhb-systematik.js";
 import { getChart } from "./posting-accounts.js";
@@ -128,7 +129,9 @@ const entertainmentFieldsShape = {
       'Default "gross_split": 4650 and 4654 in the same call in a 70/30 ratio. "net_reclass": book only 4650/6640 ' +
         "with the full amount and input VAT; the response then contains entertainment_reclass_hints with the 30% " +
         "of NET to reclassify afterwards via add_free_postings (4654 an 4650, vat 0_none). Not booked automatically. " +
-        "Not possible without an invoice."
+        "Without an invoice (original_invoice_status not present) only with vat 0_none on every split: the gross " +
+        "amount is then the base (there is no VAT) and the hint is computed with splitGross (e.g. 37.50 -> 11.25; " +
+        "100 % for conservative_100_nondeductible); invoice_net_total is ignored."
     ),
 };
 
@@ -280,6 +283,8 @@ interface AuditItem {
     occasion?: string;
     entertainment_split_mode?: string;
     invoice_net_total?: string | number;
+    original_invoice_status?: string;
+    missing_invoice_treatment?: MissingInvoiceTreatment;
   };
   travelMatch: ReturnType<typeof assertTravelExpenseFields>;
   entertainmentMatch: true | undefined;
@@ -331,7 +336,12 @@ function collectAuditArtifacts(items: AuditItem[]): { commentJobs: CommentJob[];
         });
       }
       if (entry.entertainment_split_mode === "net_reclass") {
-        const hint = computeEntertainmentReclass(entry.splits, net);
+        // Without an invoice the guard has verified that every split is 0_none: the gross amount is the base and
+        // invoice_net_total (an invoice figure) does not apply.
+        const withoutInvoice = entry.original_invoice_status !== undefined && entry.original_invoice_status !== "present";
+        const hint = withoutInvoice
+          ? computeEntertainmentReclass(entry.splits, undefined, { withoutInvoice: true, treatment: entry.missing_invoice_treatment })
+          : computeEntertainmentReclass(entry.splits, net);
         if (hint) hints.push({ ...target, ...hint });
       }
     }

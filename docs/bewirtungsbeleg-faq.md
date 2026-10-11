@@ -108,6 +108,8 @@ Buchungsversuch würde doppelt buchen.
 `vat: 0_none`) bucht der Konnektor nicht selbst, sondern sie wird mit `add_free_postings` angelegt. Der Standard
 `gross_split` (beide Konten im selben Aufruf, 70/30 auf die gebuchten Beträge) bleibt unverändert.
 
+**Ohne Gaststättenrechnung** (`original_invoice_status` ≠ `present`) geht `net_reclass` ebenfalls, aber nur, wenn alle Splits `vat: 0_none` haben (ein Vorsteuer-Code bleibt verboten, jeder andere Code als `0_none` ist ein Fehler). Es gibt keine Vorsteuer, deshalb ist der Bruttobetrag zugleich das Netto: Der Hinweis rechnet den nicht abziehbaren Anteil mit `splitGross` aus dem Bruttobetrag der 4650-Splits (37,50 € → 11,25 € von 4654 an 4650, `0_none`; bei `conservative_100_nondeductible` der volle Betrag). `invoice_net_total` wird in diesem Fall ignoriert. So lässt sich die übliche Praxis „100 % auf 4650, danach 30 % auf 4654 umbuchen“ auch ohne Rechnung beibehalten.
+
 ## Was, wenn die Gaststättenrechnung fehlt?
 
 Mit `original_invoice_status: "missing_requested"` (beim Gastwirt angefordert, nicht erhalten) oder `"lost"` (verloren oder unleserlich) erzeugt `generate_and_upload_entertainment_receipt` die Bewirtungsseite ohne Rechnung. Pflicht sind der Zahlbetrag (`gross_amount`, inklusive Trinkgeld), ein Zahlungsnachweis (`payment_evidence`), die Bewirtungsart (`entertainment_type`), bei `missing_requested` mindestens eine Anforderung (`invoice_requests`) und ohne Quell-Beleg die Gaststätte (`counterparty`). Fehlen mehrere Felder, nennt eine Fehlermeldung alle auf einmal. Speisen- und Getränkebeträge müssen leer bleiben: eine erfundene Aufteilung wäre falsch.
