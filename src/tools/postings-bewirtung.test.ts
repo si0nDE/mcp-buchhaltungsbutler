@@ -234,3 +234,107 @@ describe("entertainment_split_mode: net_reclass", () => {
     expect(c.call).not.toHaveBeenCalled();
   });
 });
+
+describe("new Bewirtung fields in the posting tools", () => {
+  const noInvoice = {
+    participants: "Max Mustermann, Erika Beispiel",
+    occasion: "Besprechung zur Angebotsplanung 2026",
+    original_invoice_status: "missing_requested",
+    entertainment_type: "business",
+    missing_invoice_treatment: "practice_70_30_no_vat",
+    bewirtungsangaben_signed: true,
+  };
+  const splits = [
+    { postingaccount: 4650, postingtext: "Bewirtung", vat: "0_none", amount: "26.25" },
+    { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "0_none", amount: "11.25" },
+  ];
+
+  it("does not send the audit fields to BuchhaltungsButler and adds the variant to the comment", async () => {
+    const c = client();
+    const [, , addTx] = createPostingsTools(c);
+    const result = await addTx.handler({ transactions: [{ transaction_id_by_customer: 1001, splits, ...noInvoice }] } as never);
+    const sent = vi.mocked(c.call).mock.calls.find((x) => x[0] === "postingsAddBatchTransactions")![1] as {
+      transactions: Array<Record<string, unknown>>;
+    };
+    for (const key of [
+      "entertainment_type",
+      "original_invoice_status",
+      "missing_invoice_treatment",
+      "bewirtungsangaben_signed",
+      "participants",
+      "occasion",
+    ]) {
+      expect(sent.transactions[0]).not.toHaveProperty(key);
+    }
+    const comment = vi.mocked(c.call).mock.calls.find((x) => x[0] === "commentsAdd")![1] as { comment_text: string };
+    expect(comment.comment_text).toContain("Variante: practice_70_30_no_vat");
+    expect(JSON.stringify(result)).toContain("X R 57/09");
+  });
+
+  it("rejects an input-VAT code without an invoice before anything is sent", async () => {
+    const c = client();
+    const [, addReceipt] = createPostingsTools(c);
+    await expect(
+      addReceipt.handler({
+        receipts: [
+          {
+            receipt_id_by_customer: 521,
+            creditor: 0,
+            debtor: 0,
+            splits: [
+              { postingaccount: 4650, postingtext: "Bewirtung", vat: "19_pre", amount: "26.25" },
+              { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "0_none", amount: "11.25" },
+            ],
+            ...noInvoice,
+          },
+        ],
+      } as never)
+    ).rejects.toThrow(/Vorsteuer ohne Rechnung/);
+    expect(c.call).not.toHaveBeenCalled();
+  });
+
+  it("rejects host_confirmed together with original_invoice_status before anything is sent", async () => {
+    const c = client();
+    const [, , addTx] = createPostingsTools(c);
+    await expect(
+      addTx.handler({
+        transactions: [{ transaction_id_by_customer: 1001, splits, ...noInvoice, host_confirmed: true }],
+      } as never)
+    ).rejects.toThrow(/host_confirmed/);
+    expect(c.call).not.toHaveBeenCalled();
+  });
+
+  it("puts the guard warnings into the dry run", async () => {
+    const c = client();
+    const [, , addTx] = createPostingsTools(c);
+    const result = await addTx.handler({
+      dry_run: true,
+      transactions: [{ transaction_id_by_customer: 1001, splits, ...noInvoice }],
+    } as never);
+    expect(JSON.stringify(result)).toContain("X R 57/09");
+  });
+
+  it("uses invoice_net_total for the net_reclass hint (6.18 instead of 6.19)", async () => {
+    const c = client();
+    const [, , addTx] = createPostingsTools(c);
+    const result = await addTx.handler({
+      transactions: [
+        {
+          transaction_id_by_customer: 1002,
+          participants: "Max Mustermann",
+          occasion: "Besprechung zur Angebotsplanung 2026",
+          bewirtungsangaben_signed: true,
+          entertainment_split_mode: "net_reclass",
+          invoice_net_total: 20.6,
+          splits: [
+            { postingaccount: 4650, postingtext: "Bewirtung 7 %", vat: "7_pre", amount: "14.15" },
+            { postingaccount: 4650, postingtext: "Bewirtung 19 %", vat: "19_pre", amount: "8.80" },
+          ],
+        },
+      ],
+    } as never);
+    const text = JSON.stringify(result);
+    expect(text).toContain('"amount":"6.18"');
+    expect(text).toContain('"net_total":"20.60"');
+  });
+});

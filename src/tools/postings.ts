@@ -2,12 +2,21 @@ import { z } from "zod";
 import { compactRows, compactShape } from "../formatting/compact.js";
 import type { BBClient } from "../bb-client/client.js";
 import {
-  assertEntertainmentExpenseFields,
   COMMENT_MAX_BYTES,
   computeEntertainmentReclass,
   formatEntertainmentExpenseNote,
+  guardEntertainmentBooking,
   truncateToBytes,
 } from "./entertainment-expense.js";
+import {
+  ENTERTAINMENT_TYPES,
+  INVOICE_STATUSES,
+  MISSING_INVOICE_TREATMENT_HELP,
+  MISSING_INVOICE_TREATMENTS,
+  PARTICIPANT_RELATIONS,
+  SHAREHOLDER_MANAGER_TREATMENT_HELP,
+  SHAREHOLDER_MANAGER_TREATMENTS,
+} from "./entertainment-policy.js";
 import { anlagenWarnings, assertOssFields, personenkontoWarnings, VAT_CODE_GUIDE, withBookingHints, withWarnings } from "./bhb-systematik.js";
 import { getChart } from "./posting-accounts.js";
 import { vatWarnings } from "./vat-hints.js";
@@ -65,16 +74,75 @@ const travelerFieldsShape = {
 const entertainmentFieldsShape = {
   participants: z.string().optional(),
   occasion: z.string().optional(),
-  host_confirmed: z.boolean().optional(),
+  host_confirmed: z
+    .boolean()
+    .optional()
+    .describe(
+      "DEPRECATED alias: true = bewirtungsangaben_signed true + original_invoice_status present. Must not be combined with " +
+        "bewirtungsangaben_signed or original_invoice_status."
+    ),
+  bewirtungsangaben_signed: z
+    .boolean()
+    .optional()
+    .describe("The host confirmed/signed the Bewirtungsangaben (BMF 19.11.2025 Rn. 19). Required for 4650/4654 bookings."),
+  original_invoice_status: z
+    .enum(INVOICE_STATUSES)
+    .optional()
+    .describe(
+      "present (default) | missing_requested | lost. Anything but present forbids every input-VAT code (_pre) on every account " +
+        "and requires entertainment_type."
+    ),
+  entertainment_type: z
+    .enum(ENTERTAINMENT_TYPES)
+    .optional()
+    .describe(
+      "Kind of entertainment: business, business_mixed, internal_employees, internal_shareholder_managers, attention, " +
+        "sole_proprietor_self. Required when original_invoice_status is not present; advisory otherwise."
+    ),
+  missing_invoice_treatment: z.enum(MISSING_INVOICE_TREATMENTS).optional().describe(MISSING_INVOICE_TREATMENT_HELP),
+  shareholder_manager_treatment: z.enum(SHAREHOLDER_MANAGER_TREATMENTS).optional().describe(SHAREHOLDER_MANAGER_TREATMENT_HELP),
+  participant_relations: z
+    .array(z.enum(PARTICIPANT_RELATIONS))
+    .optional()
+    .describe("One relation per entertained person (external, employee, shareholder_manager, shareholder, freelancer)."),
+  invoice_net_total: z
+    .union([z.string(), z.number()])
+    .optional()
+    .describe("Net total as printed on the restaurant invoice. With entertainment_split_mode net_reclass the reclass amount is taken from it."),
   entertainment_split_mode: z
     .enum(["gross_split", "net_reclass"])
     .optional()
     .describe(
       'Default "gross_split": 4650 and 4654 in the same call in a 70/30 ratio. "net_reclass": book only 4650/6640 ' +
         "with the full amount and input VAT; the response then contains entertainment_reclass_hints with the 30% " +
-        "of NET to reclassify afterwards via add_free_postings (4654 an 4650, vat 0_none). Not booked automatically."
+        "of NET to reclassify afterwards via add_free_postings (4654 an 4650, vat 0_none). Not booked automatically. " +
+        "Not possible without an invoice."
     ),
 };
+
+const AUDIT_ONLY_KEYS = [
+  "traveler_name",
+  "traveler_role",
+  "business_purpose",
+  "participants",
+  "occasion",
+  "host_confirmed",
+  "bewirtungsangaben_signed",
+  "original_invoice_status",
+  "entertainment_type",
+  "missing_invoice_treatment",
+  "shareholder_manager_treatment",
+  "participant_relations",
+  "invoice_net_total",
+  "entertainment_split_mode",
+] as const;
+
+// Fields that only drive local checks and the audit comment: never sent to BuchhaltungsButler.
+function omitAuditFields(entry: object): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...entry };
+  for (const key of AUDIT_ONLY_KEYS) delete rest[key];
+  return rest;
+}
 
 const ossFieldsShape = {
   oss_origin_country: z.string().optional().describe("OSS country of origin (ISO alpha-2). Only for vat_oss_* codes."),
@@ -198,9 +266,11 @@ interface AuditItem {
     participants?: string;
     occasion?: string;
     entertainment_split_mode?: string;
+    invoice_net_total?: string | number;
   };
   travelMatch: ReturnType<typeof assertTravelExpenseFields>;
   entertainmentMatch: true | undefined;
+  variant?: string;
 }
 
 // Built BEFORE booking so everything that can fail on our side fails before
@@ -208,7 +278,7 @@ interface AuditItem {
 function collectAuditArtifacts(items: AuditItem[]): { commentJobs: CommentJob[]; hints: Array<Record<string, unknown>> } {
   const commentJobs: CommentJob[] = [];
   const hints: Array<Record<string, unknown>> = [];
-  for (const { target, entry, travelMatch, entertainmentMatch } of items) {
+  for (const { target, entry, travelMatch, entertainmentMatch, variant } of items) {
     if (travelMatch) {
       commentJobs.push({
         target,
@@ -222,10 +292,11 @@ function collectAuditArtifacts(items: AuditItem[]): { commentJobs: CommentJob[];
     if (entertainmentMatch) {
       commentJobs.push({
         target,
-        text: formatEntertainmentExpenseNote({ participants: entry.participants!, occasion: entry.occasion! }),
+        text: formatEntertainmentExpenseNote({ participants: entry.participants!, occasion: entry.occasion!, variant }),
       });
       if (entry.entertainment_split_mode === "net_reclass") {
-        const hint = computeEntertainmentReclass(entry.splits);
+        const net = entry.invoice_net_total === undefined ? undefined : Number(entry.invoice_net_total);
+        const hint = computeEntertainmentReclass(entry.splits, net);
         if (hint) hints.push({ ...target, ...hint });
       }
     }
@@ -568,8 +639,11 @@ export function createPostingsTools(
       "invoice address or payment method), and business_purpose. Booking onto a Bewirtungskosten " +
       "(business entertainment) account (SKR03 4650/4654 or SKR04 6640/6644) requires the deductible " +
       "(4650/6640) and non-deductible (4654/6644) splits to both be present in an approximately 70/30 " +
-      "ratio, plus participants, occasion, and host_confirmed: true (confirming a proper signed " +
-      "Bewirtungsbeleg exists per § 4 Abs. 5 Nr. 2 EStG — ask the user if unsure, don't assume). Both " +
+      "ratio, plus participants, occasion, and bewirtungsangaben_signed: true (the host confirmed the Bewirtungsangaben, " +
+      "§ 4 Abs. 5 Nr. 2 EStG, BMF 19.11.2025 Rn. 19 — ask the user if unsure; host_confirmed is a deprecated alias for " +
+      "bewirtungsangaben_signed + original_invoice_status present and must not be combined with them). If no restaurant " +
+      "invoice exists, set original_invoice_status (missing_requested | lost) and entertainment_type; every input-VAT code " +
+      "is then rejected on every account, and business types need missing_invoice_treatment (ask the user, never infer it). Both " +
       "sets of fields are recorded as a comment on the receipt for the audit trail." +
       " The audit comment is cut to BuchhaltungsButler's 210-character limit; if it still fails after the booking " +
       "the call returns a warning instead of an error (never re-book). entertainment_split_mode " +
@@ -585,19 +659,19 @@ export function createPostingsTools(
           entry
         )
       );
-      const entertainmentMatches = args.receipts.map((entry) => assertEntertainmentExpenseFields(entry.splits, entry));
-      const receipts = args.receipts.map(
-        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, entertainment_split_mode, ...rest }) => ({
-          ...rest,
-          ...flattenSplits(splits),
-        })
-      );
+      const guards = args.receipts.map((entry) => guardEntertainmentBooking(entry.splits, entry));
+      const guardWarnings = guards.flatMap((g) => g.warnings);
+      const receipts = args.receipts.map(({ splits, ...rest }) => ({
+        ...omitAuditFields(rest),
+        ...flattenSplits(splits),
+      }));
       const { commentJobs, hints } = collectAuditArtifacts(
         args.receipts.map((entry, i) => ({
           target: { receipt_id_by_customer: entry.receipt_id_by_customer },
           entry,
           travelMatch: travelMatches[i],
-          entertainmentMatch: entertainmentMatches[i],
+          entertainmentMatch: guards[i].entertainment,
+          variant: guards[i].variant,
         }))
       );
       if (args.dry_run) {
@@ -608,11 +682,17 @@ export function createPostingsTools(
           args.receipts.flatMap((e) =>
             e.splits.map((s) => ({ account: s.postingaccount, vat: s.vat, label: `Beleg ${e.receipt_id_by_customer}` }))
           ),
-          { commentJobs, hints, postingtexts: args.receipts.flatMap((e) => e.splits.map((s) => s.postingtext)) }
+          {
+            commentJobs,
+            hints,
+            postingtexts: args.receipts.flatMap((e) => e.splits.map((s) => s.postingtext)),
+            extraWarnings: guardWarnings,
+          }
         );
       }
       const result = await withBookingHints(() => client.call("postingsAddBatchReceipts", { receipts }));
       const warnings = [
+        ...guardWarnings,
         ...(await sendComments(client, commentJobs)),
         ...anlagenWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.postingaccount))),
         ...postingtextWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.postingtext))),
@@ -652,8 +732,11 @@ export function createPostingsTools(
       "invoice address or payment method), and business_purpose. Booking onto a Bewirtungskosten " +
       "(business entertainment) account (SKR03 4650/4654 or SKR04 6640/6644) requires the deductible " +
       "(4650/6640) and non-deductible (4654/6644) splits to both be present in an approximately 70/30 " +
-      "ratio, plus participants, occasion, and host_confirmed: true (confirming a proper signed " +
-      "Bewirtungsbeleg exists per § 4 Abs. 5 Nr. 2 EStG — ask the user if unsure, don't assume). Both " +
+      "ratio, plus participants, occasion, and bewirtungsangaben_signed: true (the host confirmed the Bewirtungsangaben, " +
+      "§ 4 Abs. 5 Nr. 2 EStG, BMF 19.11.2025 Rn. 19 — ask the user if unsure; host_confirmed is a deprecated alias for " +
+      "bewirtungsangaben_signed + original_invoice_status present and must not be combined with them). If no restaurant " +
+      "invoice exists, set original_invoice_status (missing_requested | lost) and entertainment_type; every input-VAT code " +
+      "is then rejected on every account, and business types need missing_invoice_treatment (ask the user, never infer it). Both " +
       "sets of fields are recorded as a comment on the transaction for the audit trail." +
       " The audit comment is cut to BuchhaltungsButler's 210-character limit; if it still fails after the booking " +
       "the call returns a warning instead of an error (never re-book). entertainment_split_mode " +
@@ -682,21 +765,19 @@ export function createPostingsTools(
           entry
         )
       );
-      const entertainmentMatches = args.transactions.map((entry) =>
-        assertEntertainmentExpenseFields(entry.splits, entry)
-      );
-      const transactions = args.transactions.map(
-        ({ splits, traveler_name, traveler_role, business_purpose, participants, occasion, host_confirmed, entertainment_split_mode, ...rest }) => ({
-          ...rest,
-          ...flattenTransactionSplits(splits),
-        })
-      );
+      const guards = args.transactions.map((entry) => guardEntertainmentBooking(entry.splits, entry));
+      const guardWarnings = guards.flatMap((g) => g.warnings);
+      const transactions = args.transactions.map(({ splits, ...rest }) => ({
+        ...omitAuditFields(rest),
+        ...flattenTransactionSplits(splits),
+      }));
       const { commentJobs, hints } = collectAuditArtifacts(
         args.transactions.map((entry, i) => ({
           target: { transaction_id_by_customer: entry.transaction_id_by_customer },
           entry,
           travelMatch: travelMatches[i],
-          entertainmentMatch: entertainmentMatches[i],
+          entertainmentMatch: guards[i].entertainment,
+          variant: guards[i].variant,
         }))
       );
       const cashbackIds = await fetchCashbackIds(client, args.transactions.map((e) => e.transaction_id_by_customer));
@@ -724,12 +805,13 @@ export function createPostingsTools(
             commentJobs,
             hints,
             postingtexts: args.transactions.flatMap((e) => e.splits.map((s) => s.postingtext)),
-            extraWarnings: [...cashbackWarnings, ...receiptWarnings],
+            extraWarnings: [...guardWarnings, ...cashbackWarnings, ...receiptWarnings],
           }
         );
       }
       const result = await withBookingHints(() => client.call("postingsAddBatchTransactions", { transactions }));
       const warnings = [
+        ...guardWarnings,
         ...cashbackWarnings,
         ...receiptWarnings,
         ...(await sendComments(client, commentJobs)),
