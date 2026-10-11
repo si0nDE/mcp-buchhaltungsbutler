@@ -59,6 +59,13 @@ Liegt die Rechnung schon in BuchhaltungsButler, `generate_and_upload_entertainme
 hängt die Bewirtungsangaben als **letzte Seite** an und lädt **einen** neuen Beleg hoch (Original + Bewirtungsangaben).
 Es läuft kein Base64 durchs Modell. `bill_file` nur für Dateien nutzen, die nicht in BuchhaltungsButler liegen.
 
+Ohne Gaststättenrechnung `original_invoice_status` (`missing_requested` | `lost`) zusammen mit `gross_amount`, `payment_evidence`,
+`entertainment_type` und bei geschäftlicher Bewirtung `missing_invoice_treatment` angeben (immer beim Nutzer erfragen, kein Default).
+Die erzeugte Seite ist dann selbst der Beleg (keine Vorsteuer, ein Upload), die Antwort enthält einen `booking_hint`.
+`host_confirmed` an den Buchungs-Tools ist **deprecated** (stattdessen `bewirtungsangaben_signed` und `original_invoice_status`);
+die Kombination mit den neuen Feldern wird abgelehnt. Vorsteuer-Codes werden ohne Rechnung auf jedem Konto abgelehnt.
+Quellen und offene Punkte: [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md).
+
 | Parameter | Bedeutung |
 |---|---|
 | `source_receipt_id_by_customer` | id_by_customer des Originals. Schließt `bill_file` und `link_to_receipt_id_by_customer` aus. |

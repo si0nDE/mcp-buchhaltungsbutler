@@ -60,6 +60,13 @@ If the bill already exists in BuchhaltungsButler, call `generate_and_upload_ente
 Bewirtungsangaben page as the **last page** and uploads **one** new receipt (original + page). No base64 passes
 through the model. Use `bill_file` only for files that are not in BuchhaltungsButler.
 
+Without a restaurant invoice, set `original_invoice_status` (`missing_requested` | `lost`) together with `gross_amount`,
+`payment_evidence`, `entertainment_type` and, for business entertainment, `missing_invoice_treatment` (always ask the user, no default).
+The generated page then is the receipt itself (no input VAT, one upload), and the response carries a `booking_hint`.
+`host_confirmed` on the posting tools is **deprecated** (use `bewirtungsangaben_signed` and `original_invoice_status`);
+combining it with the new fields is rejected. Input-VAT codes are refused on every account when the invoice is missing.
+Sources and open points: [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md).
+
 | Parameter | Meaning |
 |---|---|
 | `source_receipt_id_by_customer` | id_by_customer of the original. Mutually exclusive with `bill_file` and `link_to_receipt_id_by_customer`. |

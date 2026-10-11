@@ -108,6 +108,61 @@ Buchungsversuch würde doppelt buchen.
 `vat: 0_none`) bucht der Konnektor nicht selbst, sondern sie wird mit `add_free_postings` angelegt. Der Standard
 `gross_split` (beide Konten im selben Aufruf, 70/30 auf die gebuchten Beträge) bleibt unverändert.
 
+## Was, wenn die Gaststättenrechnung fehlt?
+
+Mit `original_invoice_status: "missing_requested"` (beim Gastwirt angefordert, nicht erhalten) oder `"lost"` (verloren oder unleserlich) erzeugt `generate_and_upload_entertainment_receipt` die Bewirtungsseite ohne Rechnung. Pflicht sind der Zahlbetrag (`gross_amount`, inklusive Trinkgeld), ein Zahlungsnachweis (`payment_evidence`), die Bewirtungsart (`entertainment_type`), bei `missing_requested` mindestens eine Anforderung (`invoice_requests`) und ohne Quell-Beleg die Gaststätte (`counterparty`). Fehlen mehrere Felder, nennt eine Fehlermeldung alle auf einmal. Speisen- und Getränkebeträge müssen leer bleiben: eine erfundene Aufteilung wäre falsch.
+
+Die Seite ist dann selbst der Beleg (ein Upload, ohne Vorsteuer). Mit `payment_evidence.transaction_id_by_customer` prüft der Konnektor den Betrag der Banktransaktion (Toleranz 0,01 €) und ordnet den Beleg ihr zu. Die Antwort enthält `booking_hint` mit den Splits für die Buchungs-Tools (SKR03 4650/4654, SKR04 6640/6644, immer `0_none`).
+
+Für geschäftliche Bewirtung (§ 4 Abs. 5 Satz 1 Nr. 2 EStG) gibt es zwei Varianten, die der Nutzer **jedes Mal** wählt (`missing_invoice_treatment`):
+
+| Variante | Buchung | Quelle |
+|---|---|---|
+| `practice_70_30_no_vat` | 70/30 des Zahlbetrags, keine Vorsteuer | Dennerlein Q42, bezogen auf Beträge unter 250 €; Anerkennung offen |
+| `conservative_100_nondeductible` | 100 % auf 4654/6644, keine Vorsteuer | BFH X R 57/09 |
+
+Über 250 € ist die Praxisvariante nur mit `acknowledge_practice_over_250: true` möglich; keine Quelle deckt diesen Fall ab.
+
+**Warum zwei Varianten?** Der BFH verlangt bei Bewirtung in einer Gaststätte die Rechnung „ohne Ausnahme“ und lässt keinen Eigenbeleg als Ersatz zu (BFH X R 57/09 und X R 58/09). Die Seminarunterlagen von Dennerlein (Haufe-Lexware Akademie, 16.09.2026, Q42) empfehlen für Beträge unter 250 € trotzdem 70/30 ohne Vorsteuer und halten die Anerkennung offen. Der Konnektor entscheidet das nicht still.
+
+Die Bewirtungsangaben sollen zeitnah entstehen (BMF 19.11.2025 Rn. 1 und 22). Eine Frist nennt der Erlass nicht; der Konnektor warnt ab mehr als 10 Tagen mit Orientierung an GoBD Rz. 47.
+
+## Welche Bewirtungsart (`entertainment_type`)?
+
+| Typ | Gilt für | Buchung (SKR03) |
+|---|---|---|
+| `business` | mindestens ein Betriebsfremder | 70 % 4650 / 30 % 4654, Vorsteuer voll bei Rechnung |
+| `business_mixed` | eigene Leute und Fremde | Gesamtbetrag 70/30 (R 4.10 Abs. 6 Satz 7 EStR; Dennerlein Q45); getrennte Anlässe manuell dokumentieren |
+| `internal_employees` | nur eigene Arbeitnehmer | 100 %, 4140; Lohnsteuer prüfen (50-€-Freigrenze, 60-€-Grenze, Auswärtstätigkeit) |
+| `internal_shareholder_managers` | nur Gesellschafter-Geschäftsführer | `shareholder_manager_treatment`: `as_employees` (wie intern) oder `business_70_30` |
+| `attention` | Kaffee, Gebäck, Arbeitsessen | 4653 bzw. 4140 netto; keine Bewirtung (R 4.10 Abs. 5 Satz 9 EStR) |
+| `sole_proprietor_self` | Einzelunternehmer allein | kein Bewirtungsbeleg, nur Verpflegungspauschale 14/28 € |
+
+Bei Gesellschafter-Geschäftsführern unter sich widersprechen sich die Quellen (Dennerlein Q48 gegen Q55; Folie 6: ein geschäftlicher Anlass setzt Betriebsfremde voraus). Nach R 4.10 Abs. 7 EStR ist die rein interne Bewirtung eigener Arbeitnehmer unbegrenzt abziehbar, das spricht eher für `as_employees`; `business_70_30` ist die vorsichtigere Variante mit weniger Abzug. Bei beiden besteht vGA-Risiko, wenn die Bewirtung unangemessen ist (§ 8 Abs. 3 Satz 2 KStG). Bei Geschäftsführerverträgen mit Vergütungs- oder Sachbezugsverzicht ist der Lohnansatz gesondert zu prüfen. Welche Variante gilt, entscheidet der Nutzer; feste Vorgaben einzelner Mandanten gehören in deren Projektanweisung, nicht in den Konnektor.
+
+Gesellschafter ohne Anstellung gelten als Dritte (Dennerlein Q6), freie Mitarbeiter ebenfalls (Folie 21). Dafür gibt es `participant_relations` bzw. `participants[].relation`.
+
+**Vorsteuer ohne Rechnung ist nie zulässig** (§ 15 Abs. 1 Satz 1 Nr. 1 UStG). Bei `original_invoice_status` ≠ `present` lehnen die Buchungs-Tools jeden Vorsteuer-Code (`_pre`) auf jedem Konto ab. Für nicht geschäftliche Typen (intern, Aufmerksamkeit) entfällt die Rechnungspflicht des § 4 Abs. 5 Satz 1 Nr. 2 EStG nach R 4.10 Abs. 5 Satz 9 und Abs. 7 Satz 1; eine Quelle, die diesen Fall ausdrücklich regelt, gibt es nicht, deshalb gibt es dort nur Warnungen.
+
+## Rechnung nachgereicht – Ablauf
+
+Es gibt dafür kein eigenes Tool. Der Ablauf besteht aus vorhandenen Bausteinen:
+
+1. `generate_and_upload_entertainment_receipt` mit der neuen Rechnung als Quelle (`source_receipt_id_by_customer`) und `original_invoice_status: "present"`.
+2. Die alte Buchung stornieren: `cancel_posting` (seit `v2026.10.07.001`; ältere Installationen haben nur `unconfirm_posting`). Fehlt das Tool oder ist die Buchung festgeschrieben, per Gegenbuchung über `add_free_postings` mit Verweis auf die Ursprungsbuchung.
+3. Mit Vorsteuer neu buchen.
+
+**Offene Grenze, nicht belegt:** Der Vorsteuerabzug entsteht mit Leistung und Besitz der Rechnung (§ 15 Abs. 1 Satz 1 Nr. 1 UStG; BFH XI R 17/22). Die Ist-Versteuerung (§ 20 UStG) betrifft nur die Umsatzsteuer, nicht die Vorsteuer. Die BuchhaltungsButler-API kennt `date_vat_effective` nur als Lesefeld; die Auswertung folgt dem Leistungs- bzw. Buchungsdatum. Bei einer Zahlungsbuchung liegt das Datum damit in der Vergangenheit. Ob eine freie Buchung mit dem Datum des Rechnungseingangs (Vorsteuerkonto an 4650) in der richtigen USt-VA-Kennzahl landet, ist **nicht geprüft** und sollte in einem Test-Mandanten verifiziert werden. Bis dahin: Rücksprache mit dem Steuerberater.
+
+## Quellen und Widersprüche
+
+- Gesetz: § 4 Abs. 5 Satz 1 Nr. 2 und Abs. 7 EStG, § 15 Abs. 1 und 1a UStG, § 33 UStDV, § 8 Abs. 3 Satz 2 KStG.
+- BFH 18.04.2012, X R 57/09 und X R 58/09: Rechnung ohne Ausnahme beizufügen, kein Ersatz durch Eigenbeleg.
+- BMF 19.11.2025 (IV C 6 – S 2145/00026/005/033): ergänzt **und ersetzt** das Schreiben vom 30.06.2021 für Bewirtungen ab 01.01.2025. Rn. 1 zeitnah und unterschrieben, Rn. 8 Trinkgeld, Rn. 9–12 Rechnungen über 250 €, Rn. 13 Kassenbeleg/E-Rechnung, Rn. 16 unbare Zahlung, Rn. 19–22 digitale Eigenbelege.
+- R 4.10 EStR (Abs. 5–7), GoBD Rz. 47, UStAE 3.6.
+- Fachliteratur (nachrangig): Dennerlein, Haufe-Lexware Akademie, 16.09.2026. Folie 46 zeigt 59 € Vorsteuer, Q37 „korrigiert“ auf 5,90 €; richtig sind 9,50 € (19 % von 50 €).
+- Handschriftliche Quittungen: BMF 2025 Rn. 13 schließt sie bei Kassensystem vollständig aus, Dennerlein Q32/Q57 sieht das milder. Der Konnektor warnt, wenn der Originalbeleg keine Textebene hat.
+
 ## Haftungshinweis
 
 Diese Seite fasst unsere Recherche zusammen, ersetzt aber keine steuerliche Beratung. Vor
