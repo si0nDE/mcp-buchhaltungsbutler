@@ -125,6 +125,24 @@ export function guardEntertainmentBooking(
     return { entertainment: undefined, warnings, variant };
   }
 
+  if (context.business === false) {
+    // Non-business types: the only hard block is _pre without invoice (above); everything else is advisory.
+    if (context.type === "sole_proprietor_self") return { entertainment: true, warnings, variant };
+    const missing = [
+      !fields.participants && "participants",
+      !fields.occasion && "occasion",
+      context.signed !== true && "bewirtungsangaben_signed",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      warnings.push(`Nicht geschäftliche Bewirtung: ${missing.join(", ")} fehlt; hier nur Hinweis, für die Dokumentation trotzdem ergänzen.`);
+    }
+    warnings.push(
+      `entertainment_type ${context.type} gehört nicht auf 4650/4654 (Bewirtung aus geschäftlichem Anlass); die 70/30-Aufteilung wird ` +
+        `hier nicht erzwungen. ${accountAdvice(context.type!, context.shareholderTreatment) ?? ""}`.trim()
+    );
+    return { entertainment: true, warnings, variant };
+  }
+
   if (!fields.participants) {
     throw new Error(
       `Posting account is a Bewirtungskosten (entertainment-expense) account. "participants" is required — ` +
@@ -152,14 +170,6 @@ export function guardEntertainmentBooking(
       "bewirtungsangaben_signed ist nicht true: bei conservative_100_nondeductible wird nichts abgezogen, daher nur Warnung. " +
         "Die Bestätigung des Gastgebers (BMF 19.11.2025 Rn. 19) trotzdem nachholen."
     );
-  }
-
-  if (context.business === false) {
-    warnings.push(
-      `entertainment_type ${context.type} gehört nicht auf 4650/4654 (Bewirtung aus geschäftlichem Anlass); die 70/30-Aufteilung wird ` +
-        `hier nicht erzwungen. ${accountAdvice(context.type!, context.shareholderTreatment) ?? ""}`.trim()
-    );
-    return { entertainment: true, warnings, variant };
   }
 
   if (fields.entertainment_split_mode === "net_reclass") {

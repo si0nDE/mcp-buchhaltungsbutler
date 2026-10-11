@@ -378,3 +378,63 @@ describe("formatEntertainmentExpenseNote with variant", () => {
     expect(note).toContain("Variante: practice_70_30_no_vat");
   });
 });
+
+describe("guardEntertainmentBooking fix round 1", () => {
+  it("non-business type on 4650 without participants/occasion/signed only warns", () => {
+    const result = guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "0_none" }], {
+      entertainment_type: "internal_employees",
+    });
+    expect(result.entertainment).toBe(true);
+    expect(result.warnings.join(" ")).toContain("participants");
+    expect(result.warnings.join(" ")).toContain("4140");
+  });
+
+  it("sole_proprietor_self on 4650 does not throw and emits exactly one type warning", () => {
+    const result = guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "0_none" }], {
+      entertainment_type: "sole_proprietor_self",
+    });
+    expect(result.warnings.filter((w) => w.includes("sole_proprietor_self"))).toHaveLength(1);
+  });
+
+  it("business type without signed still throws", () => {
+    expect(() =>
+      guardEntertainmentBooking(
+        [
+          { postingaccount: 4650, amount: "26.25", vat: "0_none" },
+          { postingaccount: 4654, amount: "11.25", vat: "0_none" },
+        ],
+        { ...guardBase, entertainment_type: "business", bewirtungsangaben_signed: false }
+      )
+    ).toThrow(/bewirtungsangaben_signed/);
+  });
+
+  it("legacy call without type and unsigned still throws", () => {
+    expect(() =>
+      guardEntertainmentBooking(
+        [
+          { postingaccount: 4650, amount: "26.25", vat: "0_none" },
+          { postingaccount: 4654, amount: "11.25", vat: "0_none" },
+        ],
+        guardBase
+      )
+    ).toThrow(/host_confirmed|bewirtungsangaben_signed/);
+  });
+
+  it("blocks a _pre_app code without invoice", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "19_pre_app" }], {
+        original_invoice_status: "lost",
+        entertainment_type: "internal_employees",
+      })
+    ).toThrow(/Vorsteuer ohne Rechnung/);
+  });
+
+  it("a split without vat does not crash and does not trigger the _pre block", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50" }], {
+        original_invoice_status: "lost",
+        entertainment_type: "internal_employees",
+      })
+    ).not.toThrow();
+  });
+});
