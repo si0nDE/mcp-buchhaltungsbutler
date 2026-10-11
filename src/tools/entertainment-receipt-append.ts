@@ -135,8 +135,8 @@ export async function appendCoverToOriginal(
   }
 
   const pagesBefore = base.getPageCount();
-  const [coverPage] = await base.copyPages(cover, [0]);
-  base.addPage(coverPage);
+  const coverPages = await base.copyPages(cover, cover.getPageIndices());
+  for (const coverPage of coverPages) base.addPage(coverPage);
   const pdfBytes = await base.save();
   return { pdfBytes, pagesBefore, pagesAfter: base.getPageCount() };
 }
@@ -179,12 +179,16 @@ export async function runDryChecks(
     embeddedOk = countEmbeddedFiles(mergedDoc) >= countEmbeddedFiles(originalDoc);
   }
 
-  const last = mergedTexts?.[mergedTexts.length - 1] ?? "";
+  // The cover may span several pages (e.g. the "Rechnung fehlt" variant has a second page with notes).
+  const coverPageCount = merged.pagesAfter - merged.pagesBefore;
+  const coverText = (mergedTexts ?? []).slice(-Math.max(coverPageCount, 1)).join(" ");
   return {
     page_count_ok:
-      merged.pagesAfter === originalPages + 1 && mergedDoc.getPageCount() === originalPages + 1,
+      coverPageCount >= 1 &&
+      merged.pagesAfter === originalPages + coverPageCount &&
+      mergedDoc.getPageCount() === originalPages + coverPageCount,
     text_contains_original_ok: textOriginalOk,
-    text_contains_entertainment_ok: last.includes("Bewirtungsangaben"),
+    text_contains_entertainment_ok: coverText.includes("Bewirtungsangaben"),
     embedded_files_preserved: embeddedOk,
   };
 }

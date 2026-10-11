@@ -220,3 +220,27 @@ describe("hash footer", () => {
     expect(texts[1]).toContain(hash);
   });
 });
+
+describe("multi-page cover", () => {
+  async function makeTwoPageCover(): Promise<Uint8Array> {
+    const doc = await PDFDocument.load(await makeCover());
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    doc.addPage([300, 300]).drawText("Vermerke zur fehlenden Originalrechnung", { x: 20, y: 150, size: 10, font });
+    return doc.save();
+  }
+
+  it("appends ALL cover pages and the dry checks accept them", async () => {
+    const original = await makePdf({ attach: true });
+    const merged = await appendCoverToOriginal(original, "pdf", await makeTwoPageCover());
+    expect(merged.pagesBefore).toBe(1);
+    expect(merged.pagesAfter).toBe(3);
+    const texts = await pageTexts(merged.pdfBytes);
+    expect(texts[2]).toContain("Vermerke zur fehlenden Originalrechnung");
+    expect(await runDryChecks(original, "pdf", merged)).toEqual({
+      page_count_ok: true,
+      text_contains_original_ok: true,
+      text_contains_entertainment_ok: true,
+      embedded_files_preserved: true,
+    });
+  });
+});

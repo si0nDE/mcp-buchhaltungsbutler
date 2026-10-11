@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument, PageSizes, StandardFonts } from "pdf-lib";
+import { extractReceiptText } from "./receipt-text-extraction.js";
 import {
   assertOccasionIsConcrete,
   buildAmountTable,
@@ -506,5 +507,67 @@ describe("mergeWithBillFile", () => {
     const merged = await mergeWithBillFile(cover, threePageBillBase64, "pdf");
     const doc = await PDFDocument.load(merged);
     expect(doc.getPageCount()).toBe(4);
+  });
+});
+
+describe("renderEntertainmentReceiptCover without an invoice", () => {
+  const fields = {
+    date: "29.07.2026",
+    location: "Beispiel-Gaststätte, Musterstadt",
+    occasion: "Nachbesprechung der Vertriebsplanung 2026 mit Abstimmung der nächsten Schritte",
+    participants: [{ name: "Max Mustermann", company: "Beispiel GmbH" }],
+    hostName: "Max Mustermann",
+    foodNet: 0,
+    foodVat: 0,
+    drinksNet: 0,
+    drinksVat: 0,
+    tip: 0,
+  };
+  const amounts = { grossTotal: 37.5, vatTotal: 0, deductibleBase: 37.5, deductible: 26.25, nonDeductible: 11.25 };
+  const missingInvoice = {
+    gross: 37.5,
+    tip: 0,
+    deductibleLabel: "Abziehbar (Faktor 0,70 v. Zahlbetrag)",
+    nonDeductibleLabel: "Nicht abziehbar (Faktor 0,30)",
+    subtitle: "Angaben nach § 4 Abs. 5 Satz 1 Nr. 2 EStG – Originalrechnung fehlt",
+    noteLines: ["Originalrechnung nicht vorhanden (beim Gastwirt angefordert, nicht erhalten)", "Anforderung am 2026-07-31 (E-Mail)."],
+  };
+
+  it("renders two pages: amounts without a VAT table, then the notes", async () => {
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false, missingInvoice });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBe(2);
+    const text = (await extractReceiptText(Buffer.from(bytes).toString("base64"))) ?? "";
+    expect(text).toContain("Zahlbetrag");
+    expect(text).toContain("nicht bekannt");
+    expect(text).toContain("37,50");
+    expect(text).toContain("26,25");
+    expect(text).toContain("11,25");
+    expect(text).toContain("Originalrechnung fehlt");
+    expect(text).toContain("Vermerke zur fehlenden Originalrechnung");
+    expect(text).toContain("Anforderung am 2026-07-31");
+    // The VAT table header "Position" is only drawn on the normal page.
+    expect(text).not.toContain("Position");
+  });
+
+  it("leaves the normal page untouched", async () => {
+    const normal = await renderEntertainmentReceiptCover(
+      { ...fields, foodNet: 20, foodVat: 1.4 },
+      { grossTotal: 21.4, vatTotal: 1.4, deductibleBase: 20, deductible: 14, nonDeductible: 6 },
+      { kleinunternehmer: false }
+    );
+    expect((await PDFDocument.load(normal)).getPageCount()).toBe(1);
+  });
+});
+
+describe("computeAmounts with the Folie-46 example of the seminar (Dennerlein, 16.09.2026)", () => {
+  // Speisen 150 netto + 7 %, Getränke 50 netto + 19 %, Trinkgeld 20 bar. The slide prints 59 € VSt 19 % and Q37
+  // "corrects" it to 5.90 €; the right figure is 19 % of 50 = 9.50 €.
+  it("splits 140 / 60 (+ tip 14 / 6) and sums the Vorsteuer to 10.50 + 9.50", () => {
+    const amounts = computeAmounts({ foodNet: 150, foodVat: 10.5, drinksNet: 50, drinksVat: 9.5, tip: 20, kleinunternehmer: false });
+    expect(amounts.vatTotal).toBe(20);
+    expect(amounts.deductible).toBe(154); // 140 + 14
+    expect(amounts.nonDeductible).toBe(66); // 60 + 6
+    expect(amounts.grossTotal).toBe(240);
   });
 });

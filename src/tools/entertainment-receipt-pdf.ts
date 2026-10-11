@@ -389,6 +389,7 @@ export async function renderEntertainmentReceiptCover(
     // SHA-256 (hex) of the unchanged original bytes, printed in the footer.
     originalSha256?: string;
     confirmedAt?: Date;
+    missingInvoice?: MissingInvoicePageData;
   }
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -427,7 +428,13 @@ export async function renderEntertainmentReceiptCover(
   y -= 46;
   page.drawText("Bewirtungsangaben", { x: MARGIN, y, size: 24, font: bold, color: BLACK });
   y -= 18;
-  page.drawText("Angaben nach § 4 Abs. 5 Satz 1 Nr. 2 EStG", { x: MARGIN, y, size: 9.5, font, color: GRAY });
+  page.drawText(options.missingInvoice?.subtitle ?? "Angaben nach § 4 Abs. 5 Satz 1 Nr. 2 EStG", {
+    x: MARGIN,
+    y,
+    size: 9.5,
+    font,
+    color: GRAY,
+  });
   y -= 14;
   page.drawLine({ start: { x: MARGIN, y }, end: { x: width - MARGIN, y }, thickness: 2, color: BLACK });
   y -= 6;
@@ -457,41 +464,59 @@ export async function renderEntertainmentReceiptCover(
   }
 
   // Section 5: Aufwendungen as a right-aligned table.
-  const table = buildAmountTable(fields, amounts, options.kleinunternehmer);
   const grossX = width - MARGIN;
-  const vatX = grossX - 80;
-  const netX = vatX - 75;
-  y -= ROW_PAD + 8;
-  drawSectionHead("5", "Aufwendungen");
-  page.drawText("Position", { x: valueX, y, size: 8.5, font, color: GRAY });
-  if (table.hasVatColumns) {
-    drawRight("Netto", netX, y, 8.5, font, GRAY);
-    drawRight("USt", vatX, y, 8.5, font, GRAY);
-  }
-  drawRight("Brutto", grossX, y, 8.5, font, GRAY);
-  y -= 8;
-  page.drawLine({ start: { x: valueX, y }, end: { x: grossX, y }, thickness: 0.6, color: LIGHT_RULE });
-  const drawTableRow = (row: AmountTableRow, f: PDFFont) => {
-    page.drawText(row.label, { x: valueX, y, size: 10.5, font: f, color: BLACK });
-    if (row.net !== undefined) drawRight(row.net, netX, y, 10.5, f);
-    if (row.vat !== undefined) drawRight(row.vat, vatX, y, 10.5, f);
-    drawRight(row.gross, grossX, y, 10.5, f);
-  };
-  for (const row of table.rows) {
+  if (options.missingInvoice) {
+    const mi = options.missingInvoice;
+    y -= ROW_PAD + 8;
+    drawSectionHead("5", "Aufwendungen");
+    const rows: Array<[string, string]> = [["Zahlbetrag (brutto)", formatEuro(mi.gross)]];
+    if (mi.tip > 0) rows.push(["davon Trinkgeld", formatEuro(mi.tip)]);
+    rows.push(["Speisen/Getränke/USt", "nicht bekannt"]);
+    rows.push(["Vorsteuerabzug", "keiner"]);
+    rows.push(["Vermerke zur Rechnung", "siehe Seite 2"]);
+    rows.forEach(([label, value], i) => {
+      if (i > 0) y -= 15;
+      page.drawText(label, { x: valueX, y, size: 10.5, font: i === 0 ? bold : font, color: BLACK });
+      drawRight(value, grossX, y, 10.5, i === 0 ? bold : font);
+    });
+    y -= ROW_PAD;
+    rule(y);
+  } else {
+    const table = buildAmountTable(fields, amounts, options.kleinunternehmer);
+    const vatX = grossX - 80;
+    const netX = vatX - 75;
+    y -= ROW_PAD + 8;
+    drawSectionHead("5", "Aufwendungen");
+    page.drawText("Position", { x: valueX, y, size: 8.5, font, color: GRAY });
+    if (table.hasVatColumns) {
+      drawRight("Netto", netX, y, 8.5, font, GRAY);
+      drawRight("USt", vatX, y, 8.5, font, GRAY);
+    }
+    drawRight("Brutto", grossX, y, 8.5, font, GRAY);
+    y -= 8;
+    page.drawLine({ start: { x: valueX, y }, end: { x: grossX, y }, thickness: 0.6, color: LIGHT_RULE });
+    const drawTableRow = (row: AmountTableRow, f: PDFFont) => {
+      page.drawText(row.label, { x: valueX, y, size: 10.5, font: f, color: BLACK });
+      if (row.net !== undefined) drawRight(row.net, netX, y, 10.5, f);
+      if (row.vat !== undefined) drawRight(row.vat, vatX, y, 10.5, f);
+      drawRight(row.gross, grossX, y, 10.5, f);
+    };
+    for (const row of table.rows) {
+      y -= 15;
+      drawTableRow(row, font);
+    }
+    y -= 7;
+    page.drawLine({ start: { x: valueX, y }, end: { x: grossX, y }, thickness: 0.8, color: BLACK });
     y -= 15;
-    drawTableRow(row, font);
+    drawTableRow(table.total, bold);
+    if (table.vatNote) {
+      y -= 15;
+      page.drawText(table.vatNote.label, { x: valueX, y, size: 9.5, font, color: GRAY });
+      drawRight(table.vatNote.amount, grossX, y, 9.5, font, GRAY);
+    }
+    y -= ROW_PAD;
+    rule(y);
   }
-  y -= 7;
-  page.drawLine({ start: { x: valueX, y }, end: { x: grossX, y }, thickness: 0.8, color: BLACK });
-  y -= 15;
-  drawTableRow(table.total, bold);
-  if (table.vatNote) {
-    y -= 15;
-    page.drawText(table.vatNote.label, { x: valueX, y, size: 9.5, font, color: GRAY });
-    drawRight(table.vatNote.amount, grossX, y, 9.5, font, GRAY);
-  }
-  y -= ROW_PAD;
-  rule(y);
 
   // Aufteilung strip - the result of the 70/30 split, made the most
   // prominent element on the page.
@@ -501,9 +526,9 @@ export async function renderEntertainmentReceiptCover(
   page.drawRectangle({ x: MARGIN, y: y - stripHeight, width: 3, height: stripHeight, color: BLACK });
   page.drawText("Steuerliche Aufteilung", { x: MARGIN + 16, y: y - 15, size: 8.5, font, color: GRAY });
   const secondColX = MARGIN + contentWidth / 2 + 10;
-  page.drawText(buildDeductibleLabel(options.kleinunternehmer), { x: MARGIN + 16, y: y - 32, size: 9.5, font, color: BLACK });
+  page.drawText(options.missingInvoice?.deductibleLabel ?? buildDeductibleLabel(options.kleinunternehmer), { x: MARGIN + 16, y: y - 32, size: 9.5, font, color: BLACK });
   page.drawText(formatEuro(amounts.deductible), { x: MARGIN + 16, y: y - 50, size: 14, font: bold, color: BLACK });
-  page.drawText(buildNonDeductibleLabel(), { x: secondColX, y: y - 32, size: 9.5, font, color: BLACK });
+  page.drawText(options.missingInvoice?.nonDeductibleLabel ?? buildNonDeductibleLabel(), { x: secondColX, y: y - 32, size: 9.5, font, color: BLACK });
   page.drawText(formatEuro(amounts.nonDeductible), { x: secondColX, y: y - 50, size: 14, font: bold, color: BLACK });
   y -= stripHeight + 22;
 
@@ -548,6 +573,21 @@ export async function renderEntertainmentReceiptCover(
       font,
       color: GRAY,
     });
+  }
+
+  if (options.missingInvoice) {
+    const notes = doc.addPage(PageSizes.A4);
+    let ny = height - MARGIN;
+    notes.drawText("Vermerke zur fehlenden Originalrechnung", { x: MARGIN, y: ny, size: 14, font: bold, color: BLACK });
+    ny -= 28;
+    for (const paragraph of options.missingInvoice.noteLines) {
+      for (const line of wrapText(paragraph, font, 9.5, contentWidth)) {
+        if (ny < MARGIN) break;
+        notes.drawText(line, { x: MARGIN, y: ny, size: 9.5, font, color: BLACK });
+        ny -= 13;
+      }
+      ny -= 7;
+    }
   }
 
   return doc.save();
