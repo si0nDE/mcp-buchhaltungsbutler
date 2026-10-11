@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   assertEntertainmentExpenseFields,
+  computeEntertainmentReclass,
+  guardEntertainmentBooking,
   formatEntertainmentExpenseNote,
   matchEntertainmentAccount,
 } from "./entertainment-expense.js";
@@ -176,5 +178,203 @@ describe("formatEntertainmentExpenseNote", () => {
     const note = formatEntertainmentExpenseNote({ participants: "Person A, Person B", occasion: "Kundengespräch" });
     expect(note).toContain("Person A, Person B");
     expect(note).toContain("Kundengespräch");
+  });
+});
+
+const guardBase = { participants: "Max Mustermann, Erika Beispiel", occasion: "Besprechung zur Angebotsplanung 2026" };
+const noInvoicePractice = {
+  ...guardBase,
+  original_invoice_status: "missing_requested" as const,
+  entertainment_type: "business" as const,
+  missing_invoice_treatment: "practice_70_30_no_vat" as const,
+  bewirtungsangaben_signed: true,
+};
+
+describe("guardEntertainmentBooking", () => {
+  it("returns nothing for an ordinary account and no entertainment fields", () => {
+    expect(guardEntertainmentBooking([{ postingaccount: 6815, amount: "10.00", vat: "19_pre" }], {})).toEqual({
+      entertainment: undefined,
+      warnings: [],
+    });
+  });
+
+  it("blocks a _pre code without invoice on ANY account, also 4140", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "19_pre" }], {
+        original_invoice_status: "lost",
+        entertainment_type: "internal_employees",
+      })
+    ).toThrow(/Vorsteuer ohne Rechnung/);
+    expect(() =>
+      guardEntertainmentBooking(
+        [
+          { postingaccount: 4650, amount: "26.25", vat: "7_pre" },
+          { postingaccount: 4654, amount: "11.25", vat: "0_none" },
+        ],
+        noInvoicePractice
+      )
+    ).toThrow(/Vorsteuer ohne Rechnung/);
+  });
+
+  it("practice: 70/30 with 0_none passes and warns with BFH X R 57/09 and Q42", () => {
+    const result = guardEntertainmentBooking(
+      [
+        { postingaccount: 4650, amount: "26.25", vat: "0_none" },
+        { postingaccount: 4654, amount: "11.25", vat: "0_none" },
+      ],
+      noInvoicePractice
+    );
+    expect(result.entertainment).toBe(true);
+    expect(result.warnings.join(" ")).toContain("X R 57/09");
+    expect(result.variant).toContain("practice_70_30_no_vat");
+  });
+
+  it("practice requires bewirtungsangaben_signed", () => {
+    expect(() =>
+      guardEntertainmentBooking(
+        [
+          { postingaccount: 4650, amount: "26.25", vat: "0_none" },
+          { postingaccount: 4654, amount: "11.25", vat: "0_none" },
+        ],
+        { ...noInvoicePractice, bewirtungsangaben_signed: false }
+      )
+    ).toThrow(/bewirtungsangaben_signed/);
+  });
+
+  it("practice still enforces the 70/30 ratio", () => {
+    expect(() =>
+      guardEntertainmentBooking(
+        [
+          { postingaccount: 4650, amount: "37.50", vat: "0_none" },
+          { postingaccount: 4654, amount: "0.00", vat: "0_none" },
+        ],
+        noInvoicePractice
+      )
+    ).toThrow();
+  });
+
+  it("conservative: only 4654 passes, an unsigned page only warns", () => {
+    const fields = {
+      ...guardBase,
+      original_invoice_status: "lost" as const,
+      entertainment_type: "business" as const,
+      missing_invoice_treatment: "conservative_100_nondeductible" as const,
+      bewirtungsangaben_signed: false,
+    };
+    const result = guardEntertainmentBooking([{ postingaccount: 4654, amount: "37.50", vat: "0_none" }], fields);
+    expect(result.entertainment).toBe(true);
+    expect(result.warnings.join(" ")).toContain("bewirtungsangaben_signed");
+  });
+
+  it("conservative rejects a deductible 4650 split", () => {
+    expect(() =>
+      guardEntertainmentBooking(
+        [
+          { postingaccount: 4650, amount: "26.25", vat: "0_none" },
+          { postingaccount: 4654, amount: "11.25", vat: "0_none" },
+        ],
+        {
+          ...guardBase,
+          original_invoice_status: "lost",
+          entertainment_type: "business",
+          missing_invoice_treatment: "conservative_100_nondeductible",
+          bewirtungsangaben_signed: true,
+        }
+      )
+    ).toThrow(/4654/);
+  });
+
+  it("rejects net_reclass without an invoice (no net amount exists)", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "0_none" }], {
+        ...noInvoicePractice,
+        entertainment_split_mode: "net_reclass",
+      })
+    ).toThrow(/net_reclass/);
+  });
+
+  it("keeps the legacy alias path unchanged: host_confirmed true with a 70/30 split and an input VAT code", () => {
+    const result = guardEntertainmentBooking(
+      [
+        { postingaccount: 4650, amount: "30.80", vat: "19_pre" },
+        { postingaccount: 4654, amount: "13.20", vat: "0_none" },
+      ],
+      { participants: "Person A", occasion: "Kundengespräch zur Planung", host_confirmed: true }
+    );
+    expect(result.entertainment).toBe(true);
+    expect(result.warnings.some((w) => w.includes("deprecated"))).toBe(true);
+  });
+
+  it("rejects the alias together with original_invoice_status", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4650, amount: "30.80", vat: "0_none" }], {
+        ...guardBase,
+        host_confirmed: true,
+        original_invoice_status: "present",
+      })
+    ).toThrow(/host_confirmed/);
+  });
+
+  it("a non-business type on 4650/4654 only warns and does not enforce the 70/30 split", () => {
+    const result = guardEntertainmentBooking([{ postingaccount: 4650, amount: "37.50", vat: "19_pre" }], {
+      ...guardBase,
+      bewirtungsangaben_signed: true,
+      entertainment_type: "internal_employees",
+    });
+    expect(result.entertainment).toBe(true);
+    expect(result.warnings.join(" ")).toContain("4140");
+  });
+
+  it("advises on 4140 for an internal type without an invoice and does not mark it as entertainment", () => {
+    const result = guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "0_none" }], {
+      original_invoice_status: "lost",
+      entertainment_type: "internal_employees",
+    });
+    expect(result.entertainment).toBeUndefined();
+    expect(result.warnings.join(" ")).toContain("R 4.10 Abs. 5 Satz 9");
+  });
+  it("sole_proprietor_self: one specific warning instead of the internal no-invoice text", () => {
+    const present = guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "0_none" }], {
+      original_invoice_status: "present",
+      entertainment_type: "sole_proprietor_self",
+    });
+    expect(present.warnings.join(" ")).toContain("Verpflegungsmehraufwendungen (14 € / 28 €)");
+    expect(present.warnings.join(" ")).not.toContain("R 4.10 Abs. 5 Satz 9");
+    const lost = guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "0_none" }], {
+      original_invoice_status: "lost",
+      entertainment_type: "sole_proprietor_self",
+    });
+    expect(lost.warnings.filter((w) => w.includes("sole_proprietor_self"))).toHaveLength(1);
+    expect(lost.warnings.join(" ")).not.toContain("R 4.10 Abs. 5 Satz 9");
+  });
+});
+
+describe("computeEntertainmentReclass with invoice_net_total", () => {
+  const splits = [
+    { postingaccount: 4650, amount: "14.15", vat: "7_pre" },
+    { postingaccount: 4650, amount: "8.80", vat: "19_pre" },
+  ];
+  it("uses the invoice net 20.60 -> reclass 6.18", () => {
+    const hint = computeEntertainmentReclass(splits, 20.6)!;
+    expect(hint.net_total).toBe("20.60");
+    expect(hint.amount).toBe("6.18");
+  });
+  it("derives 20.62 -> 6.19 without the override and points at invoice_net_total", () => {
+    const hint = computeEntertainmentReclass(splits)!;
+    expect(hint.net_total).toBe("20.62");
+    expect(hint.amount).toBe("6.19");
+    expect(hint.note).toContain("invoice_net_total");
+  });
+});
+
+describe("formatEntertainmentExpenseNote with variant", () => {
+  it("appends the variant and stays within 210 bytes", () => {
+    const note = formatEntertainmentExpenseNote({
+      participants: "Max Mustermann (Beispiel GmbH), Erika Beispiel (Muster AG), Hans Testmann (Test KG)",
+      occasion: "Gespräch mit Netzwerkpartnern zur Planung einer gemeinsamen Veranstaltung im Herbst 2026 inklusive Budgetabstimmung",
+      variant: "Rechnung lost; Variante: practice_70_30_no_vat (Q42) – Nutzerentscheid",
+    });
+    expect(Buffer.byteLength(note, "utf8")).toBeLessThanOrEqual(210);
+    expect(note).toContain("Variante: practice_70_30_no_vat");
   });
 });

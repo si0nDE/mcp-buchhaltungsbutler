@@ -1,3 +1,14 @@
+import {
+  accountAdvice,
+  DEDUCTIBLE_SHARE,
+  noInvoiceWarnings,
+  resolveEntertainmentContext,
+  type PolicyFields,
+  variantNote,
+} from "./entertainment-policy.js";
+
+export { DEDUCTIBLE_SHARE };
+
 // Bewirtungskosten (business entertainment expense) posting validation.
 //
 // Same root risk as travel-expense.ts: an LLM inferring correct bookkeeping
@@ -31,13 +42,13 @@ const ENTERTAINMENT_ACCOUNTS: Record<number, "deductible" | "non_deductible"> = 
 // Absolute tolerance, not a percentage: a percentage tolerance is too loose
 // on small receipts and too tight on large ones for the same rounding cause.
 const RATIO_TOLERANCE_EUR = 0.02;
-export const DEDUCTIBLE_SHARE = 0.7;
 
 export type EntertainmentKind = "deductible" | "non_deductible";
 
 export interface EntertainmentSplit {
   postingaccount: number;
   amount: string;
+  vat?: string;
 }
 
 // "gross_split" (default): both accounts in one call, ratio checked on the
@@ -50,7 +61,7 @@ export type EntertainmentSplitMode = "gross_split" | "net_reclass";
 export interface EntertainmentFields {
   participants?: string;
   occasion?: string;
-  host_confirmed?: boolean;
+  host_confirmed?: boolean; // deprecated alias
   entertainment_split_mode?: EntertainmentSplitMode;
 }
 
@@ -58,19 +69,61 @@ export function matchEntertainmentAccount(account: number): EntertainmentKind | 
   return ENTERTAINMENT_ACCOUNTS[account];
 }
 
-// Throws if any split is an entertainment-expense account and the required
-// documentation fields are missing/false, the deductible/non-deductible
-// split isn't paired, or the paired amounts aren't approximately 70/30.
-// Returns true if entertainment accounts were involved (for building the
-// audit-trail note), or undefined if none of the splits are.
-export function assertEntertainmentExpenseFields(
+
+const SOLE_PROPRIETOR_WARNING =
+  "entertainment_type sole_proprietor_self: für einen Einzelunternehmer, der allein isst, gibt es keinen Bewirtungsbeleg; " +
+  "nur die Verpflegungsmehraufwendungen (14 € / 28 €) sind abziehbar (Dennerlein Folie 27/28).";
+
+export type EntertainmentGuardFields = EntertainmentFields & PolicyFields;
+
+export interface EntertainmentGuardResult {
+  entertainment: true | undefined;
+  warnings: string[];
+  variant?: string;
+}
+
+// Input-VAT codes. Vorsteuer without an invoice is never allowed (§ 15 Abs. 1 Satz 1 Nr. 1 UStG), whatever the type or account.
+const PRE_VAT_CODE = /_pre(_app)?$/;
+
+const NEW_FIELD_KEYS = [
+  "bewirtungsangaben_signed",
+  "original_invoice_status",
+  "entertainment_type",
+  "missing_invoice_treatment",
+  "shareholder_manager_treatment",
+] as const;
+
+export function guardEntertainmentBooking(
   splits: EntertainmentSplit[],
-  fields: EntertainmentFields
-): true | undefined {
+  fields: EntertainmentGuardFields
+): EntertainmentGuardResult {
   const matched = splits
     .map((s) => ({ ...s, kind: matchEntertainmentAccount(s.postingaccount) }))
     .filter((s): s is EntertainmentSplit & { kind: EntertainmentKind } => s.kind !== undefined);
-  if (matched.length === 0) return undefined;
+  const usesNewFields = NEW_FIELD_KEYS.some((key) => fields[key] !== undefined);
+  if (matched.length === 0 && !usesNewFields) return { entertainment: undefined, warnings: [] };
+
+  const { context, warnings } = resolveEntertainmentContext(fields);
+  const variant = variantNote(context);
+
+  if (context.invoiceStatus !== "present") {
+    const pre = splits.find((s) => s.vat !== undefined && PRE_VAT_CODE.test(s.vat));
+    if (pre) {
+      throw new Error(
+        `Vorsteuer ohne Rechnung ist unzulässig (§ 15 Abs. 1 Satz 1 Nr. 1 UStG): original_invoice_status "${context.invoiceStatus}" ` +
+          `verträgt keinen Vorsteuer-Code (${pre.vat} auf Konto ${pre.postingaccount}). Nur vat 0_none buchen; die Vorsteuer erst, ` +
+          `wenn die Rechnung vorliegt (Ablauf in docs/bewirtungsbeleg-faq.md).`
+      );
+    }
+    if (context.type !== "sole_proprietor_self") warnings.push(...noInvoiceWarnings(context));
+  }
+  if (context.type === "sole_proprietor_self") warnings.push(SOLE_PROPRIETOR_WARNING);
+
+  if (matched.length === 0) {
+    const advice = context.type ? accountAdvice(context.type, context.shareholderTreatment) : undefined;
+    if (advice) warnings.push(advice);
+    return { entertainment: undefined, warnings, variant };
+  }
 
   if (!fields.participants) {
     throw new Error(
@@ -84,15 +137,38 @@ export function assertEntertainmentExpenseFields(
         `business occasion before booking.`
     );
   }
-  if (fields.host_confirmed !== true) {
-    throw new Error(
-      `Posting account is a Bewirtungskosten account. "host_confirmed" must be true, confirming a proper ` +
-        `signed Bewirtungsbeleg exists (§ 4 Abs. 5 Nr. 2 EStG) — if none exists, ask the user how to proceed ` +
-        `instead of booking the standard 70/30 split; don't assume it's fine.`
+
+  const conservative =
+    context.invoiceStatus !== "present" && context.missingTreatment === "conservative_100_nondeductible";
+  if (context.signed !== true) {
+    if (!conservative) {
+      throw new Error(
+        `Posting account is a Bewirtungskosten account. "bewirtungsangaben_signed" must be true (deprecated alias: ` +
+          `"host_confirmed"), confirming the host confirmed/signed the Bewirtungsangaben (§ 4 Abs. 5 Nr. 2 EStG, BMF ` +
+          `19.11.2025 Rn. 19) — if not, ask the user how to proceed instead of booking the standard 70/30 split; don't assume it's fine.`
+      );
+    }
+    warnings.push(
+      "bewirtungsangaben_signed ist nicht true: bei conservative_100_nondeductible wird nichts abgezogen, daher nur Warnung. " +
+        "Die Bestätigung des Gastgebers (BMF 19.11.2025 Rn. 19) trotzdem nachholen."
     );
   }
 
+  if (context.business === false) {
+    warnings.push(
+      `entertainment_type ${context.type} gehört nicht auf 4650/4654 (Bewirtung aus geschäftlichem Anlass); die 70/30-Aufteilung wird ` +
+        `hier nicht erzwungen. ${accountAdvice(context.type!, context.shareholderTreatment) ?? ""}`.trim()
+    );
+    return { entertainment: true, warnings, variant };
+  }
+
   if (fields.entertainment_split_mode === "net_reclass") {
+    if (context.invoiceStatus !== "present") {
+      throw new Error(
+        `entertainment_split_mode "net_reclass" ist ohne Rechnung nicht möglich: es gibt kein Netto, auf dem die 30 % ` +
+          `berechnet werden könnten. gross_split verwenden (booking_hint des Generators nutzen).`
+      );
+    }
     const nonDeductible = matched.filter((s) => s.kind === "non_deductible");
     if (nonDeductible.length > 0) {
       throw new Error(
@@ -102,13 +178,24 @@ export function assertEntertainmentExpenseFields(
           `"gross_split" to book both accounts in one call.`
       );
     }
-    return true;
+    return { entertainment: true, warnings, variant };
   }
 
   const deductibleTotal = matched.filter((s) => s.kind === "deductible").reduce((sum, s) => sum + Number(s.amount), 0);
-  const nonDeductibleTotal = matched
-    .filter((s) => s.kind === "non_deductible")
-    .reduce((sum, s) => sum + Number(s.amount), 0);
+  const nonDeductibleTotal = matched.filter((s) => s.kind === "non_deductible").reduce((sum, s) => sum + Number(s.amount), 0);
+
+  if (conservative) {
+    if (deductibleTotal > 0) {
+      throw new Error(
+        `conservative_100_nondeductible bucht 100 % auf 4654 / SKR04 6644 (nicht abziehbar); der abziehbare Split auf ` +
+          `4650 / SKR04 6640 muss entfallen.`
+      );
+    }
+    if (nonDeductibleTotal === 0) {
+      throw new Error(`conservative_100_nondeductible braucht einen Split auf 4654 / SKR04 6644 mit dem vollen Zahlbetrag.`);
+    }
+    return { entertainment: true, warnings, variant };
+  }
 
   if (deductibleTotal === 0) {
     throw new Error(
@@ -132,8 +219,15 @@ export function assertEntertainmentExpenseFields(
         `${expectedDeductible.toFixed(2)}/${(total - expectedDeductible).toFixed(2)} (±${RATIO_TOLERANCE_EUR} EUR).`
     );
   }
+  return { entertainment: true, warnings, variant };
+}
 
-  return true;
+// Kept for existing callers and tests: the legacy contract without warnings.
+export function assertEntertainmentExpenseFields(
+  splits: EntertainmentSplit[],
+  fields: EntertainmentGuardFields
+): true | undefined {
+  return guardEntertainmentBooking(splits, fields).entertainment;
 }
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -162,7 +256,8 @@ export interface EntertainmentReclassHint {
 // The 30 % non-deductible share of the NET amount (booked amounts are gross;
 // net is derived from each split's VAT code). Hint only - nothing is booked.
 export function computeEntertainmentReclass(
-  splits: Array<{ postingaccount: number; amount: string; vat: string }>
+  splits: Array<{ postingaccount: number; amount: string; vat: string }>,
+  invoiceNetTotal?: number
 ): EntertainmentReclassHint | undefined {
   const deductible = splits.filter((s) => matchEntertainmentAccount(s.postingaccount) === "deductible");
   if (deductible.length === 0) return undefined;
@@ -170,14 +265,19 @@ export function computeEntertainmentReclass(
   const accounts = skr04 ? { debit: 6644, credit: 6640 } : { debit: 4654, credit: 4650 };
 
   let net: number | null = 0;
-  for (const s of deductible) {
-    const factor = NET_FACTOR_BY_VAT_CODE[s.vat];
-    if (factor === undefined) {
-      net = null;
-      break;
+  if (invoiceNetTotal !== undefined && Number.isFinite(invoiceNetTotal)) {
+    net = invoiceNetTotal;
+  } else {
+    for (const s of deductible) {
+      const factor = NET_FACTOR_BY_VAT_CODE[s.vat];
+      if (factor === undefined) {
+        net = null;
+        break;
+      }
+      net += Number(s.amount) / factor;
     }
-    net += Number(s.amount) / factor;
   }
+  const derived = invoiceNetTotal === undefined || !Number.isFinite(invoiceNetTotal);
   const netTotal = net === null ? null : round2(net);
   const amount = netTotal === null ? null : round2(netTotal - round2(netTotal * DEDUCTIBLE_SHARE));
   return {
@@ -189,7 +289,11 @@ export function computeEntertainmentReclass(
     note:
       "Nicht automatisch gebucht. Umbuchung der nicht abziehbaren 30 % vom Netto per add_free_postings " +
       `(Soll ${accounts.debit} an Haben ${accounts.credit}, vat 0_none)` +
-      (amount === null ? "; Netto konnte aus den USt-Codes nicht ermittelt werden - Betrag manuell berechnen." : "."),
+      (amount === null ? "; Netto konnte aus den USt-Codes nicht ermittelt werden - Betrag manuell berechnen." : ".") +
+      (derived && amount !== null
+        ? " Das Netto ist aus Brutto und USt-Code abgeleitet; gegenüber den Netto-Werten der Rechnung sind bis zu 0,01 € Abweichung möglich - " +
+          "invoice_net_total (Rechnungs-Netto) angeben, dann stimmt der Betrag mit der Bewirtungsseite überein."
+        : ""),
   };
 }
 
@@ -216,15 +320,16 @@ export function truncateToBytes(text: string, maxBytes: number): string {
 // is short), keeping the concrete occasion as intact as possible. The full
 // wording lives on the Bewirtungsangaben page itself; this comment is the
 // audit-trail pointer.
-export function formatEntertainmentExpenseNote(fields: { participants: string; occasion: string }): string {
+export function formatEntertainmentExpenseNote(fields: { participants: string; occasion: string; variant?: string }): string {
   const prefix = "Bewirtung: Teilnehmer: ";
   const separator = ", Anlass: ";
-  const budget = COMMENT_MAX_BYTES - byteLength(prefix) - byteLength(separator);
+  const suffix = fields.variant ? ` | ${fields.variant}` : "";
+  const budget = COMMENT_MAX_BYTES - byteLength(prefix) - byteLength(separator) - byteLength(suffix);
   if (byteLength(fields.participants) + byteLength(fields.occasion) <= budget) {
-    return `${prefix}${fields.participants}${separator}${fields.occasion}`;
+    return `${prefix}${fields.participants}${separator}${fields.occasion}${suffix}`;
   }
   const participantsMax = Math.max(Math.floor(budget * 0.4), budget - byteLength(fields.occasion));
   const participants = truncateToBytes(fields.participants, participantsMax);
   const occasion = truncateToBytes(fields.occasion, budget - byteLength(participants));
-  return `${prefix}${participants}${separator}${occasion}`;
+  return `${prefix}${participants}${separator}${occasion}${suffix}`;
 }
