@@ -33,7 +33,7 @@ import {
   consistencyWarnings,
   typeFromParticipants,
 } from "./entertainment-policy.js";
-import { transactionDateWarnings } from "./bewirtung-plausibility.js";
+import { largeAmountNotice, transactionDateWarnings, vatRatePlausibility, zeitnahWarning } from "./bewirtung-plausibility.js";
 import { getChart } from "./posting-accounts.js";
 import { extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type CallToolResult, type ToolDef } from "./types.js";
@@ -195,6 +195,11 @@ function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): Pla
       },
       { requireCounterparty: opts.requireCounterparty }
     );
+    const planWarnings = [...plan.warnings];
+    const late = zeitnahWarning(args.date);
+    if (late) planWarnings.push(late);
+    const bigMissing = largeAmountNotice(plan.gross);
+    if (bigMissing) planWarnings.push(bigMissing);
     return {
       // No billReference on the page: there is no original invoice the page could supplement.
       fields: { ...baseFields, billReference: undefined, foodNet: 0, foodVat: 0, drinksNet: 0, drinksVat: 0, tip: plan.tip },
@@ -206,7 +211,7 @@ function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): Pla
         nonDeductible: plan.nonDeductible,
       },
       kleinunternehmer,
-      warnings: [...plan.warnings],
+      warnings: planWarnings,
       plan,
     };
   }
@@ -236,6 +241,18 @@ function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): Pla
       `${ignored.join(", ")} gilt nur ohne Originalrechnung (original_invoice_status missing_requested | lost) und wurde ignoriert.`
     );
   }
+  const vat = vatRatePlausibility({
+    date: args.date,
+    foodNet: args.food_net ?? 0,
+    foodVat: args.food_vat ?? 0,
+    drinksNet: args.drinks_net ?? 0,
+    drinksVat: args.drinks_vat ?? 0,
+  });
+  warnings.push(...vat.warnings, ...vat.hints);
+  const big = largeAmountNotice(amounts.grossTotal);
+  if (big) warnings.push(big);
+  const late = zeitnahWarning(args.date);
+  if (late) warnings.push(late);
   return {
     fields: {
       ...baseFields,

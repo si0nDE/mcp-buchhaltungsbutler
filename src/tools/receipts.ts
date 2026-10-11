@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
 import { assertDeliveryDate, DATE_DELIVERY_GUIDE } from "./bhb-systematik.js";
+import { extractDateCandidates } from "./bewirtung-plausibility.js";
 import { extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type CallToolResult, type ToolDef } from "./types.js";
 
@@ -257,7 +258,20 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         const text = await extractReceiptText(result.data.file_content);
         if (text !== undefined) {
           const { file_content, ...restData } = result.data;
-          return ok({ ...result, data: { ...restData, file_text: text } });
+          const dates = extractDateCandidates(text);
+          return ok({
+            ...result,
+            data: { ...restData, file_text: text },
+            date_candidates: dates,
+            ...(dates.length > 1
+              ? {
+                  warnings: [
+                    `Der Belegtext nennt mehrere verschiedene Daten (${dates.join(", ")}): Rechnungs-, Leistungs- oder Kassendatum anhand ` +
+                      "des gerenderten Belegbilds prüfen, bevor eine Unstimmigkeit gemeldet wird.",
+                  ],
+                }
+              : {}),
+          });
         }
       }
 

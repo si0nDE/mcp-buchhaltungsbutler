@@ -298,6 +298,37 @@ describe("receipts tools", () => {
     });
   });
 
+  it("get_receipt with extract_text adds date_candidates and warns when the text names several dates", async () => {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([300, 100]);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    page.drawText("Datum 08.10.2026", { x: 10, y: 70, size: 10, font });
+    page.drawText("Faellig 22.10.2026", { x: 10, y: 50, size: 10, font });
+    const fileContent = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const client = mockClient({ success: true, data: { id_by_customer: "42", file_type: "pdf", file_content: fileContent } });
+    const [, getReceipt] = createReceiptsTools(client);
+    const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
+
+    const out = result.structuredContent!.data as { date_candidates: string[]; warnings?: string[] };
+    expect(out.date_candidates).toEqual(["2026-10-08", "2026-10-22"]);
+    expect(out.warnings?.join(" ")).toContain("mehrere");
+  });
+
+  it("get_receipt with extract_text has no date warning for a single date", async () => {
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    pdfDoc.addPage([300, 100]).drawText("Datum 08.10.2026", { x: 10, y: 50, size: 10, font });
+    const fileContent = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const client = mockClient({ success: true, data: { id_by_customer: "42", file_type: "pdf", file_content: fileContent } });
+    const [, getReceipt] = createReceiptsTools(client);
+    const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
+
+    const out = result.structuredContent!.data as { date_candidates: string[]; warnings?: string[] };
+    expect(out.date_candidates).toEqual(["2026-10-08"]);
+    expect(out.warnings).toBeUndefined();
+  });
 });
 
 describe("list_receipts warnings", () => {
