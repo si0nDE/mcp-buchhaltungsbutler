@@ -3,9 +3,9 @@
 import {
   businessNoInvoiceWarnings,
   collectMissingPolicyFields,
-  consistencyWarnings,
   INTERNAL_NO_INVOICE_WARNING,
   isBusinessAnlass,
+  LATE_INVOICE_POINTER,
   resolveEntertainmentContext,
   splitGross,
   type EntertainmentType,
@@ -142,11 +142,8 @@ export function planMissingInvoice(args: MissingInvoiceArgs, opts: { requireCoun
   const split = isBusiness ? splitGross(gross, treatment as MissingInvoiceTreatment) : { deductible: gross, nonDeductible: 0 };
 
   const businessWarnings = isBusiness ? businessNoInvoiceWarnings(treatment as MissingInvoiceTreatment) : [];
-  const warnings = [
-    ...contextWarnings.filter((w) => !w.includes("entertainment_type fehlt")),
-    ...(isBusiness ? businessWarnings : [INTERNAL_NO_INVOICE_WARNING]),
-    ...consistencyWarnings(args.entertainment_type, args.participant_relations, args.shareholder_manager_treatment),
-  ];
+  // contextWarnings already contain the consistency warnings (entertainment_type is mandatory here).
+  const warnings = [...contextWarnings, ...(isBusiness ? businessWarnings : [INTERNAL_NO_INVOICE_WARNING])];
   if (practiceOver250) {
     warnings.push(
       `Zahlbetrag ${money(gross)} € liegt über ${SMALL_AMOUNT_LIMIT} €: keine Quelle deckt diesen Fall ab (Dennerlein Q42 nennt nur Beträge unter ${SMALL_AMOUNT_LIMIT} €); ` +
@@ -163,8 +160,11 @@ export function planMissingInvoice(args: MissingInvoiceArgs, opts: { requireCoun
   }
   if (evidence?.description?.trim()) noteLines.push(`Zahlungsnachweis: ${evidence.description.trim()}`);
   noteLines.push("Aufteilung Speisen/Getränke und Umsatzsteuer: nicht bekannt. Kein Vorsteuerabzug (§ 15 Abs. 1 Satz 1 Nr. 1 UStG).");
-  // businessWarnings[0] is the "Kein Vorsteuerabzug" sentence, already its own note line above.
-  noteLines.push(...(isBusiness ? businessWarnings.slice(1) : [INTERNAL_NO_INVOICE_WARNING]));
+  // businessWarnings[0] is the "Kein Vorsteuerabzug" sentence, already its own note line above. The pointer into
+  // the repo docs stays in the warnings only: a receipt page must not print repository paths.
+  noteLines.push(
+    ...(isBusiness ? businessWarnings.slice(1).filter((w) => w !== LATE_INVOICE_POINTER) : [INTERNAL_NO_INVOICE_WARNING])
+  );
   if (practiceOver250) noteLines.push(warnings[warnings.length - 1]);
 
   const labels = isBusiness

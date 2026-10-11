@@ -1,6 +1,7 @@
 import {
   accountAdvice,
   DEDUCTIBLE_SHARE,
+  HOST_CONFIRMED_DEPRECATED,
   noInvoiceWarnings,
   resolveEntertainmentContext,
   type PolicyFields,
@@ -63,6 +64,8 @@ export interface EntertainmentFields {
   occasion?: string;
   host_confirmed?: boolean; // deprecated alias
   entertainment_split_mode?: EntertainmentSplitMode;
+  // Only for practice_70_30_no_vat above 250 EUR: the user decided explicitly (never inferred).
+  acknowledge_practice_over_250?: boolean;
 }
 
 export function matchEntertainmentAccount(account: number): EntertainmentKind | undefined {
@@ -83,7 +86,14 @@ export interface EntertainmentGuardResult {
 }
 
 // Input-VAT codes. Vorsteuer without an invoice is never allowed (§ 15 Abs. 1 Satz 1 Nr. 1 UStG), whatever the type or account.
-const PRE_VAT_CODE = /_pre(_app)?$/;
+// An explicit list: codes WITHOUT Vorsteuer (19_both_1_no_pre, 19_both_2_no_pre, 7_both_no_pre) and reverse-charge
+// codes (19_both_*) need no restaurant invoice and stay allowed.
+const PRE_VAT_CODES: ReadonlySet<string> = new Set(["19_pre", "7_pre", "19_pre_app", "7_pre_app"]);
+
+// Dennerlein Q42 (the practice variant) names amounts under 250 EUR only.
+export const PRACTICE_AMOUNT_LIMIT = 250;
+
+const money = (value: number) => value.toFixed(2).replace(".", ",");
 
 const NEW_FIELD_KEYS = [
   "bewirtungsangaben_signed",
@@ -101,18 +111,27 @@ export function guardEntertainmentBooking(
     .map((s) => ({ ...s, kind: matchEntertainmentAccount(s.postingaccount) }))
     .filter((s): s is EntertainmentSplit & { kind: EntertainmentKind } => s.kind !== undefined);
   const usesNewFields = NEW_FIELD_KEYS.some((key) => fields[key] !== undefined);
-  if (matched.length === 0 && !usesNewFields) return { entertainment: undefined, warnings: [] };
+  if (matched.length === 0 && !usesNewFields) {
+    return { entertainment: undefined, warnings: fields.host_confirmed !== undefined ? [HOST_CONFIRMED_DEPRECATED] : [] };
+  }
 
   const { context, warnings } = resolveEntertainmentContext(fields);
   const variant = variantNote(context);
 
   if (context.invoiceStatus !== "present") {
-    const pre = splits.find((s) => s.vat !== undefined && PRE_VAT_CODE.test(s.vat));
+    const pre = splits.find((s) => s.vat !== undefined && PRE_VAT_CODES.has(s.vat));
     if (pre) {
       throw new Error(
         `Vorsteuer ohne Rechnung ist unzulässig (§ 15 Abs. 1 Satz 1 Nr. 1 UStG): original_invoice_status "${context.invoiceStatus}" ` +
           `verträgt keinen Vorsteuer-Code (${pre.vat} auf Konto ${pre.postingaccount}). Nur vat 0_none buchen; die Vorsteuer erst, ` +
           `wenn die Rechnung vorliegt (Ablauf in docs/bewirtungsbeleg-faq.md).`
+      );
+    }
+    // For every type: without an invoice there is no net amount the 30 % could be computed from.
+    if (fields.entertainment_split_mode === "net_reclass") {
+      throw new Error(
+        `entertainment_split_mode "net_reclass" ist ohne Rechnung nicht möglich: es gibt kein Netto, auf dem die 30 % ` +
+          `berechnet werden könnten. gross_split verwenden (booking_hint des Generators nutzen).`
       );
     }
     if (context.type !== "sole_proprietor_self") warnings.push(...noInvoiceWarnings(context));
@@ -122,6 +141,12 @@ export function guardEntertainmentBooking(
   if (matched.length === 0) {
     const advice = context.type ? accountAdvice(context.type, context.shareholderTreatment) : undefined;
     if (advice) warnings.push(advice);
+    if (context.business === true) {
+      warnings.push(
+        `entertainment_type ${context.type} (geschäftliche Bewirtung) gehört auf 4650/4654 (SKR04 6640/6644) im 70/30-Verhältnis; ` +
+          "diese Buchung erzwingt das nicht."
+      );
+    }
     return { entertainment: undefined, warnings, variant };
   }
 
@@ -172,13 +197,24 @@ export function guardEntertainmentBooking(
     );
   }
 
-  if (fields.entertainment_split_mode === "net_reclass") {
-    if (context.invoiceStatus !== "present") {
-      throw new Error(
-        `entertainment_split_mode "net_reclass" ist ohne Rechnung nicht möglich: es gibt kein Netto, auf dem die 30 % ` +
-          `berechnet werden könnten. gross_split verwenden (booking_hint des Generators nutzen).`
+  if (context.invoiceStatus !== "present" && context.missingTreatment === "practice_70_30_no_vat") {
+    const paid = Math.round(matched.reduce((sum, s) => sum + Number(s.amount), 0) * 100) / 100;
+    if (paid > PRACTICE_AMOUNT_LIMIT) {
+      if (fields.acknowledge_practice_over_250 !== true) {
+        throw new Error(
+          `Zahlbetrag ${money(paid)} € liegt über ${PRACTICE_AMOUNT_LIMIT} €: Dennerlein Q42 betrifft nur Beträge unter ` +
+            `${PRACTICE_AMOUNT_LIMIT} €. practice_70_30_no_vat nur mit acknowledge_practice_over_250: true (beim Nutzer erfragen, ` +
+            "nicht ableiten), sonst conservative_100_nondeductible wählen."
+        );
+      }
+      warnings.push(
+        `Zahlbetrag ${money(paid)} € liegt über ${PRACTICE_AMOUNT_LIMIT} €: keine Quelle deckt diesen Fall ab (Dennerlein Q42 nennt nur ` +
+          `Beträge unter ${PRACTICE_AMOUNT_LIMIT} €); auf ausdrücklichen Nutzerentscheid gebucht.`
       );
     }
+  }
+
+  if (fields.entertainment_split_mode === "net_reclass") {
     const nonDeductible = matched.filter((s) => s.kind === "non_deductible");
     if (nonDeductible.length > 0) {
       throw new Error(

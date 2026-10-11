@@ -136,3 +136,17 @@ describe("planMissingInvoice", () => {
     expect(() => planMissingInvoice({ ...base, tip: -1 }, { requireCounterparty: true })).toThrow(/tip/);
   });
 });
+
+describe("planMissingInvoice final review", () => {
+  it("item 6: business with only employees yields the consistency warning exactly once", () => {
+    const plan = planMissingInvoice({ ...base, participant_relations: ["employee", "employee"] }, { requireCounterparty: true });
+    expect(plan.warnings.filter((w) => w.includes("kein Teilnehmer mit relation external"))).toHaveLength(1);
+  });
+
+  it("item 9: no repo path in the page notes, but the pointer stays in the warnings", () => {
+    const plan = planMissingInvoice({ ...base, missing_invoice_treatment: "conservative_100_nondeductible" }, { requireCounterparty: true });
+    expect(plan.page.noteLines.join("\n")).not.toContain("docs/");
+    expect(plan.page.noteLines.join("\n")).toContain("100 % nicht abziehbar");
+    expect(plan.warnings.join(" ")).toContain("docs/bewirtungsbeleg-faq.md");
+  });
+});

@@ -89,8 +89,9 @@ const entertainmentFieldsShape = {
     .enum(INVOICE_STATUSES)
     .optional()
     .describe(
-      "present (default) | missing_requested | lost. Anything but present forbids every input-VAT code (_pre) on every account " +
-        "and requires entertainment_type."
+      "present (default) | missing_requested | lost. Anything but present forbids every input-VAT code (19_pre, 7_pre, 19_pre_app, " +
+        "7_pre_app) on every account and requires entertainment_type; codes without input VAT (e.g. 19_both_1_no_pre) and " +
+        "reverse-charge codes stay allowed."
     ),
   entertainment_type: z
     .enum(ENTERTAINMENT_TYPES)
@@ -108,7 +109,18 @@ const entertainmentFieldsShape = {
   invoice_net_total: z
     .union([z.string(), z.number()])
     .optional()
-    .describe("Net total as printed on the restaurant invoice. With entertainment_split_mode net_reclass the reclass amount is taken from it."),
+    .describe(
+      'Net total as printed on the restaurant invoice ("20.60" or "20,60"). With entertainment_split_mode net_reclass the reclass ' +
+        "amount is taken from it."
+    ),
+  acknowledge_practice_over_250: z
+    .boolean()
+    .optional()
+    .describe(
+      "Only for missing_invoice_treatment practice_70_30_no_vat with a payment above 250 EUR (sum of the 4650/4654 splits): " +
+        "true books it anyway with a warning. Ask the user, never infer it - Dennerlein Q42 names amounts under 250 EUR only; " +
+        "otherwise choose conservative_100_nondeductible."
+    ),
   entertainment_split_mode: z
     .enum(["gross_split", "net_reclass"])
     .optional()
@@ -134,6 +146,7 @@ const AUDIT_ONLY_KEYS = [
   "shareholder_manager_treatment",
   "participant_relations",
   "invoice_net_total",
+  "acknowledge_practice_over_250",
   "entertainment_split_mode",
 ] as const;
 
@@ -273,12 +286,31 @@ interface AuditItem {
   variant?: string;
 }
 
+// Accepts 20.60, "20.60", "20,60" and " 20,60 ". Anything else is an error before anything is sent:
+// a silent fallback to the net derived from the VAT codes could be a cent off the page.
+function parseInvoiceNetTotal(value: string | number): number {
+  if (typeof value === "number") return value;
+  const text = value.replace(/\s+/g, "");
+  // A single comma is the decimal separator; Number("") would be 0, so an empty value is invalid.
+  return text === "" ? Number.NaN : Number(text.replace(/^([^,]*),([^,]*)$/, "$1.$2"));
+}
+
+function invoiceNetTotalOf(entry: AuditItem["entry"]): number | undefined {
+  if (entry.invoice_net_total === undefined) return undefined;
+  const net = parseInvoiceNetTotal(entry.invoice_net_total);
+  if (!Number.isFinite(net)) {
+    throw new Error("invoice_net_total ist keine Zahl (erwartet z. B. 20.60 oder 20,60).");
+  }
+  return net;
+}
+
 // Built BEFORE booking so everything that can fail on our side fails before
 // anything is sent to BuchhaltungsButler.
 function collectAuditArtifacts(items: AuditItem[]): { commentJobs: CommentJob[]; hints: Array<Record<string, unknown>> } {
   const commentJobs: CommentJob[] = [];
   const hints: Array<Record<string, unknown>> = [];
   for (const { target, entry, travelMatch, entertainmentMatch, variant } of items) {
+    const net = invoiceNetTotalOf(entry);
     if (travelMatch) {
       commentJobs.push({
         target,
@@ -290,12 +322,15 @@ function collectAuditArtifacts(items: AuditItem[]): { commentJobs: CommentJob[];
       });
     }
     if (entertainmentMatch) {
-      commentJobs.push({
-        target,
-        text: formatEntertainmentExpenseNote({ participants: entry.participants!, occasion: entry.occasion!, variant }),
-      });
+      // Non-business types (and sole_proprietor_self) may book without participants/occasion; the guard already
+      // warns about it, and there is nothing to record then.
+      if (entry.participants && entry.occasion) {
+        commentJobs.push({
+          target,
+          text: formatEntertainmentExpenseNote({ participants: entry.participants, occasion: entry.occasion, variant }),
+        });
+      }
       if (entry.entertainment_split_mode === "net_reclass") {
-        const net = entry.invoice_net_total === undefined ? undefined : Number(entry.invoice_net_total);
         const hint = computeEntertainmentReclass(entry.splits, net);
         if (hint) hints.push({ ...target, ...hint });
       }

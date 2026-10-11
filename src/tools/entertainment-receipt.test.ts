@@ -481,3 +481,44 @@ describe("Modus Rechnung fehlt (ohne Quell-Beleg)", () => {
     expect(vi.mocked(c.call)).not.toHaveBeenCalled();
   });
 });
+
+describe("item 4: present mode with a non-business entertainment_type", () => {
+  type Data = { warnings?: string[]; booking_hint?: Record<string, unknown> };
+
+  it("internal_employees: warns with 4140 and gives no 70/30 reclass hint", async () => {
+    const result = await generateReceipt.handler({ ...baseArgs, entertainment_type: "internal_employees" } as never);
+    const data = result.structuredContent!.data as Data;
+    expect(data.warnings?.join(" ")).toContain("4140");
+    expect(data.booking_hint).toBeDefined();
+    expect(data.booking_hint).not.toHaveProperty("reclass_amount");
+    expect(data.booking_hint).not.toHaveProperty("invoice_net_total");
+    expect(String(data.booking_hint?.note)).toContain("kein 70/30");
+  });
+
+  it("business: keeps the reclass hint", async () => {
+    const result = await generateReceipt.handler({ ...baseArgs, entertainment_type: "business" } as never);
+    const data = result.structuredContent!.data as Data;
+    expect(data.booking_hint).toMatchObject({ invoice_net_total: "75.00", reclass_amount: "22.50" });
+  });
+
+  it("internal_shareholder_managers without shareholder_manager_treatment: asks for it, no error", async () => {
+    const result = await generateReceipt.handler({ ...baseArgs, entertainment_type: "internal_shareholder_managers" } as never);
+    const data = result.structuredContent!.data as Data;
+    expect(data.warnings?.join(" ")).toContain("shareholder_manager_treatment");
+  });
+
+  it("the upload tool gives the same non-business hint", async () => {
+    const c = mockClient({ success: true, id_by_customer: 777 });
+    const [, upload] = createEntertainmentReceiptTools(c);
+    const result = await upload.handler({
+      ...baseArgs,
+      date: "2026-09-24",
+      entertainment_type: "internal_employees",
+      counterparty: "Beispiel-Gaststätte",
+      link_to_receipt_id_by_customer: 530,
+    } as never);
+    const data = result.structuredContent!.data as Data;
+    expect(data.warnings?.join(" ")).toContain("4140");
+    expect(data.booking_hint).not.toHaveProperty("reclass_amount");
+  });
+});

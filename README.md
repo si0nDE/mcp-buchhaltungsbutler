@@ -64,7 +64,7 @@ Without a restaurant invoice, set `original_invoice_status` (`missing_requested`
 `payment_evidence`, `entertainment_type` and, for business entertainment, `missing_invoice_treatment` (always ask the user, no default).
 The generated page then is the receipt itself (no input VAT, one upload), and the response carries a `booking_hint`.
 `host_confirmed` on the posting tools is **deprecated** (use `bewirtungsangaben_signed` and `original_invoice_status`);
-combining it with `bewirtungsangaben_signed` or `original_invoice_status` is rejected. Input-VAT codes are refused on every account when the invoice is missing.
+combining it with `bewirtungsangaben_signed` or `original_invoice_status` is rejected. Input-VAT codes are refused on every account when the invoice is missing (codes without input VAT such as 19_both_1_no_pre and reverse-charge cases are not affected).
 Sources and open points: [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md).
 
 | Parameter | Meaning |

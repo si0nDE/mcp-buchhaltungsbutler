@@ -438,3 +438,29 @@ describe("guardEntertainmentBooking fix round 1", () => {
     ).not.toThrow();
   });
 });
+
+describe("guardEntertainmentBooking final review", () => {
+  it("item 7: a code without input VAT (19_both_1_no_pre) is not blocked without an invoice", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "19_both_1_no_pre" }], {
+        original_invoice_status: "lost",
+        entertainment_type: "internal_employees",
+      })
+    ).not.toThrow();
+  });
+
+  it("item 7: 7_pre_app is blocked without an invoice", () => {
+    expect(() =>
+      guardEntertainmentBooking([{ postingaccount: 4140, amount: "37.50", vat: "7_pre_app" }], {
+        original_invoice_status: "lost",
+        entertainment_type: "internal_employees",
+      })
+    ).toThrow(/Vorsteuer ohne Rechnung/);
+  });
+
+  it("item 11: host_confirmed on an ordinary account still returns the deprecation warning", () => {
+    const result = guardEntertainmentBooking([{ postingaccount: 6815, amount: "10.00", vat: "19_pre" }], { host_confirmed: true });
+    expect(result.entertainment).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes("host_confirmed ist deprecated"))).toBe(true);
+  });
+});

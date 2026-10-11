@@ -627,3 +627,37 @@ describe("computeAmounts with the Folie-46 example of the seminar (Dennerlein, 1
     expect(amounts.grossTotal).toBe(240);
   });
 });
+
+describe("item 8: the normal page points at the notes without a page number", () => {
+  it('prints "siehe Folgeseite" instead of "siehe Seite 2"', async () => {
+    const bytes = await renderEntertainmentReceiptCover(
+      {
+        date: "29.07.2026",
+        location: "Beispiel-Gaststätte, Musterstadt",
+        occasion: "Nachbesprechung der Vertriebsplanung 2026 mit Abstimmung der nächsten Schritte",
+        participants: [{ name: "Max Mustermann", company: "Beispiel GmbH" }],
+        hostName: "Max Mustermann",
+        foodNet: 0,
+        foodVat: 0,
+        drinksNet: 0,
+        drinksVat: 0,
+        tip: 0,
+      },
+      { grossTotal: 37.5, vatTotal: 0, deductibleBase: 37.5, deductible: 26.25, nonDeductible: 11.25 },
+      {
+        kleinunternehmer: false,
+        missingInvoice: {
+          gross: 37.5,
+          tip: 0,
+          deductibleLabel: "Abziehbar (Faktor 0,70 v. Zahlbetrag)",
+          nonDeductibleLabel: "Nicht abziehbar (Faktor 0,30)",
+          subtitle: "Angaben nach § 4 Abs. 5 Satz 1 Nr. 2 EStG – Originalrechnung fehlt",
+          noteLines: ["Originalrechnung nicht mehr vorhanden (verloren oder unleserlich)"],
+        },
+      }
+    );
+    const text = (await extractReceiptText(Buffer.from(bytes).toString("base64"))) ?? "";
+    expect(text).toContain("siehe Folgeseite");
+    expect(text).not.toContain("siehe Seite 2");
+  });
+});

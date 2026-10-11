@@ -338,3 +338,185 @@ describe("new Bewirtung fields in the posting tools", () => {
     expect(text).toContain('"net_total":"20.60"');
   });
 });
+
+describe("final review: Nahtstellen in den Buchungs-Tools", () => {
+  const internalSplit = [{ postingaccount: 4650, postingtext: "Teamessen", vat: "19_pre", amount: "50.00" }];
+  const callKeys = (c: BBClient) => vi.mocked(c.call).mock.calls.map((x) => x[0]);
+  const dataOf = (result: { structuredContent?: { data?: unknown } }) =>
+    result.structuredContent!.data as { warnings?: string[]; entertainment_reclass_hints?: Array<Record<string, unknown>> };
+
+  describe("item 1: non-business types without participants/occasion", () => {
+    for (const type of ["internal_employees", "sole_proprietor_self"] as const) {
+      it(`add_transaction_postings ${type} on 4650 without participants/occasion: no throw, warning, no comment`, async () => {
+        const c = client();
+        const [, , addTx] = createPostingsTools(c);
+        const result = await addTx.handler({
+          transactions: [{ transaction_id_by_customer: 1001, entertainment_type: type, splits: internalSplit }],
+        } as never);
+        expect(callKeys(c)).toContain("postingsAddBatchTransactions");
+        expect(callKeys(c)).not.toContain("commentsAdd");
+        expect(dataOf(result).warnings?.length).toBeGreaterThan(0);
+      });
+
+      it(`add_receipt_postings ${type} on 4650 without participants/occasion: no throw, warning, no comment`, async () => {
+        const c = client();
+        const [, addReceipt] = createPostingsTools(c);
+        const result = await addReceipt.handler({
+          receipts: [{ receipt_id_by_customer: 521, creditor: 70001, debtor: 0, entertainment_type: type, splits: internalSplit }],
+        } as never);
+        expect(callKeys(c)).toContain("postingsAddBatchReceipts");
+        expect(callKeys(c)).not.toContain("commentsAdd");
+        expect(dataOf(result).warnings?.length).toBeGreaterThan(0);
+      });
+    }
+
+    it("sends the audit comment for internal_employees when participants and occasion are given", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      await addTx.handler({
+        transactions: [
+          {
+            transaction_id_by_customer: 1001,
+            entertainment_type: "internal_employees",
+            participants: "Team Beispiel",
+            occasion: "Teamessen zum Projektabschluss Musterprojekt",
+            splits: internalSplit,
+          },
+        ],
+      } as never);
+      expect(callKeys(c)).toContain("commentsAdd");
+    });
+  });
+
+  describe("item 2: 250 EUR limit for practice_70_30_no_vat", () => {
+    const practice = {
+      participants: "Max Mustermann, Erika Beispiel",
+      occasion: "Besprechung zur Angebotsplanung 2026",
+      original_invoice_status: "lost",
+      entertainment_type: "business",
+      missing_invoice_treatment: "practice_70_30_no_vat",
+      bewirtungsangaben_signed: true,
+    };
+    const split = (a: string, b: string) => [
+      { postingaccount: 4650, postingtext: "Bewirtung", vat: "0_none", amount: a },
+      { postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "0_none", amount: b },
+    ];
+
+    it("rejects 400.00 without acknowledge_practice_over_250, before anything is sent", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      await expect(
+        addTx.handler({ transactions: [{ transaction_id_by_customer: 1001, ...practice, splits: split("280.00", "120.00") }] } as never)
+      ).rejects.toThrow(/acknowledge_practice_over_250/);
+      expect(c.call).not.toHaveBeenCalled();
+    });
+
+    it("books 400.00 with acknowledge_practice_over_250 and warns, without sending the flag", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({
+        transactions: [
+          { transaction_id_by_customer: 1001, ...practice, acknowledge_practice_over_250: true, splits: split("280.00", "120.00") },
+        ],
+      } as never);
+      expect(dataOf(result).warnings?.join(" ")).toMatch(/400,00 € liegt über 250 €.*Nutzerentscheid/);
+      const sent = vi.mocked(c.call).mock.calls.find((x) => x[0] === "postingsAddBatchTransactions")![1] as {
+        transactions: Array<Record<string, unknown>>;
+      };
+      expect(sent.transactions[0]).not.toHaveProperty("acknowledge_practice_over_250");
+    });
+
+    it("books exactly 250.00 with practice without the flag", async () => {
+      const c = client();
+      const [, addReceipt] = createPostingsTools(c);
+      await addReceipt.handler({
+        receipts: [{ receipt_id_by_customer: 521, creditor: 70001, debtor: 0, ...practice, splits: split("175.00", "75.00") }],
+      } as never);
+      expect(callKeys(c)).toContain("postingsAddBatchReceipts");
+    });
+
+    it("has no limit for conservative_100_nondeductible", async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      await addTx.handler({
+        transactions: [
+          {
+            transaction_id_by_customer: 1001,
+            ...practice,
+            missing_invoice_treatment: "conservative_100_nondeductible",
+            splits: [{ postingaccount: 4654, postingtext: "Bewirtung nicht abz.", vat: "0_none", amount: "400.00" }],
+          },
+        ],
+      } as never);
+      expect(callKeys(c)).toContain("postingsAddBatchTransactions");
+    });
+  });
+
+  it("item 3: business type on 4140 warns that it belongs on 4650/4654", async () => {
+    const c = client();
+    const [, , addTx] = createPostingsTools(c);
+    const result = await addTx.handler({
+      transactions: [
+        {
+          transaction_id_by_customer: 1001,
+          entertainment_type: "business",
+          splits: [{ postingaccount: 4140, postingtext: "Essen", vat: "19_pre", amount: "50.00" }],
+        },
+      ],
+    } as never);
+    expect(dataOf(result).warnings?.join(" ")).toContain(
+      "entertainment_type business (geschäftliche Bewirtung) gehört auf 4650/4654 (SKR04 6640/6644) im 70/30-Verhältnis"
+    );
+  });
+
+  describe("item 5: invoice_net_total with decimal comma", () => {
+    const entry = {
+      transaction_id_by_customer: 1002,
+      participants: "Max Mustermann",
+      occasion: "Besprechung zur Angebotsplanung 2026",
+      bewirtungsangaben_signed: true,
+      entertainment_split_mode: "net_reclass",
+      splits: [
+        { postingaccount: 4650, postingtext: "Bewirtung 7 %", vat: "7_pre", amount: "14.15" },
+        { postingaccount: 4650, postingtext: "Bewirtung 19 %", vat: "19_pre", amount: "8.80" },
+      ],
+    };
+
+    it('accepts "20,60" (6.18 / 20.60)', async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      const result = await addTx.handler({ transactions: [{ ...entry, invoice_net_total: "20,60" }] } as never);
+      expect(dataOf(result).entertainment_reclass_hints?.[0]).toMatchObject({ amount: "6.18", net_total: "20.60" });
+    });
+
+    it('rejects "abc" before anything is sent', async () => {
+      const c = client();
+      const [, , addTx] = createPostingsTools(c);
+      await expect(addTx.handler({ transactions: [{ ...entry, invoice_net_total: "abc" }] } as never)).rejects.toThrow(
+        /invoice_net_total ist keine Zahl/
+      );
+      expect(c.call).not.toHaveBeenCalled();
+    });
+  });
+
+  it("item 10: net_reclass without invoice is rejected for internal_employees too", async () => {
+    const c = client();
+    const [, , addTx] = createPostingsTools(c);
+    await expect(
+      addTx.handler({
+        transactions: [
+          {
+            transaction_id_by_customer: 1001,
+            entertainment_type: "internal_employees",
+            original_invoice_status: "lost",
+            entertainment_split_mode: "net_reclass",
+            participants: "Team Beispiel",
+            occasion: "Teamessen zum Projektabschluss Musterprojekt",
+            splits: [{ postingaccount: 4650, postingtext: "Teamessen", vat: "0_none", amount: "50.00" }],
+          },
+        ],
+      } as never)
+    ).rejects.toThrow(/net_reclass/);
+    expect(c.call).not.toHaveBeenCalled();
+  });
+});

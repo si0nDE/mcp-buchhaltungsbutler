@@ -30,7 +30,10 @@ import {
   SHAREHOLDER_MANAGER_TREATMENT_HELP,
   SHAREHOLDER_MANAGER_TREATMENTS,
   type ShareholderManagerTreatment,
+  accountAdvice,
+  allShareholderManagers,
   consistencyWarnings,
+  isBusinessAnlass,
   typeFromParticipants,
 } from "./entertainment-policy.js";
 import { largeAmountNotice, transactionDateWarnings, vatRatePlausibility, zeitnahWarning } from "./bewirtung-plausibility.js";
@@ -151,6 +154,8 @@ interface PlannedCover {
   warnings: string[];
   // Only in the mode "Rechnung fehlt" (original_invoice_status missing_requested | lost).
   plan?: MissingInvoicePlan;
+  // Only with an invoice: a declared non-business entertainment_type (no 70/30, no reclass hint).
+  nonBusiness?: boolean;
 }
 
 function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): PlannedCover {
@@ -233,6 +238,27 @@ function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): Pla
     );
   }
   warnings.push(...consistencyWarnings(args.entertainment_type, knownRelations, args.shareholder_manager_treatment));
+  // The page layout stays 70/30; a non-business type only changes the warnings and the booking hint.
+  const type = args.entertainment_type;
+  const askShareholder =
+    type === "internal_shareholder_managers" &&
+    args.shareholder_manager_treatment === undefined &&
+    allShareholderManagers(knownRelations);
+  if (askShareholder) {
+    warnings.push(
+      `entertainment_type internal_shareholder_managers ohne shareholder_manager_treatment: ${SHAREHOLDER_MANAGER_TREATMENT_HELP} ` +
+        "Bis zur Entscheidung zeigt die Seite die 70/30-Aufteilung (business_70_30)."
+    );
+  }
+  const nonBusiness =
+    type !== undefined && !askShareholder && !isBusinessAnlass(type, args.shareholder_manager_treatment, knownRelations);
+  if (nonBusiness) {
+    const advice = accountAdvice(type, args.shareholder_manager_treatment);
+    warnings.push(
+      `entertainment_type ${type}: keine Bewirtung aus geschäftlichem Anlass, die 70/30-Aufteilung auf dieser Seite gilt hier nicht.` +
+        (advice ? ` ${advice}` : "")
+    );
+  }
   const ignored = (
     ["gross_amount", "payment_evidence", "invoice_requests", "missing_invoice_treatment", "acknowledge_practice_over_250"] as const
   ).filter((key) => args[key] !== undefined);
@@ -265,6 +291,7 @@ function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): Pla
     amounts,
     kleinunternehmer,
     warnings,
+    ...(nonBusiness ? { nonBusiness: true } : {}),
   };
 }
 
@@ -296,6 +323,7 @@ async function buildEntertainmentReceiptDocument(
   mergedWithBill: boolean;
   warnings: string[];
   plan?: MissingInvoicePlan;
+  nonBusiness?: boolean;
 }> {
   assertBillFileFieldsPaired(args.bill_file, args.bill_file_type);
   const planned = planCover(args, { requireCounterparty: opts.requireCounterparty ?? false });
@@ -312,6 +340,7 @@ async function buildEntertainmentReceiptDocument(
     mergedWithBill: Boolean(args.bill_file),
     warnings: planned.warnings,
     plan: planned.plan,
+    nonBusiness: planned.nonBusiness,
   };
 }
 
@@ -358,8 +387,14 @@ function buildBookingHint(plan: MissingInvoicePlan, chart: Chart): BookingHint {
   };
 }
 
+const NON_BUSINESS_PRESENT_HINT = {
+  note: "Nicht geschäftliche Bewirtung: 100 % abziehbar, kein 70/30 und keine Umbuchung 4654 an 4650 (siehe Warnung)",
+};
+
 // With an invoice: the exact net total and reclass amount of the page, to be passed on as invoice_net_total.
-function buildPresentHint(amounts: ComputedAmounts, kleinunternehmer: boolean) {
+// A non-business type gets no reclass at all.
+function buildPresentHint(amounts: ComputedAmounts, kleinunternehmer: boolean, nonBusiness = false) {
+  if (nonBusiness) return NON_BUSINESS_PRESENT_HINT;
   if (kleinunternehmer) return undefined; // Kleinunternehmer split on gross, there is no net reclass
   return {
     invoice_net_total: amounts.deductibleBase.toFixed(2),
@@ -372,14 +407,14 @@ function buildPresentHint(amounts: ComputedAmounts, kleinunternehmer: boolean) {
 
 async function bookingHintFor(
   client: BBClient,
-  planned: { plan?: MissingInvoicePlan; amounts: ComputedAmounts },
+  planned: { plan?: MissingInvoicePlan; amounts: ComputedAmounts; nonBusiness?: boolean },
   kleinunternehmer: boolean
 ): Promise<{ booking_hint?: unknown }> {
   if (planned.plan) {
     const chart: Chart = await getChart(client).catch(() => "unknown" as const);
     return { booking_hint: buildBookingHint(planned.plan, chart) };
   }
-  const hint = buildPresentHint(planned.amounts, kleinunternehmer);
+  const hint = buildPresentHint(planned.amounts, kleinunternehmer, planned.nonBusiness);
   return hint ? { booking_hint: hint } : {};
 }
 
@@ -890,9 +925,9 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
     async handler(args) {
-      const { pdfBytes, amounts, mergedWithBill, warnings, plan } = await buildEntertainmentReceiptDocument(args);
+      const { pdfBytes, amounts, mergedWithBill, warnings, plan, nonBusiness } = await buildEntertainmentReceiptDocument(args);
       // No API calls here, so the chart stays unknown (no account numbers in the hint).
-      const presentHint = plan ? undefined : buildPresentHint(amounts, args.kleinunternehmer ?? false);
+      const presentHint = plan ? undefined : buildPresentHint(amounts, args.kleinunternehmer ?? false, nonBusiness);
       return ok({
         pdf_base64: Buffer.from(pdfBytes).toString("base64"),
         merged_with_bill: mergedWithBill,
@@ -949,7 +984,7 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
 
       // Without a source receipt the page itself is the receipt in the mode "Rechnung fehlt", so the
       // counterparty is mandatory there (reported together with all other missing fields).
-      const { pdfBytes, amounts, mergedWithBill, warnings, plan } = await buildEntertainmentReceiptDocument(
+      const { pdfBytes, amounts, mergedWithBill, warnings, plan, nonBusiness } = await buildEntertainmentReceiptDocument(
         { ...args, date: formatGermanDate(args.date) },
         { requireCounterparty: true }
       );
@@ -1007,7 +1042,7 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
           );
         }
       }
-      const hint = await bookingHintFor(client, { plan, amounts }, args.kleinunternehmer ?? false);
+      const hint = await bookingHintFor(client, { plan, amounts, nonBusiness }, args.kleinunternehmer ?? false);
 
       return ok({
         id_by_customer: readUploadedId(result) ?? null,

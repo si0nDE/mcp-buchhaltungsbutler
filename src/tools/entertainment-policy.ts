@@ -185,6 +185,10 @@ export const INTERNAL_NO_INVOICE_WARNING =
   "Arbeitnehmer) liegt keine Bewirtung aus geschäftlichem Anlass vor; die Rechnungspflicht des § 4 Abs. 5 Satz 1 Nr. 2 EStG greift daher nicht. " +
   "Lohnsteuer prüfen.";
 
+// Pointer into the repo docs: only for the returned warnings, never printed on the receipt page.
+export const LATE_INVOICE_POINTER =
+  "Geht die Rechnung später ein, siehe den Ablauf „Rechnung nachgereicht“ in docs/bewirtungsbeleg-faq.md.";
+
 export function businessNoInvoiceWarnings(treatment: MissingInvoiceTreatment): string[] {
   if (treatment === "practice_70_30_no_vat") {
     return [
@@ -195,7 +199,8 @@ export function businessNoInvoiceWarnings(treatment: MissingInvoiceTreatment): s
   }
   return [
     NO_VAT_WITHOUT_INVOICE,
-    "100 % nicht abziehbar (folgt BFH X R 57/09). Geht die Rechnung später ein, siehe den Ablauf „Rechnung nachgereicht“ in docs/bewirtungsbeleg-faq.md.",
+    "100 % nicht abziehbar (folgt BFH X R 57/09).",
+    LATE_INVOICE_POINTER,
   ];
 }
 
@@ -224,6 +229,10 @@ const ALIAS_MIX_ERROR =
   'soll nur eine Quelle der Wahrheit geben. host_confirmed:true entspricht bewirtungsangaben_signed:true plus original_invoice_status:"present"; ' +
   "bei fehlender Rechnung nur die neuen Felder verwenden.";
 
+export const HOST_CONFIRMED_DEPRECATED =
+  "host_confirmed ist deprecated: stattdessen bewirtungsangaben_signed und original_invoice_status verwenden " +
+  "(host_confirmed:true entspricht beiden mit Status present).";
+
 export function resolveEntertainmentContext(f: PolicyFields): { context: EntertainmentContext; warnings: string[] } {
   const warnings: string[] = [];
   const viaAlias = f.host_confirmed !== undefined;
@@ -238,12 +247,7 @@ export function resolveEntertainmentContext(f: PolicyFields): { context: Enterta
     throw new Error(`Pflichtangaben fehlen für diese Bewirtung (alle auf einmal beim Nutzer erfragen): ${missing.join(" | ")}`);
   }
 
-  if (viaAlias) {
-    warnings.push(
-      "host_confirmed ist deprecated: stattdessen bewirtungsangaben_signed und original_invoice_status verwenden " +
-        "(host_confirmed:true entspricht beiden mit Status present)."
-    );
-  }
+  if (viaAlias) warnings.push(HOST_CONFIRMED_DEPRECATED);
   const type = f.entertainment_type;
   if (type === undefined) {
     const suggested = f.participant_relations?.length ? typeFromParticipants(f.participant_relations) : undefined;

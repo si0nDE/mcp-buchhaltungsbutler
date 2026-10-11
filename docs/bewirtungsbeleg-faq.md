@@ -112,7 +112,7 @@ Buchungsversuch würde doppelt buchen.
 
 Mit `original_invoice_status: "missing_requested"` (beim Gastwirt angefordert, nicht erhalten) oder `"lost"` (verloren oder unleserlich) erzeugt `generate_and_upload_entertainment_receipt` die Bewirtungsseite ohne Rechnung. Pflicht sind der Zahlbetrag (`gross_amount`, inklusive Trinkgeld), ein Zahlungsnachweis (`payment_evidence`), die Bewirtungsart (`entertainment_type`), bei `missing_requested` mindestens eine Anforderung (`invoice_requests`) und ohne Quell-Beleg die Gaststätte (`counterparty`). Fehlen mehrere Felder, nennt eine Fehlermeldung alle auf einmal. Speisen- und Getränkebeträge müssen leer bleiben: eine erfundene Aufteilung wäre falsch.
 
-Die Seite ist dann selbst der Beleg (ein Upload, ohne Vorsteuer). Mit `payment_evidence.transaction_id_by_customer` prüft der Konnektor den Betrag der Banktransaktion (Toleranz 0,01 €) und ordnet den Beleg ihr zu. Die Antwort enthält `booking_hint` mit den Splits für die Buchungs-Tools (SKR03 4650/4654, SKR04 6640/6644, immer `0_none`).
+Die Seite ist dann selbst der Beleg (ein Upload, ohne Vorsteuer). Mit `payment_evidence.transaction_id_by_customer` prüft der Konnektor den Betrag der Banktransaktion (Toleranz 0,01 €). Zugeordnet wird der neue Beleg der Transaktion nur im Weg ohne `source_receipt_id_by_customer`; mit Quell-Beleg nennt die Antwort die Zuordnung nur als Hinweis (das Original kann schon zugeordnet sein). Die Antwort enthält `booking_hint` mit den Splits für die Buchungs-Tools (SKR03 4650/4654 (SKR04 6640/6644, sobald der Kontenrahmen als SKR04 erkannt wird; ist er nicht ermittelbar, ohne Kontonummern), immer `0_none`).
 
 Für geschäftliche Bewirtung (§ 4 Abs. 5 Satz 1 Nr. 2 EStG) gibt es zwei Varianten, die der Nutzer **jedes Mal** wählt (`missing_invoice_treatment`):
 
@@ -121,7 +121,7 @@ Für geschäftliche Bewirtung (§ 4 Abs. 5 Satz 1 Nr. 2 EStG) gibt es zwei Varia
 | `practice_70_30_no_vat` | 70/30 des Zahlbetrags, keine Vorsteuer | Dennerlein Q42, bezogen auf Beträge unter 250 €; Anerkennung offen |
 | `conservative_100_nondeductible` | 100 % auf 4654/6644, keine Vorsteuer | BFH X R 57/09 |
 
-Über 250 € ist die Praxisvariante nur mit `acknowledge_practice_over_250: true` möglich; keine Quelle deckt diesen Fall ab.
+Über 250 € ist die Praxisvariante nur mit `acknowledge_practice_over_250: true` möglich, beim Generator wie bei `add_receipt_postings`/`add_transaction_postings` (dort zählt die Summe der Splits auf 4650/4654 bzw. 6640/6644); keine Quelle deckt diesen Fall ab.
 
 **Warum zwei Varianten?** Der BFH verlangt bei Bewirtung in einer Gaststätte die Rechnung „ohne Ausnahme“ und lässt keinen Eigenbeleg als Ersatz zu (BFH X R 57/09 und X R 58/09). Die Seminarunterlagen von Dennerlein (Haufe-Lexware Akademie, 16.09.2026, Q42) empfehlen für Beträge unter 250 € trotzdem 70/30 ohne Vorsteuer und halten die Anerkennung offen. Der Konnektor entscheidet das nicht still.
 
@@ -144,7 +144,7 @@ Bei Gesellschafter-Geschäftsführern unter sich widersprechen sich die Quellen 
 
 Gesellschafter ohne Anstellung gelten als Dritte (Dennerlein Q6), freie Mitarbeiter ebenfalls (Folie 21). Dafür gibt es `participant_relations` bzw. `participants[].relation`.
 
-**Vorsteuer ohne Rechnung ist nie zulässig** (§ 15 Abs. 1 Satz 1 Nr. 1 UStG). Bei `original_invoice_status` ≠ `present` lehnen die Buchungs-Tools jeden Vorsteuer-Code (`_pre`) auf jedem Konto ab. Für nicht geschäftliche Typen (intern, Aufmerksamkeit) greift die Rechnungspflicht des § 4 Abs. 5 Satz 1 Nr. 2 EStG nach R 4.10 Abs. 5 Satz 9 und Abs. 7 Satz 1 EStR nicht (Auffassung der Richtlinien; keine Quelle regelt den Fall ausdrücklich), deshalb gibt es dort nur Warnungen.
+**Vorsteuer ohne Rechnung ist nie zulässig** (§ 15 Abs. 1 Satz 1 Nr. 1 UStG). Bei `original_invoice_status` ≠ `present` lehnen die Buchungs-Tools jeden Vorsteuer-Code (`19_pre`, `7_pre`, `19_pre_app`, `7_pre_app`) auf jedem Konto ab (Codes ohne Vorsteuer wie 19_both_1_no_pre und Reverse-Charge-Fälle sind nicht betroffen). Für nicht geschäftliche Typen (intern, Aufmerksamkeit) greift die Rechnungspflicht des § 4 Abs. 5 Satz 1 Nr. 2 EStG nach R 4.10 Abs. 5 Satz 9 und Abs. 7 Satz 1 EStR nicht (Auffassung der Richtlinien; keine Quelle regelt den Fall ausdrücklich), deshalb gibt es dort nur Warnungen.
 
 ## Rechnung nachgereicht – Ablauf
 

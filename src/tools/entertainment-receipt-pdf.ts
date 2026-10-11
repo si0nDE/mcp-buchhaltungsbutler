@@ -474,7 +474,7 @@ export async function renderEntertainmentReceiptCover(
     if (mi.tip > 0) rows.push(["davon Trinkgeld", formatEuro(mi.tip)]);
     rows.push(["Speisen/Getränke/USt", "nicht bekannt"]);
     rows.push(["Vorsteuerabzug", "keiner"]);
-    rows.push(["Vermerke zur Rechnung", "siehe Seite 2"]);
+    rows.push(["Vermerke zur Rechnung", "siehe Folgeseite"]);
     rows.forEach(([label, value], i) => {
       if (i > 0) y -= 15;
       page.drawText(label, { x: valueX, y, size: 10.5, font: i === 0 ? bold : font, color: BLACK });
