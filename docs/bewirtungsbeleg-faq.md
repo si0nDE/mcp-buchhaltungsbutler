@@ -127,6 +127,8 @@ Für geschäftliche Bewirtung (§ 4 Abs. 5 Satz 1 Nr. 2 EStG) gibt es zwei Varia
 
 Die Bewirtungsangaben sollen zeitnah entstehen (BMF 19.11.2025 Rn. 1 und 22). Eine Frist nennt der Erlass nicht; der Konnektor warnt ab mehr als 10 Tagen mit Orientierung an GoBD Rz. 47.
 
+**Deprecated: `host_confirmed`.** `host_confirmed` an den Buchungs-Tools ist deprecated. `host_confirmed: true` entspricht `bewirtungsangaben_signed: true` plus `original_invoice_status: "present"`. Die Kombination mit `bewirtungsangaben_signed` oder `original_invoice_status` wird abgelehnt, damit es nur eine Quelle der Wahrheit gibt. `entertainment_type`, `missing_invoice_treatment`, `shareholder_manager_treatment` und `participant_relations` lassen sich mit dem Alias kombinieren. Jede Antwort mit `host_confirmed` enthält einen Deprecation-Hinweis.
+
 ## Welche Bewirtungsart (`entertainment_type`)?
 
 | Typ | Gilt für | Buchung (SKR03) |
@@ -142,15 +144,16 @@ Bei Gesellschafter-Geschäftsführern unter sich widersprechen sich die Quellen 
 
 Gesellschafter ohne Anstellung gelten als Dritte (Dennerlein Q6), freie Mitarbeiter ebenfalls (Folie 21). Dafür gibt es `participant_relations` bzw. `participants[].relation`.
 
-**Vorsteuer ohne Rechnung ist nie zulässig** (§ 15 Abs. 1 Satz 1 Nr. 1 UStG). Bei `original_invoice_status` ≠ `present` lehnen die Buchungs-Tools jeden Vorsteuer-Code (`_pre`) auf jedem Konto ab. Für nicht geschäftliche Typen (intern, Aufmerksamkeit) entfällt die Rechnungspflicht des § 4 Abs. 5 Satz 1 Nr. 2 EStG nach R 4.10 Abs. 5 Satz 9 und Abs. 7 Satz 1; eine Quelle, die diesen Fall ausdrücklich regelt, gibt es nicht, deshalb gibt es dort nur Warnungen.
+**Vorsteuer ohne Rechnung ist nie zulässig** (§ 15 Abs. 1 Satz 1 Nr. 1 UStG). Bei `original_invoice_status` ≠ `present` lehnen die Buchungs-Tools jeden Vorsteuer-Code (`_pre`) auf jedem Konto ab. Für nicht geschäftliche Typen (intern, Aufmerksamkeit) greift die Rechnungspflicht des § 4 Abs. 5 Satz 1 Nr. 2 EStG nach R 4.10 Abs. 5 Satz 9 und Abs. 7 Satz 1 EStR nicht (Auffassung der Richtlinien; keine Quelle regelt den Fall ausdrücklich), deshalb gibt es dort nur Warnungen.
 
 ## Rechnung nachgereicht – Ablauf
 
 Es gibt dafür kein eigenes Tool. Der Ablauf besteht aus vorhandenen Bausteinen:
 
 1. `generate_and_upload_entertainment_receipt` mit der neuen Rechnung als Quelle (`source_receipt_id_by_customer`) und `original_invoice_status: "present"`.
-2. Die alte Buchung stornieren: `cancel_posting` (seit `v2026.10.07.001`; ältere Installationen haben nur `unconfirm_posting`). Fehlt das Tool oder ist die Buchung festgeschrieben, per Gegenbuchung über `add_free_postings` mit Verweis auf die Ursprungsbuchung.
+2. Die alte Buchung stornieren: `cancel_posting` (seit `v2026.10.07.001`). Festgeschriebene Buchungen storniert es per Gegenbuchung, aber nur für IDs, die der Nutzer in `reverse_posting_ids` freigibt (siehe [docs/buchungen-korrigieren-faq.md](buchungen-korrigieren-faq.md)). Fehlt das Tool, weil die Installation älter als `v2026.10.07.001` ist (dort gibt es `unconfirm_posting`, das nur nicht festgeschriebene Buchungen entfernt), per manueller Gegenbuchung über `add_free_postings` mit Verweis auf die Ursprungsbuchung.
 3. Mit Vorsteuer neu buchen.
+4. Die alte Bewirtungsseite (Eigenbeleg) ist bereits hochgeladen und zugeordnet. Nach der Buchung des neuen Belegs fragt man den Nutzer, ob sie entfernt werden soll; erst auf Bestätigung entfernt `set_receipt_deleted` sie (Soft-Delete, per `deleted: false` wiederherstellbar). Der Konnektor löscht nie automatisch.
 
 **Offene Grenze, nicht belegt:** Der Vorsteuerabzug entsteht mit Leistung und Besitz der Rechnung (§ 15 Abs. 1 Satz 1 Nr. 1 UStG; BFH XI R 17/22). Die Ist-Versteuerung (§ 20 UStG) betrifft nur die Umsatzsteuer, nicht die Vorsteuer. Die BuchhaltungsButler-API kennt `date_vat_effective` nur als Lesefeld; die Auswertung folgt dem Leistungs- bzw. Buchungsdatum. Bei einer Zahlungsbuchung liegt das Datum damit in der Vergangenheit. Ob eine freie Buchung mit dem Datum des Rechnungseingangs (Vorsteuerkonto an 4650) in der richtigen USt-VA-Kennzahl landet, ist **nicht geprüft** und sollte in einem Test-Mandanten verifiziert werden. Bis dahin: Rücksprache mit dem Steuerberater.
 

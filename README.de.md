@@ -63,7 +63,7 @@ Ohne Gaststättenrechnung `original_invoice_status` (`missing_requested` | `lost
 `entertainment_type` und bei geschäftlicher Bewirtung `missing_invoice_treatment` angeben (immer beim Nutzer erfragen, kein Default).
 Die erzeugte Seite ist dann selbst der Beleg (keine Vorsteuer, ein Upload), die Antwort enthält einen `booking_hint`.
 `host_confirmed` an den Buchungs-Tools ist **deprecated** (stattdessen `bewirtungsangaben_signed` und `original_invoice_status`);
-die Kombination mit den neuen Feldern wird abgelehnt. Vorsteuer-Codes werden ohne Rechnung auf jedem Konto abgelehnt.
+die Kombination mit `bewirtungsangaben_signed` oder `original_invoice_status` wird abgelehnt. Vorsteuer-Codes werden ohne Rechnung auf jedem Konto abgelehnt.
 Quellen und offene Punkte: [docs/bewirtungsbeleg-faq.md](docs/bewirtungsbeleg-faq.md).
 
 | Parameter | Bedeutung |
