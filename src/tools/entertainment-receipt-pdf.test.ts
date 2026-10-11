@@ -575,6 +575,45 @@ describe("renderEntertainmentReceiptCover without an invoice", () => {
     );
     expect((await PDFDocument.load(normal)).getPageCount()).toBe(1);
   });
+
+  const textOf = async (bytes: Uint8Array) => (await extractReceiptText(Buffer.from(bytes).toString("base64"))) ?? "";
+
+  it("refers to a preceding payment receipt, not an original invoice, and prints no invoice reference", async () => {
+    const bytes = await renderEntertainmentReceiptCover(
+      { ...fields, billReference: "000001" },
+      amounts,
+      { kleinunternehmer: false, missingInvoice, attachmentPrecedes: true, originalSha256: "ab".repeat(32) }
+    );
+    const text = await textOf(bytes);
+    expect(text).toContain("Ergänzung zum vorangehenden Zahlungsbeleg");
+    expect(text).toContain("Bewirtungsangaben ohne Originalrechnung");
+    expect(text).not.toContain("Ergänzung zur vorangehenden Originalrechnung");
+    expect(text).not.toContain("Ergänzung zu Rechnung");
+    expect(text).toContain(`SHA-256 Originaldokument: ${"ab".repeat(32)}`);
+  });
+
+  it("names a following attachment as payment receipt, not as original invoice", async () => {
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false, missingInvoice, attachmentFollows: true });
+    const text = await textOf(bytes);
+    expect(text).toContain("Anlage: Zahlungsbeleg");
+    expect(text).not.toContain("Anlage: Originalrechnung");
+    expect(text).not.toContain("Ergänzung zu Rechnung");
+  });
+
+  it("keeps the footer and subtitle of the normal page as before", async () => {
+    const normalFields = { ...fields, foodNet: 20, foodVat: 1.4, billReference: "000001" };
+    const normalAmounts = { grossTotal: 21.4, vatTotal: 1.4, deductibleBase: 20, deductible: 14, nonDeductible: 6 };
+    const follows = await textOf(
+      await renderEntertainmentReceiptCover(normalFields, normalAmounts, { kleinunternehmer: false, attachmentFollows: true })
+    );
+    expect(follows).toContain("Anlage: Originalrechnung");
+    expect(follows).toContain("Ergänzung zu Rechnung 000001");
+    const precedes = await textOf(
+      await renderEntertainmentReceiptCover(normalFields, normalAmounts, { kleinunternehmer: false, attachmentPrecedes: true })
+    );
+    expect(precedes).toContain("Ergänzung zur vorangehenden Originalrechnung");
+    expect(precedes).not.toContain("Zahlungsbeleg");
+  });
 });
 
 describe("computeAmounts with the Folie-46 example of the seminar (Dennerlein, 16.09.2026)", () => {

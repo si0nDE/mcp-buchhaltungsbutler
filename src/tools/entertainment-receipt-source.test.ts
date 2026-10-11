@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { createEntertainmentReceiptTools } from "./entertainment-receipt.js";
 import { sha256Hex } from "./entertainment-receipt-append.js";
+import { extractReceiptText } from "./receipt-text-extraction.js";
 
 // All data below is invented.
 async function makeOriginal(attach = false): Promise<Uint8Array> {
@@ -337,6 +338,17 @@ describe("generate_and_upload_entertainment_receipt without an invoice, with sou
     expect(data.pages_after).toBe(3);
     expect(JSON.stringify(data.booking_hint)).toContain("0_none");
     expect(JSON.stringify(data.warnings)).toContain("X R 57/09");
+  });
+
+  it("prints no 'Ergänzung zu Rechnung' of the source receipt on the page, but keeps invoice_number as upload metadata", async () => {
+    const { run, uploads } = setup();
+    await run(noInvoice);
+    const up = uploads()[0].params;
+    expect(up.invoice_number).toBe("000001");
+    const text = (await extractReceiptText(up.file as string)) ?? "";
+    expect(text).not.toContain("Ergänzung zu Rechnung 000001");
+    expect(text).not.toContain("Ergänzung zur vorangehenden Originalrechnung");
+    expect(text).toContain("Ergänzung zum vorangehenden Zahlungsbeleg");
   });
 
   it("aborts with Betragsabweichung when gross_amount differs from the source receipt and uploads nothing", async () => {

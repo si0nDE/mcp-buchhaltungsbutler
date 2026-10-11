@@ -414,7 +414,8 @@ export async function renderEntertainmentReceiptCover(
   // left text is clamped to whatever's left after the ACTUAL rendered width
   // of the right text plus a fixed gap, from the same font metrics used to
   // draw it. The address line has no right-hand counterpart.
-  const sub = buildLetterheadSubtitle(fields.billReference);
+  // Without an original invoice there is nothing to supplement: a neutral subtitle, no invoice reference.
+  const sub = options.missingInvoice ? "Bewirtungsangaben ohne Originalrechnung" : buildLetterheadSubtitle(fields.billReference);
   const subWidth = font.widthOfTextAtSize(sub, 9);
   const companyNameMaxWidth = Math.max(0, contentWidth - subWidth - LETTERHEAD_GAP);
   const companyNameLine = wrapText(fields.companyName ?? "[Firmenname]", bold, 10, companyNameMaxWidth)[0] ?? "";
@@ -560,10 +561,18 @@ export async function renderEntertainmentReceiptCover(
   // bill (not always exactly one more), or none at all in the Fall-B
   // standalone-page case - so it never claims a specific "Seite X von N";
   // it only states whether an attachment follows this page at all.
+  // Without an original invoice the attached/preceding document is a payment receipt (e.g. card slip).
   if (options.attachmentFollows) {
-    drawRight("Anlage: Originalrechnung", width - MARGIN, footerY, 8, font, GRAY);
+    drawRight(options.missingInvoice ? "Anlage: Zahlungsbeleg" : "Anlage: Originalrechnung", width - MARGIN, footerY, 8, font, GRAY);
   } else if (options.attachmentPrecedes) {
-    drawRight("Ergänzung zur vorangehenden Originalrechnung", width - MARGIN, footerY, 8, font, GRAY);
+    drawRight(
+      options.missingInvoice ? "Ergänzung zum vorangehenden Zahlungsbeleg" : "Ergänzung zur vorangehenden Originalrechnung",
+      width - MARGIN,
+      footerY,
+      8,
+      font,
+      GRAY
+    );
   }
   if (options.originalSha256) {
     page.drawText(`SHA-256 Originaldokument: ${options.originalSha256}`, {

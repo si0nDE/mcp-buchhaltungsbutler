@@ -196,7 +196,8 @@ function planCover(args: CoverArgs, opts: { requireCounterparty: boolean }): Pla
       { requireCounterparty: opts.requireCounterparty }
     );
     return {
-      fields: { ...baseFields, foodNet: 0, foodVat: 0, drinksNet: 0, drinksVat: 0, tip: plan.tip },
+      // No billReference on the page: there is no original invoice the page could supplement.
+      fields: { ...baseFields, billReference: undefined, foodNet: 0, foodVat: 0, drinksNet: 0, drinksVat: 0, tip: plan.tip },
       amounts: {
         grossTotal: plan.gross,
         vatTotal: 0,
@@ -694,7 +695,8 @@ async function uploadWithSourceReceipt(client: BBClient, args: SourceArgs): Prom
 
   const billReference = args.bill_reference ?? (keep ? original.invoicenumber || undefined : undefined);
   const cover = await renderCover(
-    { ...planned, fields: { ...planned.fields, billReference } },
+    // Mode "Rechnung fehlt": the source receipt's number is upload metadata only, never printed as "Ergänzung zu Rechnung".
+    { ...planned, fields: { ...planned.fields, billReference: plan ? undefined : billReference } },
     {
       attachmentPrecedes: true,
       originalSha256: (args.include_original_hash ?? true) ? originalSha256 : undefined,
