@@ -8,7 +8,7 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 ## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-- **50 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **52 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
 - **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
 - **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
 - **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
@@ -93,6 +93,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
    - `MCP_AUTH_TOKEN` (Pflicht) — ein langes Zufalls-Secret; jeder Request braucht `Authorization: Bearer <token>`.
    - `MCP_ALLOWED_HOSTS` (empfohlen) — kommagetrennte Hostnamen, unter denen der Server erreichbar ist (z. B. deine Reverse-Proxy-Domain), für DNS-Rebinding-Schutz.
    - `PORT` (optional, Standard `3000`).
+   - `BHB_POLICY_FILE` (optional) — Speicherort der Hausregeln für `set_policy` (Standard `~/.mcp-buchhaltungsbutler/policy.json`). Im Container ein Volume einhängen, das der Benutzer `node` (uid 1000) beschreiben darf, z. B. `-v bhb-policy:/data -e BHB_POLICY_FILE=/data/policy.json`; sonst ist die Regel nach einem Neustart weg.
 
    ```bash
    docker run -d --name mcp-buchhaltungsbutler \

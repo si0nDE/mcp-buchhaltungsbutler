@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { receiptDisplayRef } from "../formatting/display-ref.js";
 import { extractDateCandidates } from "./bewirtung-plausibility.js";
+import { loadPolicy, type ForeignSupplierRule, type Policy } from "./policy.js";
 import { countPdfPages, extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -11,12 +12,14 @@ import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 // umgesetzt und stehen in `not_checked`. Das Tool ändert nichts.
 
 type Row = Record<string, unknown>;
-export type AuditCheck = "DUP_POSTING" | "DUP_RECEIPT" | "UNBOOKED" | "DATE_SHIFT" | "NO_TEXT_LAYER";
-export const AUDIT_CHECKS: readonly AuditCheck[] = ["DUP_POSTING", "DUP_RECEIPT", "UNBOOKED", "DATE_SHIFT", "NO_TEXT_LAYER"];
+export type AuditCheck = "DUP_POSTING" | "DUP_RECEIPT" | "UNBOOKED" | "DATE_SHIFT" | "NO_TEXT_LAYER" | "FOREIGN_SUPPLIER";
+export const AUDIT_CHECKS: readonly AuditCheck[] = ["DUP_POSTING", "DUP_RECEIPT", "UNBOOKED", "DATE_SHIFT", "NO_TEXT_LAYER", "FOREIGN_SUPPLIER"];
 
 export interface Finding {
   check: AuditCheck;
   severity: "error" | "warning" | "info";
+  status?: "decision" | "ok_hausregel";
+  options?: Record<string, unknown>;
   display_ref: string;
   receipt_id?: string;
   posting_ids?: string[];
@@ -157,6 +160,60 @@ export function analyzeReceiptsAndPostings(
   return { findings, checkedReceipts: live.length };
 }
 
+const FOREIGN_VAT_ID = /\b(?:AT|BE|BG|CY|CZ|DK|EE|EL|ES|FI|FR|HR|HU|IE|IT|LT|LU|LV|MT|NL|PL|PT|RO|SE|SI|SK|XI)\s?(?=[A-Z0-9 .-]{7,14}\b)(?=(?:[A-Z .-]*\d){6})[A-Z0-9][A-Z0-9 .-]{6,13}\b/;
+const FOREIGN_WORDS = /\b(?:Inc\.?|LLC|PBC|Pty\.?\s*Ltd\.?|Limited|Ltd\.?|B\.V\.|S\.A\.|Ireland|Irland|Australia|Australien|United States|USA)(?=\W|$)/;
+const REVERSE_CHARGE = /reverse[\s-]?charge|art\.?\s*196|steuerschuldnerschaft des leistungsempf|§\s*13b|autoliquidation|inversion du sujet/i;
+const GERMAN_VAT_19 = /\b19(?:[.,]0+)?\s?%/;
+const VAT_WORD = /mwst|ust|umsatzsteuer|\bvat\b|\btax\b/i;
+
+export const FOREIGN_SUPPLIER_LEGAL_NOTE =
+  "Rechtsfrage ohne eindeutige Antwort, keine Steuerberatung. Strenge Auslegung: § 13b greift kraft Gesetzes, ein fehlender Hinweis nach § 14a Abs. 5 UStG ändert daran nichts; " +
+  "die ausgewiesene deutsche Steuer schuldet der Anbieter nur nach § 14c UStG und sie ist nicht als Vorsteuer abziehbar (§ 15 Abs. 1 Satz 1 Nr. 1 UStG). " +
+  "Praxis: wie ausgewiesen buchen. Der Unterschied ist die Vorsteuer aus der Rechnung; bei Zweifel Steuerberater oder Fachanwalt fragen.";
+
+// Heuristik auf dem Belegtext: Auslandsanbieter (USt-IdNr. mit EU-Präfix außer DE oder Rechtsform/Land im Text), deutsche USt (19 %) ausgewiesen, kein
+// Reverse-Charge-Hinweis. Nur dieser Fall hängt an der Hausregel; mit Hinweis ist § 13b unstrittig und wird hier nicht gemeldet.
+export function classifyForeignSupplier(text: string, r: Row, rule: ForeignSupplierRule): Finding | undefined {
+  if (!isInbound(r)) return undefined;
+  if (!FOREIGN_VAT_ID.test(text) && !FOREIGN_WORDS.test(text)) return undefined;
+  if (REVERSE_CHARGE.test(text) || !GERMAN_VAT_19.test(text) || !VAT_WORD.test(text)) return undefined;
+  const gross = Math.abs(num(r.amount));
+  if (!Number.isFinite(gross) || gross === 0) return undefined;
+  const vat = round((gross * 19) / 119);
+  const net = round(gross - vat);
+  const base = { check: "FOREIGN_SUPPLIER" as const, display_ref: receiptDisplayRef(r), receipt_id: str(r.id_by_customer), auto_fixable: false as const, fix_via: "decision" as const };
+  const indicator = "Anbieter vermutlich im Ausland (Textheuristik: USt-IdNr. oder Rechtsform/Land)";
+  const options = {
+    as_invoiced: { buchung: "mit Vorsteuer wie ausgewiesen", kz66_vorsteuer: vat, zahllast_delta: 0 },
+    reverse_charge_strict: {
+      buchung: "§ 13b, ausgewiesene Steuer nicht abziehbar",
+      kz46_bemessungsgrundlage: Math.floor(net),
+      kz66_vorsteuer: 0,
+      zahllast_delta_gegen_as_invoiced: vat,
+      hinweis: "Umsatzsteuer (Kz 47) und Vorsteuer (Kz 67) aus § 13b heben sich auf",
+    },
+  };
+  if (rule === "as_invoiced") {
+    return { ...base, severity: "info", status: "ok_hausregel", fact: `${indicator}, 19 % USt ausgewiesen, kein Reverse-Charge-Hinweis. Entspricht der Hausregel (wie ausgewiesen buchen).` };
+  }
+  if (rule === "reverse_charge_strict") {
+    return {
+      ...base,
+      severity: "warning",
+      status: "decision",
+      fact: `${indicator}, 19 % USt ausgewiesen, kein Reverse-Charge-Hinweis. Hausregel strikt: § 13b erwartet. Prüfen, ob so gebucht ist.`,
+      options: { reverse_charge_strict: options.reverse_charge_strict },
+    };
+  }
+  return {
+    ...base,
+    severity: "warning",
+    status: "decision",
+    fact: `${indicator}, 19 % USt ausgewiesen, kein Reverse-Charge-Hinweis. Entscheidung nötig; einmal per set_policy festhalten, dann nicht erneut melden. Nicht automatisch umbuchen.`,
+    options,
+  };
+}
+
 async function sweep(client: BBClient, key: "receiptsGet" | "postingsGet", base: Row, pageSize: number, maxPages: number): Promise<{ rows: Row[]; truncated: boolean }> {
   const rows: Row[] = [];
   for (let page = 0; page < maxPages; page++) {
@@ -174,7 +231,7 @@ function addDays(date: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function createVatAuditTools(client: BBClient): [ToolDef] {
+export function createVatAuditTools(client: BBClient, policyLoader: () => Promise<Policy> = loadPolicy): [ToolDef] {
   const shape = {
     date_from: z.string().describe("YYYY-MM-DD, e.g. 2026-07-01."),
     date_to: z.string().describe("YYYY-MM-DD, e.g. 2026-09-30."),
@@ -194,7 +251,7 @@ export function createVatAuditTools(client: BBClient): [ToolDef] {
       "date_vat_effective in the period) and reports findings as a table. Implemented, objective patterns only: DUP_POSTING (several tax-effective postings " +
       "on one receipt sum up to more than its amount, e.g. receipt posting plus free posting), DUP_RECEIPT (same invoice number and counterparty, or same " +
       "amount/counterparty within 3 days), UNBOOKED (no posting references the receipt), and with read_receipt_text: DATE_SHIFT (no date in the text in the " +
-      "receipt's quarter, but one in another quarter) and NO_TEXT_LAYER. Every finding has display_ref (name receipts to the user by it) and, if computable, " +
+      "receipt's quarter, but one in another quarter), NO_TEXT_LAYER and FOREIGN_SUPPLIER (text heuristic: foreign supplier, 19 % VAT shown, no reverse-charge note; handled per house rule from get_policy, default 'ask' = decision with both options in Kennziffern and Zahllast delta, 'as_invoiced' = ok (Hausregel), never auto-fixed). Every finding has display_ref (name receipts to the user by it) and, if computable, " +
       "vat_effect. NOT implemented, listed in not_checked: tax rates on a receipt vs. postings, invoice number in the text, foreign suppliers and reverse " +
       "charge (legal questions, never auto-fix), event location. Nothing is changed; findings are leads to verify, never an approval. Receipts dated outside " +
       "the period but delivered inside it are not loaded. Compare the Zahllast with preview_vat_impact (elster_estimate).",
@@ -218,7 +275,19 @@ export function createVatAuditTools(client: BBClient): [ToolDef] {
       const { findings, checkedReceipts } = analyzeReceiptsAndPostings(receipts, postings, checks);
       const notes: string[] = [];
 
-      if (args.read_receipt_text && (checks.includes("DATE_SHIFT") || checks.includes("NO_TEXT_LAYER"))) {
+      const textChecks = checks.some((c) => c === "DATE_SHIFT" || c === "NO_TEXT_LAYER" || c === "FOREIGN_SUPPLIER");
+      let rule: ForeignSupplierRule = "ask";
+      let ruleSource = "Standard";
+      if (checks.includes("FOREIGN_SUPPLIER") && args.read_receipt_text) {
+        try {
+          rule = (await policyLoader()).vat_policy.foreign_supplier_domestic_vat_no_rc_hint;
+          ruleSource = "Policy-Datei";
+        } catch (e) {
+          notes.push(`Policy nicht lesbar, Hausregel 'ask' angenommen: ${(e as Error).message}`);
+        }
+      }
+      let legalNote = false;
+      if (args.read_receipt_text && textChecks) {
         const candidates = receipts.filter((r) => !isDeleted(r)).slice(0, args.max_text_reads);
         if (receipts.filter((r) => !isDeleted(r)).length > candidates.length) {
           notes.push(`Belegtext nur für die ersten ${candidates.length} Belege gelesen (max_text_reads); Rest ungeprüft.`);
@@ -244,6 +313,13 @@ export function createVatAuditTools(client: BBClient): [ToolDef] {
               }
               continue;
             }
+            if (checks.includes("FOREIGN_SUPPLIER")) {
+              const fs = classifyForeignSupplier(text, r, rule);
+              if (fs) {
+                findings.push(fs);
+                legalNote = true;
+              }
+            }
             if (!checks.includes("DATE_SHIFT")) continue;
             const q = quarterOf(day(r.date));
             const dates = extractDateCandidates(text);
@@ -262,8 +338,8 @@ export function createVatAuditTools(client: BBClient): [ToolDef] {
             notes.push(`Beleg ${str(r.id_by_customer)}: Datei nicht lesbar, Text nicht geprüft.`);
           }
         }
-      } else if (checks.includes("DATE_SHIFT") || checks.includes("NO_TEXT_LAYER")) {
-        notes.push("DATE_SHIFT und NO_TEXT_LAYER nicht geprüft: read_receipt_text: true setzen.");
+      } else if (textChecks) {
+        notes.push("DATE_SHIFT, NO_TEXT_LAYER und FOREIGN_SUPPLIER nicht geprüft: read_receipt_text: true setzen.");
       }
       if (inbound.truncated || outbound.truncated || posts.truncated) {
         notes.push("Abruf nach 10 Seiten abgebrochen: Zeitraum verkleinern, sonst fehlen Belege oder Buchungen (dann sind UNBOOKED/DUP_POSTING unzuverlässig).");
@@ -280,11 +356,13 @@ export function createVatAuditTools(client: BBClient): [ToolDef] {
         checked: { receipts: checkedReceipts, postings: postings.length, checks },
         counts,
         findings: shown,
+        ...(legalNote ? { house_rule: { foreign_supplier_domestic_vat_no_rc_hint: rule, source: ruleSource }, legal_note: FOREIGN_SUPPLIER_LEGAL_NOTE } : {}),
         ...(findings.length > shown.length ? { findings_cut: findings.length - shown.length } : {}),
         not_checked: [
           "Steuersätze laut Beleg gegen gebuchte Aufteilung (Bons mit Mischsätzen)",
           "Rechnungsnummer im Belegtext (Stripe-Quittung gegen Rechnung)",
-          "Auslandsanbieter mit deutscher USt oder Reverse-Charge-Hinweis (Rechtsfrage, Hausregel nötig)",
+          "Gebuchte Steuerschlüssel bei Auslandsanbietern (FOREIGN_SUPPLIER prüft nur den Beleg gegen die Hausregel, nicht die Buchung); Fälle mit Reverse-Charge-Hinweis werden nicht gemeldet",
+          "Auslandsanbieter ohne ausgewiesene Steuer und ohne Hinweis",
           "Leistungsort bei Veranstaltungen im Ausland",
           "Zeitraumverschiebung durch Ist-Versteuerung (USt-Konten bilden die Zahlung bereits ab, siehe docs/buchungen-korrigieren-faq.md)",
         ],

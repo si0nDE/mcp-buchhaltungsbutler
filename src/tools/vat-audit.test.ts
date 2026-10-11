@@ -93,3 +93,81 @@ describe("audit_vat_period", () => {
     expect(AUDIT_CHECKS).toContain("DATE_SHIFT");
   });
 });
+
+import { classifyForeignSupplier } from "./vat-audit.js";
+
+describe("classifyForeignSupplier", () => {
+  const r = { id_by_customer: "7", type: "invoice inbound", list_direction: "inbound", date: "2026-08-02", counterparty: "Beispiel Ireland Ltd", amount: "11.90", invoicenumber: "X-1" };
+  const irish = "Beispiel Distribution International, Cork, Ireland\nVAT ID: IE9700053D\nSubscription 10.00\nVAT 19 % 1.90\nTotal 11.90";
+
+  it("ask: decision with both options in Kennziffern and Zahllast delta", () => {
+    const f = classifyForeignSupplier(irish, r, "ask")!;
+    expect(f).toMatchObject({ check: "FOREIGN_SUPPLIER", severity: "warning", status: "decision", auto_fixable: false });
+    expect(f.options).toMatchObject({
+      as_invoiced: { kz66_vorsteuer: 1.9, zahllast_delta: 0 },
+      reverse_charge_strict: { kz46_bemessungsgrundlage: 10, kz66_vorsteuer: 0, zahllast_delta_gegen_as_invoiced: 1.9 },
+    });
+  });
+
+  it("as_invoiced: ok (Hausregel) without options", () => {
+    const f = classifyForeignSupplier(irish, r, "as_invoiced")!;
+    expect(f).toMatchObject({ severity: "info", status: "ok_hausregel" });
+    expect(f.options).toBeUndefined();
+  });
+
+  it("reverse_charge_strict: asks to verify § 13b was booked, only that option", () => {
+    const f = classifyForeignSupplier(irish, r, "reverse_charge_strict")!;
+    expect(f.status).toBe("decision");
+    expect(Object.keys(f.options!)).toEqual(["reverse_charge_strict"]);
+  });
+
+  it("stays silent with a reverse-charge note, without German VAT, for domestic suppliers and outbound receipts", () => {
+    expect(classifyForeignSupplier(irish + "\nReverse charge applies", r, "ask")).toBeUndefined();
+    expect(classifyForeignSupplier("Beispiel Ltd Ireland\nTotal 11.90 EUR", r, "ask")).toBeUndefined();
+    expect(classifyForeignSupplier("Muster GmbH, Würzburg\nUSt-IdNr. DE123456789\nMwSt 19 % 1,90", r, "ask")).toBeUndefined();
+    expect(classifyForeignSupplier(irish, { ...r, type: "invoice outbound", list_direction: "outbound" }, "ask")).toBeUndefined();
+  });
+
+  it("recognises a non-German EU VAT ID without any country word", () => {
+    expect(classifyForeignSupplier("Anbieter\nUSt-IdNr. ATU12345678\nMwSt 19 % 1,90", r, "ask")).toBeDefined();
+  });
+});
+
+import { PDFDocument, StandardFonts } from "pdf-lib";
+
+describe("audit_vat_period with read_receipt_text and a house rule", () => {
+  async function pdfWith(lines: string[]) {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([400, 300]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    lines.forEach((l, i) => page.drawText(l, { x: 20, y: 270 - i * 18, size: 11, font }));
+    return Buffer.from(await doc.save()).toString("base64");
+  }
+
+  it("reports the foreign supplier as ok (Hausregel) and puts the legal note into the answer once", async () => {
+    const file = await pdfWith(["Beispiel Ltd, Cork, Ireland", "Subscription 10.00", "VAT 19 % 1.90", "Total 11.90"]);
+    const c = {
+      call: async (key: string, params: Record<string, unknown>) => {
+        if (key === "receiptsGet") {
+          return {
+            data: params.offset || params.list_direction !== "inbound" ? [] : [{ id_by_customer: "1", type: "invoice inbound", date: "2026-08-02", counterparty: "Beispiel Ltd", amount: "11.90", invoicenumber: "X-1", deleted: "0" }],
+          };
+        }
+        if (key === "postingsGet") return { data: [] };
+        if (key === "receiptsGetIdByCustomer") return { data: { file_type: "pdf", file_content: file } };
+        throw new Error(key);
+      },
+    } as unknown as BBClient;
+    const [tool] = createVatAuditTools(c, async () => ({
+      vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "as_invoiced" },
+      history: [],
+    }));
+    const res = JSON.parse(
+      (await tool.handler({ date_from: "2026-07-01", date_to: "2026-09-30", checks: ["FOREIGN_SUPPLIER"], read_receipt_text: true, max_text_reads: 25, max_findings: 200 } as never)).content[0].text
+    );
+    expect(res.findings).toHaveLength(1);
+    expect(res.findings[0]).toMatchObject({ check: "FOREIGN_SUPPLIER", status: "ok_hausregel", severity: "info" });
+    expect(res.house_rule).toEqual({ foreign_supplier_domestic_vat_no_rc_hint: "as_invoiced", source: "Policy-Datei" });
+    expect(res.legal_note).toMatch(/§ 14c UStG/);
+  });
+});
