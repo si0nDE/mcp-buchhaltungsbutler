@@ -34,6 +34,19 @@ describe("structuredContent with extra keys passes the client's output-schema va
     return client;
   }
 
+  it("audit_vat_period via a real client (defaults applied, schema validated)", async () => {
+    const client = await connect((key, params) =>
+      key === "receiptsGet" && params.list_direction === "inbound" && !params.offset
+        ? { data: [{ id_by_customer: "1", type: "invoice inbound", date: "2026-08-01", counterparty: "Muster", amount: "10.00", invoicenumber: "A-1", deleted: "0" }] }
+        : { data: [] }
+    );
+    const res = await client.callTool({ name: "audit_vat_period", arguments: { date_from: "2026-07-01", date_to: "2026-09-30" } });
+    expect(res.isError).toBeFalsy();
+    const data = (res.structuredContent as { data: { counts: Record<string, number>; findings: Array<{ check: string; display_ref: string }> } }).data;
+    expect(data.counts).toEqual({ UNBOOKED: 1 });
+    expect(data.findings[0].display_ref).toBe("Rg. A-1 · Muster · 01.08.2026 · 10,00 €");
+  });
+
   it("list_receipts with invoicenumbers (missing_invoicenumbers)", async () => {
     const client = await connect(() => ({ data: [] }));
     const res = await client.callTool({ name: "list_receipts", arguments: { list_direction: "both", invoicenumbers: ["RE-X"] } });

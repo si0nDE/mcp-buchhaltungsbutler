@@ -15,6 +15,7 @@ import { createReceiptsTools } from "./receipts.js";
 import { createReportsTools } from "./reports.js";
 import { createTransactionsTools } from "./transactions.js";
 import { createUstVaTools } from "./ustva-mapping.js";
+import { createVatAuditTools } from "./vat-audit.js";
 import { createVatPreviewTools } from "./vat-preview.js";
 import { createVersionTools } from "./version.js";
 import type { ToolDef } from "./types.js";
@@ -38,6 +39,7 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createMonthEndTools(client),
     ...createUstVaTools(),
     ...createVatPreviewTools(client),
+    ...createVatAuditTools(client),
     ...createVersionTools(),
   ];
 }
