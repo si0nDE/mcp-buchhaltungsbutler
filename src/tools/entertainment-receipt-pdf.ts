@@ -58,6 +58,16 @@ export interface ComputedAmounts {
   nonDeductible: number;
 }
 
+// Page data for the "Originalrechnung fehlt" variant. Page 1 shows the amounts and the split, page 2 the notes.
+export interface MissingInvoicePageData {
+  gross: number;
+  tip: number;
+  deductibleLabel: string;
+  nonDeductibleLabel: string;
+  subtitle: string;
+  noteLines: string[];
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
