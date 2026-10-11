@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { BBClient, BBListResult } from "../bb-client/client.js";
+import { receiptDisplayRef } from "../formatting/display-ref.js";
 import { trimList } from "../formatting/trim.js";
 import { assertDeliveryDate, DATE_DELIVERY_GUIDE } from "./bhb-systematik.js";
 import { extractDateCandidates } from "./bewirtung-plausibility.js";
-import { extractReceiptText } from "./receipt-text-extraction.js";
+import { countPdfPages, extractReceiptText } from "./receipt-text-extraction.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type CallToolResult, type ToolDef } from "./types.js";
 
 interface ReceiptGetResult {
@@ -72,6 +73,11 @@ function listReceiptWarnings(
     );
   }
   return warnings;
+}
+
+// display_ref wird aus den ungekürzten Zeilen gebildet und auch bei der Kurzfassung mitgeliefert.
+function withDisplayRefs(rows: Array<Record<string, unknown>>, trimmed: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return trimmed.map((t, i) => ({ display_ref: receiptDisplayRef(rows[i]), ...t }));
 }
 
 function withListWarnings(result: CallToolResult, warnings: string[]): CallToolResult {
@@ -165,7 +171,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     const { full, ...rest } = args;
     const { rows, truncated } = await fetchDirection(direction, rest);
     return withListWarnings(
-      ok(trimList(rows, SUMMARY_FIELDS, full ?? false), truncated ? { truncated } : undefined),
+      ok(withDisplayRefs(rows, trimList(rows, SUMMARY_FIELDS, full ?? false)), truncated ? { truncated } : undefined),
       listReceiptWarnings(rows, rest)
     );
   }
@@ -198,7 +204,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         const rows = lookups.flatMap((l) => l.rows.map((r) => ({ ...r, list_direction: l.dir })));
         const missing = invoicenumbers.filter((n) => !lookups.some((l) => l.n === n && l.rows.length > 0));
         const response = withListWarnings(
-          ok(trimList(rows, [...SUMMARY_FIELDS, "list_direction"], full ?? false), { missing_invoicenumbers: missing }),
+          ok(withDisplayRefs(rows, trimList(rows, [...SUMMARY_FIELDS, "list_direction"], full ?? false)), { missing_invoicenumbers: missing }),
           listReceiptWarnings(rows, filters)
         );
         if (missing.length > 0) response.content.push({ type: "text", text: `No receipt found for: ${missing.join(", ")}.` });
@@ -221,7 +227,7 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       const paged = merged.slice(offset ?? 0, win);
       const truncated = inbound.truncated || outbound.truncated;
       return withListWarnings(
-        ok(trimList(paged, [...SUMMARY_FIELDS, "list_direction"], full ?? false), truncated ? { truncated } : undefined),
+        ok(withDisplayRefs(paged, trimList(paged, [...SUMMARY_FIELDS, "list_direction"], full ?? false)), truncated ? { truncated } : undefined),
         listReceiptWarnings(paged, filters)
       );
     },
@@ -236,46 +242,88 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       .describe(
         "For a text-based PDF receipt, return the extracted text as file_text instead of the raw base64 " +
           "file_content - much cheaper on context than get_file alone. Implies fetching the file regardless " +
-          "of get_file. Falls back to the normal file_content behavior if the receipt isn't a PDF or nothing " +
-          "could be extracted (e.g. a scanned image with no text layer)."
+          "of get_file. Without a text layer (scan, image, XML) the answer carries file_text: null, reason (no_text_layer / not_a_pdf), " +
+          "pages and file_size_base64_chars instead of the file; the base64 comes back only if get_file: true is set explicitly " +
+          "(can be several MB: render or inspect the receipt in the BHB UI instead)."
       ),
+    page_count_only: z
+      .boolean()
+      .optional()
+      .describe("Return the receipt metadata plus the page count of a PDF (pages) and no file content. Cheap check before reading a long receipt."),
   };
 
   const getReceipt = defineTool({
     name: "get_receipt",
-    description: "Get a single receipt by its id_by_customer.",
+    description:
+      "Get a single receipt by its id_by_customer. The answer carries display_ref (\"Rg. <number> · <counterparty> · <date> · <amount>\"): name receipts " +
+      "that way to the user, who searches the BHB UI by invoice number, never by id_by_customer. get_file: true returns the raw base64 file " +
+      "(can be 7 MB for a photo scan); for reading use extract_text, for the page count page_count_only.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: getShape,
     async handler(args) {
-      const { id_by_customer, extract_text, ...rest } = args;
-      const params = extract_text ? { ...rest, get_file: true } : rest;
+      const { id_by_customer, extract_text, page_count_only, ...rest } = args;
+      const params = extract_text || page_count_only ? { ...rest, get_file: true } : rest;
       const result = await client.call<ReceiptGetResult>("receiptsGetIdByCustomer", params, {
         idSuffix: id_by_customer,
       });
+      const display_ref = result.data ? receiptDisplayRef(result.data) : "";
+      const withRef = (extra: Record<string, unknown>) => ({ ...extra, ...(display_ref ? { display_ref } : {}) });
 
-      if (extract_text && result.data?.file_type === "pdf" && result.data.file_content) {
-        const text = await extractReceiptText(result.data.file_content);
-        if (text !== undefined) {
-          const { file_content, ...restData } = result.data;
-          const dates = extractDateCandidates(text);
-          return ok({
-            ...result,
-            data: { ...restData, file_text: text },
-            date_candidates: dates,
-            ...(dates.length > 1
-              ? {
-                  warnings: [
-                    `Der Belegtext nennt mehrere verschiedene Daten (${dates.join(", ")}): Rechnungs-, Leistungs- oder Kassendatum anhand ` +
-                      "des gerenderten Belegbilds prüfen, bevor eine Unstimmigkeit gemeldet wird.",
-                  ],
-                }
-              : {}),
-          });
+      if ((extract_text || page_count_only) && result.data) {
+        const { file_content, ...restData } = result.data;
+        const isPdf = result.data.file_type === "pdf" && typeof file_content === "string" && file_content.length > 0;
+        const pages = isPdf ? await countPdfPages(file_content as string) : undefined;
+
+        if (page_count_only) {
+          return ok(withRef({ ...result, data: { ...restData, ...(pages !== undefined ? { pages } : {}) } }));
         }
+
+        const text = isPdf ? await extractReceiptText(file_content as string) : undefined;
+        if (text !== undefined) {
+          const dates = extractDateCandidates(text);
+          return ok(
+            withRef({
+              ...result,
+              data: { ...restData, file_text: text, ...(pages !== undefined ? { pages } : {}) },
+              date_candidates: dates,
+              ...(dates.length > 1
+                ? {
+                    warnings: [
+                      `Der Belegtext nennt mehrere verschiedene Daten (${dates.join(", ")}): Rechnungs-, Leistungs- oder Kassendatum anhand ` +
+                        "des gerenderten Belegbilds prüfen, bevor eine Unstimmigkeit gemeldet wird.",
+                    ],
+                  }
+                : {}),
+            })
+          );
+        }
+
+        // Kein Text: nie stillschweigend das Base64 liefern (kann mehrere MB sein), außer get_file: true wurde ausdrücklich gesetzt.
+        const reason = isPdf ? "no_text_layer" : "not_a_pdf";
+        if (args.get_file === true) {
+          return ok(withRef({ ...result, data: { ...result.data, file_text: null, reason } }));
+        }
+        return ok(
+          withRef({
+            ...result,
+            data: {
+              ...restData,
+              file_text: null,
+              reason,
+              ...(pages !== undefined ? { pages } : {}),
+              file_size_base64_chars: typeof file_content === "string" ? file_content.length : 0,
+            },
+            warnings: [
+              reason === "no_text_layer"
+                ? "Der PDF-Beleg hat keine Textebene (Scan oder Foto): Inhalt nicht lesbar, nichts geprüft. Beleg in der BHB-Oberfläche ansehen oder get_file: true setzen (Base64, kann mehrere MB groß sein)."
+                : "Der Beleg ist kein PDF: kein Text extrahierbar. Mit get_file: true bekommst du die Datei als Base64.",
+            ],
+          })
+        );
       }
 
-      return ok(result);
+      return ok(withRef({ ...result }));
     },
   });
 
@@ -509,7 +557,9 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
           "Die zugeordneten Zahlungen weichen vom Belegbetrag ab (Sammelzahlung, Skonto oder Gebühren?): die Anzeige 'unter-/überzahlt' kann dann falsch sein."
         );
       }
+      const display_ref = receiptDisplayRef(receipt);
       return ok({
+        ...(display_ref ? { display_ref } : {}),
         receipt,
         transactions,
         postings,

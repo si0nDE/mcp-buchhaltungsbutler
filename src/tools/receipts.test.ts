@@ -50,6 +50,7 @@ describe("receipts tools", () => {
     });
     expect(JSON.parse(result.content[0].text)).toEqual([
       {
+        display_ref: "Rg. R-1 · ACME · 01.01.2026 · 10,00 €",
         id_by_customer: "1",
         type: "invoice inbound",
         date: "2026-01-01",
@@ -182,7 +183,7 @@ describe("receipts tools", () => {
     expect(data.data).not.toHaveProperty("file_content");
   });
 
-  it("get_receipt with extract_text falls back to file_content when the receipt isn't a PDF", async () => {
+  it("get_receipt with extract_text reports not_a_pdf instead of silently returning the file", async () => {
     const client = mockClient({
       success: true,
       data: { id_by_customer: "42", file_type: "xml", file_content: "PHhtbC8+" },
@@ -191,13 +192,29 @@ describe("receipts tools", () => {
 
     const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
 
-    const data = result.structuredContent!.data as { data: { file_text?: string; file_content?: string } };
-    expect(data.data.file_content).toBe("PHhtbC8+");
-    expect(data.data).not.toHaveProperty("file_text");
+    const data = result.structuredContent!.data as { data: Record<string, unknown>; warnings?: string[] };
+    expect(data.data).not.toHaveProperty("file_content");
+    expect(data.data.file_text).toBeNull();
+    expect(data.data.reason).toBe("not_a_pdf");
+    expect(data.warnings).toHaveLength(1);
   });
 
-  it("get_receipt with extract_text falls back to file_content when nothing could be extracted (e.g. a scan)", async () => {
+  it("get_receipt with extract_text and explicit get_file: true still returns the file when there is no text", async () => {
+    const client = mockClient({
+      success: true,
+      data: { id_by_customer: "42", file_type: "xml", file_content: "PHhtbC8+" },
+    });
+    const [, getReceipt] = createReceiptsTools(client);
+
+    const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true, get_file: true });
+
+    const data = result.structuredContent!.data as { data: Record<string, unknown> };
+    expect(data.data.file_content).toBe("PHhtbC8+");
+  });
+
+  it("get_receipt with extract_text reports no_text_layer with page count for a scan, without base64", async () => {
     const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([200, 200]);
     pdfDoc.addPage([200, 200]);
     const fileContent = Buffer.from(await pdfDoc.save()).toString("base64");
 
@@ -209,9 +226,40 @@ describe("receipts tools", () => {
 
     const result = await getReceipt.handler({ id_by_customer: 42, extract_text: true });
 
-    const data = result.structuredContent!.data as { data: { file_text?: string; file_content?: string } };
-    expect(data.data.file_content).toBe(fileContent);
-    expect(data.data).not.toHaveProperty("file_text");
+    const data = result.structuredContent!.data as { data: Record<string, unknown> };
+    expect(data.data).not.toHaveProperty("file_content");
+    expect(data.data.file_text).toBeNull();
+    expect(data.data.reason).toBe("no_text_layer");
+    expect(data.data.pages).toBe(2);
+    expect(data.data.file_size_base64_chars).toBe(fileContent.length);
+  });
+
+  it("get_receipt with page_count_only returns metadata and pages without file content", async () => {
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([200, 200]);
+    pdfDoc.addPage([200, 200]);
+    pdfDoc.addPage([200, 200]);
+    const fileContent = Buffer.from(await pdfDoc.save()).toString("base64");
+    const client = mockClient({
+      success: true,
+      data: { id_by_customer: "42", file_type: "pdf", file_content: fileContent, invoicenumber: "R-1", counterparty: "Muster GmbH", date: "2026-07-05", amount: "11.90" },
+    });
+    const [, getReceipt] = createReceiptsTools(client);
+
+    const result = await getReceipt.handler({ id_by_customer: 42, page_count_only: true });
+
+    expect(client.call).toHaveBeenCalledWith("receiptsGetIdByCustomer", { get_file: true }, { idSuffix: 42 });
+    const data = result.structuredContent!.data as { data: Record<string, unknown>; display_ref?: string };
+    expect(data.data.pages).toBe(3);
+    expect(data.data).not.toHaveProperty("file_content");
+    expect(data.display_ref).toBe("Rg. R-1 · Muster GmbH · 05.07.2026 · 11,90 €");
+  });
+
+  it("get_receipt adds display_ref", async () => {
+    const client = mockClient({ success: true, data: { id_by_customer: "42", invoicenumber: "R-1", counterparty: "Muster GmbH", date: "2026-07-05", amount: "11.90" } });
+    const [, getReceipt] = createReceiptsTools(client);
+    const result = await getReceipt.handler({ id_by_customer: 42 });
+    expect((result.structuredContent!.data as { display_ref?: string }).display_ref).toBe("Rg. R-1 · Muster GmbH · 05.07.2026 · 11,90 €");
   });
 
   it("create_receipts calls receiptsAddBatch with a receipts array", async () => {

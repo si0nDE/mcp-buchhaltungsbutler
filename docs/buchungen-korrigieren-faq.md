@@ -49,6 +49,22 @@ Nutzers gedacht. Ganze Zahlungen löscht `delete_transaction` (bei GoBD-gesicher
 Beleg prüfen → Beleg buchen → Zahlung zuweisen → Zahlung buchen. Wird direkt über die Zahlung gebucht, fehlt der
 Belegbezug und eine Korrektur wird nötig.
 
+## Beleg auf einem Gesellschafter-Verrechnungskonto neu buchen
+
+Ist ein Beleg über eine Zahlung auf einem Verrechnungskonto (Typ „account“, z. B. 730/731/732) gebucht, ist die Buchung eine
+Transaktionsbuchung. In einer Live-Sitzung fand `cancel_posting` eine solche Buchung weder als `transaction` noch als
+`receipt` noch als `free` („nicht gefunden“); ob die Buchung zu dem Zeitpunkt schon in der Oberfläche gelöscht war, ist
+offen (nicht reproduziert). Gelöscht und anschließend sauber neu gebucht wurde so: Buchung in der Oberfläche löschen, dann
+`add_transaction_postings` auf die Transaktion des Verrechnungskontos mit dem Beleg als Zuordnung (erst mit `dry_run`).
+„Nicht gefunden“ heißt nicht „existiert nie“: vor dem Neubuchen `get_receipt_overview` aufrufen, damit nicht doppelt gebucht wird.
+
+## Ist-Versteuerung und Steuerkonten
+
+Bei Ist-Versteuerung bilden die Steuerkonten (z. B. SKR03 1776) die Umsatzsteuer nach Zahlungseingang ab; in einer Sitzung stimmte
+das Konto 1776 exakt mit den im Quartal vereinnahmten Entgelten überein. Ein `date_vat_effective` einer Ausgangsrechnung in
+einem anderen Quartal ist dann kein Fehler. Deshalb nicht jede Rechnung einzeln gegen die Zahlungen prüfen, sondern die
+Kontensummen (`preview_vat_impact`, `elster_estimate`) gegen den USt-VA-Entwurf in der Oberfläche vergleichen.
+
 ## Nicht live verifiziert
 
 Das Verhalten von `/postings/cancel` bei einzelnen Splits einer Zahlung/eines Belegs und das Datum der Gegenbuchung sind

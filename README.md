@@ -123,7 +123,7 @@ Streamable HTTP service instead of stdio, container-ready.
 | Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Invoices | `create_invoice`, `create_einvoice`, `create_invoice_correction` |
 | Month-end | `check_month_end` (read-only closing checks), `calculate_account_balance` |
-| USt-VA | `get_ustva_position` (which VAT-return field an account lands in), `preview_vat_impact` (sums of the tax accounts for a period, not the ELSTER figure) |
+| USt-VA | `get_ustva_position` (which VAT-return field an account lands in), `preview_vat_impact` (sums of the tax accounts for a period plus `elster_estimate` with the Bemessungsgrundlagen floored to full euros like ELSTER; still not the ELSTER figure) |
 | Booking guide | `get_booking_guide` (documented BHB special cases: Skonto, Geldtransit, Auslagen, RAP, OSS, foreign currency, ...) |
 | Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |

@@ -121,7 +121,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 | Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_einvoice` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
-| USt-VA | `get_ustva_position`, `preview_vat_impact` (Summen der Steuerkonten, nicht die ELSTER-Zahl) |
+| USt-VA | `get_ustva_position`, `preview_vat_impact` (Summen der Steuerkonten und `elster_estimate` mit auf volle Euro abgerundeten Bemessungsgrundlagen wie in ELSTER; trotzdem nicht die ELSTER-Zahl) |
 
 ## Falsche Buchungen korrigieren (`cancel_posting`)
 

@@ -40,6 +40,33 @@ export function sumLedger(rows: Array<Record<string, unknown>>) {
   return { debit: round(debit), credit: round(credit), rows: rows.length };
 }
 
+// ELSTER rundet die Bemessungsgrundlagen (Kz 81, 86, 46) auf volle Euro ab und rechnet die Steuer daraus; die Kontensummen enthalten
+// die Steuer aus den ungerundeten Beträgen (Beispiel: Kz 81 8.065,88 → 8.065, 19 % = 1.532,35 statt 1.532,52). Die Bemessungsgrundlage
+// wird hier aus dem Steuerkonto zurückgerechnet (Steuer ÷ Satz, auf Cent gerundet), nicht aus den Nettobeträgen der Buchungen.
+const ELSTER_BASES: ReadonlyArray<{ skr03: number; kz: number; taxKz?: number; rate: number; label: string }> = [
+  { skr03: 1776, kz: 81, rate: 0.19, label: "Umsätze 19 %" },
+  { skr03: 1771, kz: 86, rate: 0.07, label: "Umsätze 7 %" },
+  { skr03: 1787, kz: 46, taxKz: 47, rate: 0.19, label: "§ 13b, Steuer auf Leistungen (Konto 1787 fasst Kz 46/47 und 84/85 zusammen)" },
+];
+
+export function elsterEstimate(accounts: Array<{ account: number; side: Side; kennziffer: number; amount: number }>, chart: "SKR03" | "SKR04") {
+  const amountOf = (skr03: number) => {
+    const acc = TAX_ACCOUNTS.find((a) => a.skr03 === skr03)!;
+    const number = chart === "SKR03" ? acc.skr03 : acc.skr04;
+    return accounts.find((a) => a.account === number)?.amount ?? 0;
+  };
+  const kennziffern = ELSTER_BASES.map((b) => {
+    const accountTax = amountOf(b.skr03);
+    const base = Math.floor(round(accountTax / b.rate));
+    return { kz: b.kz, tax_kz: b.taxKz, label: b.label, bemessungsgrundlage: base, steuer: round(base * b.rate), steuer_laut_konto: accountTax };
+  });
+  const vorsteuer66 = round(amountOf(1571) + amountOf(1576));
+  const vorsteuer67 = amountOf(1577);
+  const umsatzsteuer = round(kennziffern.reduce((s, k) => s + k.steuer, 0));
+  const zahllast = round(umsatzsteuer - vorsteuer66 - vorsteuer67);
+  return { kennziffern, vorsteuer_kz66: vorsteuer66, vorsteuer_kz67: vorsteuer67, umsatzsteuer, zahllast_oder_erstattung: zahllast };
+}
+
 export function createVatPreviewTools(client: BBClient): [ToolDef] {
   const shape = {
     date_from: z.string().describe("YYYY-MM-DD, e.g. 2026-07-01 for Q3."),
@@ -86,6 +113,7 @@ export function createVatPreviewTools(client: BBClient): [ToolDef] {
       const vorsteuer = total("vorsteuer");
       const umsatzsteuer = total("umsatzsteuer");
       const zahllast = round(umsatzsteuer - vorsteuer);
+      const elster = elsterEstimate(accounts, chart);
       return ok({
         period: { date_from: args.date_from, date_to: args.date_to, base: args.base },
         chart,
@@ -94,9 +122,15 @@ export function createVatPreviewTools(client: BBClient): [ToolDef] {
         vorsteuer,
         zahllast_oder_erstattung: zahllast,
         result: zahllast >= 0 ? "Zahllast" : "Erstattung",
+        elster_estimate: {
+          ...elster,
+          differenz_zu_konten: round(elster.zahllast_oder_erstattung - zahllast),
+          hinweis:
+            "Schätzung im ELSTER-Format: Bemessungsgrundlagen (Kz 81, 86, 46) auf volle Euro abgerundet, Steuer daraus. Bemessungsgrundlage aus dem Steuerkonto zurückgerechnet; Sondervorauszahlung, Vorjahres-Salden und Dauerfristverlängerung fehlen. Konto 1787/1577 fasst § 13b-Fälle mit den Schlüsseln 506 (Kz 46/47) und 511 (Kz 84/85) zusammen, daher steht alles unter Kz 46/47 und Kz 67; bei gemischten Fällen kann die Rundung je Kennziffer um einige Cent abweichen. Kz 67 ist der gebuchte Wert.",
+        },
         notes: [
-          "Nicht die ELSTER-Zahl: USt-VA-Entwurf in der BHB-Oberfläche gegenprüfen.",
-          "§ 13b: Umsatzsteuer und Vorsteuer heben sich in der Zahllast auf. Welche Kennziffern BHB für 19_both_511 ausgibt (EU oder Drittland), ist nicht bestätigt: im Entwurf prüfen (get_booking_guide reverse_charge_drittland).",
+          "Nicht die ELSTER-Zahl: USt-VA-Entwurf in der BHB-Oberfläche gegenprüfen; elster_estimate rundet wie ELSTER.",
+          "§ 13b: Umsatzsteuer und Vorsteuer heben sich in der Zahllast auf. Kennziffern: 19_both_506 = Kz 46/47, 19_both_511 = Kz 84/85 (Vorsteuer beider Kz 67, verifiziert).",
           "Bei Ist-Versteuerung zählt der Zahlungszeitpunkt. Die Kontenblätter zeigen, was BHB für den Zeitraum auswertet; die Besteuerungsart, die für den Zeitraum galt, darf nicht nachträglich gewechselt worden sein.",
           "Steuerkonten aus Buchungen mit abweichendem Leistungsdatum fallen je nach base in andere Perioden: base: \"date\" zum Vergleich.",
         ],

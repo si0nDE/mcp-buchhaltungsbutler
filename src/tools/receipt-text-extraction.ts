@@ -54,3 +54,13 @@ export async function extractReceiptText(base64Pdf: string): Promise<string | un
     return undefined;
   }
 }
+
+// Seitenzahl eines PDFs, undefined bei Fehler (kein PDF, beschädigt).
+export async function countPdfPages(base64Pdf: string): Promise<number | undefined> {
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(Buffer.from(base64Pdf, "base64")));
+    return pdf.numPages;
+  } catch {
+    return undefined;
+  }
+}
