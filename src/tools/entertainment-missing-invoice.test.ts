@@ -94,4 +94,45 @@ describe("planMissingInvoice", () => {
     expect(notes).toContain("2026-07-31");
     expect(notes).toContain("1001");
   });
+
+  it("rejects sole_proprietor_self on its own, with the Verpflegungspauschale hint", () => {
+    expect(() => planMissingInvoice({ ...base, entertainment_type: "sole_proprietor_self" }, { requireCounterparty: true })).toThrow(/Verpflegungs/);
+  });
+
+  it("puts the practice warnings and Q42 into the page notes, with the Vorsteuer sentence once", () => {
+    const notes = planMissingInvoice(base, { requireCounterparty: true }).page.noteLines.join("\n");
+    expect(notes).toContain("X R 57/09");
+    expect(notes).toContain("Q42");
+    expect(notes.split("Kein Vorsteuerabzug").length - 1).toBe(1);
+  });
+
+  it("puts the conservative 100 % note into the page notes, with the Vorsteuer sentence once", () => {
+    const notes = planMissingInvoice(
+      { ...base, missing_invoice_treatment: "conservative_100_nondeductible" },
+      { requireCounterparty: true }
+    ).page.noteLines.join("\n");
+    expect(notes).toContain("100 % nicht abziehbar");
+    expect(notes.split("Kein Vorsteuerabzug").length - 1).toBe(1);
+  });
+
+  it("puts the internal R 4.10 note into the page notes for non-business types", () => {
+    const notes = planMissingInvoice(
+      { ...base, entertainment_type: "internal_employees", missing_invoice_treatment: undefined },
+      { requireCounterparty: true }
+    ).page.noteLines.join("\n");
+    expect(notes).toContain("R 4.10 Abs. 5 Satz 9");
+  });
+
+  it("rejects a gross amount of 0 or below", () => {
+    expect(() => planMissingInvoice({ ...base, gross_amount: 0 }, { requireCounterparty: true })).toThrow(/gross_amount/);
+    expect(() => planMissingInvoice({ ...base, gross_amount: -5 }, { requireCounterparty: true })).toThrow(/gross_amount/);
+  });
+
+  it("rejects a NaN gross amount", () => {
+    expect(() => planMissingInvoice({ ...base, gross_amount: Number.NaN }, { requireCounterparty: true })).toThrow(/gross_amount/);
+  });
+
+  it("rejects a negative tip", () => {
+    expect(() => planMissingInvoice({ ...base, tip: -1 }, { requireCounterparty: true })).toThrow(/tip/);
+  });
 });

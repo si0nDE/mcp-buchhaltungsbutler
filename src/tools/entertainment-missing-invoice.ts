@@ -67,6 +67,7 @@ const STATUS_TEXT: Record<Exclude<InvoiceStatus, "present">, string> = {
 };
 
 export function planMissingInvoice(args: MissingInvoiceArgs, opts: { requireCounterparty: boolean }): MissingInvoicePlan {
+  assertGeneratorType(args.entertainment_type);
   const status = args.original_invoice_status;
   if (status === "present") {
     throw new Error('planMissingInvoice is only for original_invoice_status "missing_requested" or "lost".');
@@ -94,6 +95,12 @@ export function planMissingInvoice(args: MissingInvoiceArgs, opts: { requireCoun
   const invalid: string[] = [];
   if ([args.food_net, args.food_vat, args.drinks_net, args.drinks_vat].some((v) => (v ?? 0) !== 0)) {
     invalid.push("food_*/drinks_* müssen im Modus „Rechnung fehlt“ leer sein: eine erfundene Aufteilung wäre falsch");
+  }
+  if (args.gross_amount !== undefined && !(Number.isFinite(args.gross_amount) && args.gross_amount > 0)) {
+    invalid.push("gross_amount muss eine endliche Zahl größer 0 sein");
+  }
+  if (args.tip !== undefined && !(Number.isFinite(args.tip) && args.tip >= 0)) {
+    invalid.push("tip muss eine endliche Zahl größer oder gleich 0 sein");
   }
   if (args.gross_amount !== undefined && (args.tip ?? 0) > args.gross_amount) {
     invalid.push("tip darf nicht größer sein als gross_amount (gross_amount enthält das Trinkgeld)");
@@ -134,9 +141,10 @@ export function planMissingInvoice(args: MissingInvoiceArgs, opts: { requireCoun
   const treatment: MissingInvoiceTreatment | "internal" = isBusiness ? args.missing_invoice_treatment! : "internal";
   const split = isBusiness ? splitGross(gross, treatment as MissingInvoiceTreatment) : { deductible: gross, nonDeductible: 0 };
 
+  const businessWarnings = isBusiness ? businessNoInvoiceWarnings(treatment as MissingInvoiceTreatment) : [];
   const warnings = [
     ...contextWarnings.filter((w) => !w.includes("entertainment_type fehlt")),
-    ...(isBusiness ? businessNoInvoiceWarnings(treatment as MissingInvoiceTreatment) : [INTERNAL_NO_INVOICE_WARNING]),
+    ...(isBusiness ? businessWarnings : [INTERNAL_NO_INVOICE_WARNING]),
     ...consistencyWarnings(args.entertainment_type, args.participant_relations, args.shareholder_manager_treatment),
   ];
   if (practiceOver250) {
@@ -155,7 +163,8 @@ export function planMissingInvoice(args: MissingInvoiceArgs, opts: { requireCoun
   }
   if (evidence?.description?.trim()) noteLines.push(`Zahlungsnachweis: ${evidence.description.trim()}`);
   noteLines.push("Aufteilung Speisen/Getränke und Umsatzsteuer: nicht bekannt. Kein Vorsteuerabzug (§ 15 Abs. 1 Satz 1 Nr. 1 UStG).");
-  noteLines.push(...(isBusiness ? businessNoInvoiceWarnings(treatment as MissingInvoiceTreatment).slice(1) : [INTERNAL_NO_INVOICE_WARNING]));
+  // businessWarnings[0] is the "Kein Vorsteuerabzug" sentence, already its own note line above.
+  noteLines.push(...(isBusiness ? businessWarnings.slice(1) : [INTERNAL_NO_INVOICE_WARNING]));
   if (practiceOver250) noteLines.push(warnings[warnings.length - 1]);
 
   const labels = isBusiness
