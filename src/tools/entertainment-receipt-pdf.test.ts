@@ -550,6 +550,23 @@ describe("renderEntertainmentReceiptCover without an invoice", () => {
     expect(text).not.toContain("Position");
   });
 
+  it("continues the notes on further pages instead of dropping text", async () => {
+    const many = Array.from(
+      { length: 80 },
+      (_, i) => `Vermerk Nr. ${i}: Beispieltext zur Dokumentation des Vorgangs mit ausreichend Länge, damit der Absatz umbrochen wird und mehrere Zeilen belegt.`
+    );
+    const bytes = await renderEntertainmentReceiptCover(fields, amounts, {
+      kleinunternehmer: false,
+      missingInvoice: { ...missingInvoice, noteLines: many },
+    });
+    expect((await PDFDocument.load(bytes)).getPageCount()).toBeGreaterThan(2);
+    const text = (await extractReceiptText(Buffer.from(bytes).toString("base64"))) ?? "";
+    expect(text).toContain("Vermerk Nr. 0:");
+    expect(text).toContain("Vermerk Nr. 79");
+    const short = await renderEntertainmentReceiptCover(fields, amounts, { kleinunternehmer: false, missingInvoice });
+    expect((await PDFDocument.load(short)).getPageCount()).toBe(2);
+  });
+
   it("leaves the normal page untouched", async () => {
     const normal = await renderEntertainmentReceiptCover(
       { ...fields, foodNet: 20, foodVat: 1.4 },

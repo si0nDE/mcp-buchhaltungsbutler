@@ -576,13 +576,20 @@ export async function renderEntertainmentReceiptCover(
   }
 
   if (options.missingInvoice) {
-    const notes = doc.addPage(PageSizes.A4);
+    const heading = "Vermerke zur fehlenden Originalrechnung";
+    let notes = doc.addPage(PageSizes.A4);
     let ny = height - MARGIN;
-    notes.drawText("Vermerke zur fehlenden Originalrechnung", { x: MARGIN, y: ny, size: 14, font: bold, color: BLACK });
+    notes.drawText(heading, { x: MARGIN, y: ny, size: 14, font: bold, color: BLACK });
     ny -= 28;
     for (const paragraph of options.missingInvoice.noteLines) {
       for (const line of wrapText(paragraph, font, 9.5, contentWidth)) {
-        if (ny < MARGIN) break;
+        // Never drop text: continue on a further page when the bottom margin is reached.
+        if (ny < MARGIN) {
+          notes = doc.addPage(PageSizes.A4);
+          ny = height - MARGIN;
+          notes.drawText(`${heading} (Fortsetzung)`, { x: MARGIN, y: ny, size: 11, font: bold, color: BLACK });
+          ny -= 24;
+        }
         notes.drawText(line, { x: MARGIN, y: ny, size: 9.5, font, color: BLACK });
         ny -= 13;
       }
