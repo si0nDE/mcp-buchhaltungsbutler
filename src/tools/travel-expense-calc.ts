@@ -55,6 +55,7 @@ export interface LodgingFlatLine {
 
 export interface TripResult {
   days: DayResult[];
+  /** Informational: nights derived from the times (before the transit exclusion) or lodgingNights; lodgingFlat.length is what is paid. */
   nights: number;
   lodgingFlat: LodgingFlatLine[];
   allowanceTotal: number;
@@ -121,7 +122,7 @@ export function computeTrip(input: TripInput): TripResult {
   const effectiveReturn = returnMs % DAY_MS === 0 ? returnMs - 60_000 : returnMs;
   const lastDay = startOfDay(effectiveReturn);
   const multiDay = lastDay > firstDay;
-  if ((lastDay - firstDay) / DAY_MS > 366) throw new Error("Die Reise darf höchstens 366 Kalendertage umfassen.");
+  if ((lastDay - firstDay) / DAY_MS > 365) throw new Error("Die Reise darf höchstens 366 Kalendertage umfassen.");
   if (input.lodgingNights !== undefined && (!Number.isInteger(input.lodgingNights) || input.lodgingNights < 0)) {
     throw new Error("lodgingNights muss eine nicht-negative ganze Zahl sein.");
   }
@@ -141,11 +142,14 @@ export function computeTrip(input: TripInput): TripResult {
   // R 9.6 Abs. 3 LStR: days in between on long flights (more than two calendar days) use Österreich,
   // days in between on ship passages use Luxemburg.
   const transitCountry = new Map<string, string>();
+  // The night of a leg's start date is spent in the air or on board when the leg has days in between.
+  const transitNights = new Set<string>();
   stops.forEach((stop, index) => {
     if (stop.transport !== "flight" && stop.transport !== "ship") return;
     const legStart = startOfDay(index === 0 ? departure : stops[index - 1].arrivalMs);
     const legEnd = startOfDay(stop.arrivalMs);
     if (stop.transport === "flight" && (legEnd - legStart) / DAY_MS < 2) return;
+    if (legEnd - legStart > DAY_MS) transitNights.add(dayKey(legStart));
     for (let day = legStart + DAY_MS; day < legEnd; day += DAY_MS) {
       transitCountry.set(dayKey(day), stop.transport === "flight" ? "Österreich" : "Luxemburg");
     }
@@ -251,7 +255,7 @@ export function computeTrip(input: TripInput): TripResult {
   const lodgingDates: number[] = [];
   for (let night = 0; night < derivedNights; night += 1) {
     const day = firstDay + night * DAY_MS;
-    if (!transitCountry.has(dayKey(day))) lodgingDates.push(day);
+    if (!transitCountry.has(dayKey(day)) && !transitNights.has(dayKey(day))) lodgingDates.push(day);
   }
   if (input.lodgingNights !== undefined && input.lodgingNights > lodgingDates.length) {
     throw new Error(
@@ -267,8 +271,11 @@ export function computeTrip(input: TripInput): TripResult {
       lodgingFlat.push({ date: dayKey(day), country: rate.country, amount: rate.country === DOMESTIC_COUNTRY ? 20 : rate.night });
     }
     warnings.add(
-      `Übernachtungspauschale für ${lodgingFlat.length} ${lodgingFlat.length === 1 ? "Nacht" : "Nächte"} angesetzt (aus den Zeiten abgeleitet: ` +
-        "Nacht der Heimreise vor 06:00 und Nächte im Flugzeug oder Schiff zählen nicht; Anzahl mit lodgingNights korrigieren)."
+      `Übernachtungspauschale für ${lodgingFlat.length} ${lodgingFlat.length === 1 ? "Nacht" : "Nächte"} angesetzt (${
+        input.lodgingNights === undefined
+          ? "aus den Zeiten abgeleitet: Nacht der Heimreise vor 06:00 und Nächte im Flugzeug oder Schiff zählen nicht; Anzahl mit lodgingNights korrigieren"
+          : "Anzahl aus lodgingNights übernommen"
+      }).`
     );
   }
 
