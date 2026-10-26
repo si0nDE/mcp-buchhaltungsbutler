@@ -65,7 +65,7 @@ const FOOTER_BASIS: Record<TravellerType, string> = {
 };
 const TRAVELLER_LABEL: Record<TravellerType, string> = {
   employee: "Arbeitnehmer/in",
-  self_employed: "Selbstständig bzw. Geschäftsführung",
+  self_employed: "Selbstständig bzw. Gesellschafter-Geschäftsführung ohne Anstellungsvertrag",
 };
 
 export async function renderTravelExpenseReport(
@@ -206,7 +206,7 @@ export async function renderTravelExpenseReport(
       c.category === "fare" ? "Fahrt" : c.category === "lodging" ? "Übernachtung" : "Nebenkosten",
       euro(c.grossEur),
       euro(c.vatEur),
-      c.receiptMissing ? "Beleg fehlt" : c.vorsteuer ? "Vorsteuer" : "ohne VSt",
+      c.paidBy === "company" ? "vom Unternehmen gezahlt" : c.receiptMissing ? "Beleg fehlt" : c.vorsteuer ? "Vorsteuer" : "ohne VSt",
     ]),
   ];
   if (costRows.length > 0) {
@@ -225,19 +225,22 @@ export async function renderTravelExpenseReport(
   }
 
   // Sum box and confirmation stay together on one page
-  ensure(170);
+  const t = data.totals;
+  const extraRow = t.companyPaid > 0 ? 16 : 0;
+  ensure(170 + extraRow);
   y -= 24;
-  const boxHeight = 60;
+  const boxHeight = 60 + extraRow;
   page.drawRectangle({ x: MARGIN, y: y - boxHeight + 14, width: contentWidth, height: boxHeight, color: PANEL });
   const sumRow = (label: string, value: string, strong = false) => {
     draw(label, MARGIN + 12, 10, strong ? bold : font);
     drawRight(value, rightX - 12, 10, strong ? bold : font);
     y -= 16;
   };
-  const t = data.totals;
   sumRow("Gesamtbetrag", `${euro(t.total)} €`);
   sumRow("abzüglich Vorschuss", `${euro(t.advance)} €`);
   sumRow("Erstattungsbetrag", `${euro(t.reimbursement)} €`, true);
+  // Informational only: booked through their own receipts.
+  if (t.companyPaid > 0) sumRow("nachrichtlich: vom Unternehmen gezahlt (nicht im Gesamtbetrag)", `${euro(t.companyPaid)} €`);
   y -= 14;
 
   // Confirmation
@@ -248,11 +251,7 @@ export async function renderTravelExpenseReport(
   y -= 14;
   draw(`Elektronisch bestätigt: ${formatConfirmationTimestamp(options.confirmedAt ?? new Date())}`, MARGIN, 9.5);
   y -= 13;
-  for (const line of lines(
-    "Die Angaben wurden elektronisch bestätigt und dürfen nachträglich nicht undokumentiert verändert werden; eine eigenhändige Unterschrift ist dafür nicht erforderlich.",
-    8.5,
-    contentWidth
-  )) {
+  for (const line of lines("Die Angaben wurden elektronisch bestätigt (Name und Zeitstempel).", 8.5, contentWidth)) {
     draw(line, MARGIN, 8.5, font, GRAY);
     y -= 11;
   }

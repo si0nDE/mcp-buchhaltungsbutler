@@ -62,18 +62,24 @@ const expenseSchema = z.object({
   category: z.enum(["fare", "lodging", "incidental"]).describe("fare = Fahrtkosten (Bahn, Flug, Taxi), lodging = Übernachtung, incidental = Reisenebenkosten (Parken, Maut, Gepäck, Telefon)."),
   description: z.string().min(2),
   date: z.string().regex(DATE_ONLY).describe("Belegdatum YYYY-MM-DD. Bei Übernachtung: der Tag, an dem die Nacht beginnt (das Frühstück ist am Folgetag)."),
-  amount: z.number().positive().describe("Bruttobetrag in der Belegwährung. Ein Beleg mit zwei Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst, jede mit einem vat_rate/vat_amount."),
+  amount: z.number().positive().describe("Bruttobetrag in der Belegwährung. Ein Beleg mit zwei Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst, jede mit einem vat_rate/vat_amount und beide mit derselben receipt_id."),
   vat_amount: z.number().min(0).optional().describe("Umsatzsteuerbetrag wie auf dem Beleg ausgewiesen (Belegwährung). Nicht aus dem Satz berechnen."),
-  vat_rate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional().describe("Steuersatz des Belegs; Pflicht und nur 7 oder 19, wenn vat_amount größer 0 ist."),
+  vat_rate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional().describe("Steuersatz des Belegs; Pflicht und nur 7 oder 19, wenn vat_amount größer 0 ist. Ausländische Umsatzsteuer: foreign_vat: true statt vat_rate."),
   currency: z.string().length(3).optional().describe("ISO-Währung, Standard EUR."),
   fx_rate: z.number().positive().optional().describe("EUR je 1 Einheit Fremdwährung; Pflicht bei Fremdwährung."),
   fx_source: z.string().optional().describe('Quelle des Kurses, z. B. "BMF Monatskurs 03/2026"; Pflicht bei Fremdwährung.'),
-  invoice_recipient: z.enum(["company", "traveller", "unknown"]).optional().describe("Auf wen lautet die Rechnung? Vorsteuerabzug über 250 € nur bei Rechnung auf die Firma. Beim Nutzer erfragen."),
-  foreign_vat: z.boolean().optional().describe("Beleg weist ausländische Umsatzsteuer aus (kein deutscher Vorsteuerabzug)."),
+  invoice_recipient: z.enum(["company", "traveller", "unknown"]).optional().describe("Auf wen lautet die Rechnung? Vorsteuerabzug über 250 € (Summe aller Positionen derselben receipt_id) nur bei Rechnung auf die Firma. Beim Nutzer erfragen."),
+  foreign_vat: z.boolean().optional().describe("Beleg weist ausländische Umsatzsteuer aus (kein deutscher Vorsteuerabzug). Bei Belegen aus dem Ausland oder in Fremdwährung beim Nutzer erfragen."),
   receipt_missing: z.boolean().optional().describe("Beleg fehlt (Aufwand muss glaubhaft gemacht werden, kein Eigenbeleg als Ersatz)."),
   breakfast_included: z.boolean().optional().describe("Nur Übernachtung: Frühstück im Preis enthalten."),
   breakfast_amount: z.number().min(0).optional().describe("Frühstück separat ausgewiesen (Belegwährung)."),
   fare_kind: z.enum(["train", "flight", "taxi", "bus", "other"]).optional(),
+  receipt_id: z.string().min(1).optional().describe(
+    "Kennung des Belegs, z. B. die Rechnungsnummer. Zwei Steuersätze = zwei Positionen mit derselben receipt_id: sie gelten als EIN Beleg für die 250-€-Grenze (Kleinbetragsrechnung) und den Rechnungsempfänger (gleiche Währung und gleicher invoice_recipient)."
+  ),
+  paid_by: z.enum(["traveller", "company"]).optional().describe(
+    'Wer hat bezahlt? Standard "traveller" (erstattet). "company" = vom Unternehmen direkt bezahlt (z. B. Firmenkarte, Rechnung an die Firma bezahlt): steht in der Abrechnung, zählt aber nicht zum Gesamt- und Erstattungsbetrag und nicht in die Buchungssplits (eigener Beleg). Ein darin enthaltenes Frühstück kürzt bei Angestellten trotzdem die Verpflegungspauschale. Beim Nutzer erfragen.'
+  ),
 });
 
 const kmSchema = z.object({
@@ -81,14 +87,18 @@ const kmSchema = z.object({
   km: z.number().positive(),
   date: z.string().regex(DATE_ONLY),
   description: z.string().optional(),
-  ownership: z.enum(["private", "business"]).optional().describe('"business" (Betriebs-Pkw) ist nicht pauschalierbar: dort tatsächliche Kosten als Beleg erfassen.'),
+  ownership: z
+    .enum(["private", "business"], { error: "ownership (private oder business) beim Nutzer erfragen: die Kilometerpauschale gilt nur für private Fahrzeuge." })
+    .describe('Pflicht, beim Nutzer erfragen: "private" (Privatfahrzeug, Kilometerpauschale) oder "business" (Betriebs-Pkw, nicht pauschalierbar: dort tatsächliche Kosten als Beleg erfassen).'),
 });
 
 const attachmentSchema = z.object({ file: z.string().min(1), type: z.enum(["pdf", "png", "jpeg"]) });
 
 const generateShape = {
   traveller_name: z.string().min(2).describe("Reisende Person. IMMER beim Nutzer erfragen, nie aus Kontext, Kalender oder Teilnehmern ableiten."),
-  traveller_type: z.enum(["employee", "self_employed"]).describe("employee = Angestellte (Erstattung durch den Arbeitgeber), self_employed = Selbstständige und Geschäftsführer (Betriebsausgabe, nur tatsächliche Übernachtungskosten)."),
+  traveller_type: z.enum(["employee", "self_employed"]).describe(
+    "employee = Angestellte UND Gesellschafter-Geschäftsführer mit Anstellungsvertrag (Erstattung durch den Arbeitgeber); self_employed = Selbstständige, Einzelunternehmer und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (owner_manager; Betriebsausgabe, nur tatsächliche Übernachtungskosten). Im Zweifel beim Nutzer erfragen."
+  ),
   traveller_confirmed: z.boolean().describe("true erst, nachdem die reisende Person die Angaben bestätigt hat (elektronische Bestätigung mit Zeitstempel im Beleg)."),
   purpose: z.string().describe("Konkreter Reisezweck (wen/was/warum). Pauschalangaben wie 'Geschäftsreise' werden abgelehnt."),
   departure: z.string().regex(LOCAL_DATE_TIME).describe("Abreise von Wohnung bzw. erster Tätigkeitsstätte, YYYY-MM-DDTHH:mm (Ortszeit am Wohnort)."),
@@ -102,10 +112,10 @@ const generateShape = {
   same_location_since: z.string().regex(DATE_ONLY).optional().describe("Beginn der Tätigkeit an derselben Tätigkeitsstätte (Dreimonatsfrist)."),
   use_lodging_flat_rate: z.boolean().optional().describe("Nur Angestellte bei Erstattung durch den Arbeitgeber: Übernachtungspauschale statt Beleg (Inland 20 €, Ausland laut BMF)."),
   lodging_nights: z.number().int().min(0).optional().describe("Anzahl der Übernachtungen, für die die Pauschale gilt; korrigiert die aus den Zeiten abgeleitete Zahl."),
-  is_shareholder_manager: z.boolean().optional().describe("Reisende Person ist Gesellschafter-Geschäftsführer."),
+  is_shareholder_manager: z.boolean().optional().describe("Reisende Person ist Gesellschafter-Geschäftsführer (mit oder ohne Anstellungsvertrag). Beim Nutzer erfragen."),
   agreement_in_advance: z.boolean().optional().describe("Gesellschafter-Geschäftsführer: gibt es eine klare, im Voraus getroffene Vereinbarung zur Reisekostenerstattung (R 8.5 KStR)? Beim Nutzer erfragen."),
   advance_paid: z.number().min(0).optional().describe("Bereits gezahlter Vorschuss in EUR."),
-  expenses: z.array(expenseSchema).optional(),
+  expenses: z.array(expenseSchema).optional().describe("Belege (Fahrt, Übernachtung, Nebenkosten). Zwei Steuersätze = zwei Positionen mit derselben receipt_id."),
   km_trips: z.array(kmSchema).optional(),
   company_name: z.string().optional(),
   company_address: z.string().optional(),
@@ -162,7 +172,8 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
   const travellerType = args.traveller_type;
   const expenses = (args.expenses ?? []) as Expense[];
 
-  // Employees: breakfast in the hotel price is a provided meal on the following morning (reduces the allowance).
+  // Employees: breakfast in the hotel price is a provided meal on the following morning (reduces the allowance), also
+  // when the company paid the hotel. Interpretation (A) of Rz. 117 BMF 25.11.2020 (employer reimburses the breakfast).
   const meals: Record<string, Meal[]> = {};
   for (const [date, list] of Object.entries(args.meals_provided ?? {})) meals[date] = [...list];
   if (travellerType === "employee") {
@@ -186,11 +197,15 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
     lodgingNights: args.lodging_nights,
   });
   const fullRateByDate = new Map(trip.days.map((d) => [d.date, d.fullRate]));
+  const countryByDate = new Map(trip.days.map((d) => [d.date, d.country]));
+  const tripRange = { from: args.departure.slice(0, 10), to: args.return.slice(0, 10) };
   const costs = processExpenses(expenses, {
     travellerType,
-    breakfastRate: (date) => fullRateByDate.get(date) ?? 28,
+    breakfastRate: (date) => fullRateByDate.get(date),
+    countryOfDate: (date) => countryByDate.get(date),
+    tripRange,
   });
-  const km = processKmTrips((args.km_trips ?? []) as KmTrip[]);
+  const km = processKmTrips((args.km_trips ?? []) as KmTrip[], { tripRange });
 
   const hasLodging = costs.lines.some((l) => l.category === "lodging") || trip.lodgingFlat.length > 0;
   if (trip.nights > 0 && !hasLodging) {
@@ -214,7 +229,7 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
   }
   if (travellerType === "self_employed") {
     warnings.push(
-      "Selbstständige und Geschäftsführer: Übernachtungspauschalen gibt es nur bei Arbeitgebererstattung; hier zählen nur tatsächliche Kosten " +
+      "Selbstständige und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag: Übernachtungspauschalen gibt es nur bei Arbeitgebererstattung; hier zählen nur tatsächliche Kosten " +
         "(Auslegung aus R 4.12 EStR und R 9.7 LStR, nicht wörtlich geregelt)."
     );
   }
@@ -271,8 +286,11 @@ function summary(built: BuiltReport & { hint: BookingHint }) {
   return {
     totals: built.totals,
     days: built.trip.days,
+    nights: built.trip.nights,
+    lodging_flat: built.trip.lodgingFlat,
     costs: built.lines,
     km: built.kmLines,
+    sources: built.trip.sources,
     ...(built.warnings.length > 0 ? { warnings: built.warnings } : {}),
     booking_hint: built.hint,
   };
@@ -283,13 +301,17 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
     name: "generate_travel_expense_report",
     description:
       "Erzeugt eine Reisekostenabrechnung als PDF (Verpflegungspauschalen Inland und Ausland nach BMF-Tabelle mit Mahlzeitenkürzung und " +
-      "Dreimonatsfrist, Übernachtung, Fahrt, Kilometer, Nebenkosten) und einen Buchungshinweis. Für Angestellte (Erstattung durch den " +
-      "Arbeitgeber) und Selbstständige/Geschäftsführer (Betriebsausgabe, nur tatsächliche Übernachtungskosten). Ohne BuchhaltungsButler-" +
-      "Zugriff; zum Hochladen generate_and_upload_travel_expense_report nutzen. Reisende Person, Reisezweck und Rechnungsempfänger der " +
-      "Belege beim Nutzer erfragen, nie ableiten; erst nach Bestätigung der reisenden Person traveller_confirmed setzen. Ein Beleg mit zwei " +
-      "Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst (jede Ausgabe trägt einen vat_rate/vat_amount; vat_rate ist Pflicht und nur 7 oder 19, wenn vat_amount größer 0 ist). In " +
-      "totals und days zählt als gezahlte Übernachtungspauschale totals.lodgingFlat (die aus den Zeiten abgeleitete Nachtzahl ist nur " +
-      "informativ; mit lodging_nights korrigierbar). Der Konnektor bucht nicht selbst. Beim Hochladen ist der Belegbetrag der Gesamtbetrag, nicht der Erstattungsbetrag nach Vorschuss. Die rechtlichen Aussagen sind vor Produktivbetrieb vom Steuerberater gegenzulesen (docs/reisekosten-faq.md).",
+      "Dreimonatsfrist, Übernachtung, Fahrt, Kilometer, Nebenkosten) und einen Buchungshinweis. traveller_type: employee = Angestellte UND " +
+      "Gesellschafter-Geschäftsführer mit Anstellungsvertrag (Erstattung durch den Arbeitgeber); self_employed = Selbstständige, Einzelunternehmer " +
+      "und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (owner_manager; Betriebsausgabe, nur tatsächliche Übernachtungskosten). Im " +
+      "Zweifel beim Nutzer erfragen. Ohne BuchhaltungsButler-Zugriff; zum Hochladen generate_and_upload_travel_expense_report nutzen. Reisende " +
+      "Person, Reisezweck, Rechnungsempfänger und Zahler (paid_by) der Belege sowie ownership bei Kilometerfahrten beim Nutzer erfragen, nie " +
+      "ableiten; erst nach Bestätigung der reisenden Person traveller_confirmed setzen. Zwei Steuersätze = zwei Positionen mit derselben " +
+      "receipt_id (z. B. 7 % Übernachtung + 19 % Getränke; jede Position trägt einen vat_rate/vat_amount; vat_rate ist Pflicht und nur 7 oder 19, " +
+      "wenn vat_amount größer 0 ist, ausländische Umsatzsteuer mit foreign_vat). Vom Unternehmen gezahlte Positionen (paid_by company) stehen " +
+      "in der Abrechnung, zählen aber nicht zum Gesamtbetrag (totals.companyPaid nachrichtlich). Flug oder Schiff ab der zweiten Station über " +
+      "mehrere Kalendertage: departs_at angeben. Die Antwort nennt nights (aus den Zeiten abgeleitet, informativ) und lodging_flat (die " +
+      "gezahlten Pauschalnächte, Summe totals.lodgingFlat; mit lodging_nights korrigierbar). Der Konnektor bucht nicht selbst. Beim Hochladen ist der Belegbetrag der Gesamtbetrag, nicht der Erstattungsbetrag nach Vorschuss. Die rechtlichen Aussagen sind vor Produktivbetrieb vom Steuerberater gegenzulesen (docs/reisekosten-faq.md).",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
@@ -305,8 +327,10 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
       "Erzeugt die Reisekostenabrechnung (siehe generate_travel_expense_report) und lädt sie in einem Aufruf nach BuchhaltungsButler hoch, " +
       "statt das Base64-PDF zweimal durch das Modell zu schicken. Liefert id_by_customer des neuen Belegs, nicht das PDF. " +
       "BuchhaltungsButler erkennt Duplikate nicht: bei einem erneuten Upload vorher list_receipts prüfen. Der Belegbetrag ist der " +
-      "Gesamtbetrag, nicht der Erstattungsbetrag nach Vorschuss. Reisende Person, Reisezweck und Rechnungsempfänger der Belege beim Nutzer " +
-      "erfragen, nie ableiten; traveller_confirmed erst nach Bestätigung der reisenden Person setzen. Der Buchungshinweis nennt bei " +
+      "Gesamtbetrag (ohne vom Unternehmen gezahlte Positionen), nicht der Erstattungsbetrag nach Vorschuss. traveller_type: employee = " +
+      "Angestellte UND Gesellschafter-Geschäftsführer mit Anstellungsvertrag; self_employed = Selbstständige, Einzelunternehmer und " +
+      "Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (owner_manager); im Zweifel beim Nutzer erfragen. Reisende Person, Reisezweck, " +
+      "Rechnungsempfänger und Zahler (paid_by) der Belege beim Nutzer erfragen, nie ableiten; traveller_confirmed erst nach Bestätigung der reisenden Person setzen. Der Buchungshinweis nennt bei " +
       "erkanntem SKR03 die Konten. Der Konnektor bucht nicht selbst; Buchungen legst du nach Rückfrage selbst an.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,

@@ -100,7 +100,7 @@ export function computeTrip(input: TripInput): TripResult {
   if (input.travellerType === "self_employed" && input.useLodgingFlatRate) {
     throw new Error(
       "Übernachtungspauschalen gibt es nur bei Erstattung durch den Arbeitgeber (Arbeitnehmer, R 9.7 Abs. 3 LStR). " +
-        "Selbstständige und Geschäftsführer rechnen tatsächliche Übernachtungskosten mit Beleg ab (R 4.12 EStR)."
+        "Selbstständige und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag rechnen tatsächliche Übernachtungskosten mit Beleg ab (R 4.12 EStR)."
     );
   }
   const departure = parseLocal(input.departure);

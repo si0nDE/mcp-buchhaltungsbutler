@@ -1,4 +1,5 @@
 import { round2, type TravellerType } from "./travel-expense-calc.js";
+import { isDomesticCountry } from "./travel-rates.js";
 
 export type ExpenseCategory = "fare" | "lodging" | "incidental";
 export type FareKind = "train" | "flight" | "taxi" | "bus" | "other";
@@ -24,10 +25,14 @@ export interface Expense {
   /**
    * Breakfast amount if shown separately on the receipt (receipt currency). 0 means "no deduction"; only undefined falls
    * back to 20 % of the 24-hour rate. A line carries ONE vat_rate/vat_amount: a receipt with two VAT rates must be
-   * entered as two expenses.
+   * entered as two expenses with the same receipt_id.
    */
   breakfast_amount?: number;
   fare_kind?: FareKind;
+  /** Lines with the same receipt_id are one receipt (250 EUR Kleinbetrag limit and invoice recipient). */
+  receipt_id?: string;
+  /** "company": paid by the company itself, booked through its own receipt; shown but not reimbursed. */
+  paid_by?: "traveller" | "company";
 }
 
 export interface CostLine {
@@ -47,6 +52,8 @@ export interface CostLine {
   receiptMissing: boolean;
   foreignVat: boolean;
   breakfastDeductedEur: number;
+  receiptId?: string;
+  paidBy: "traveller" | "company";
 }
 
 export interface KmTrip {
@@ -54,7 +61,7 @@ export interface KmTrip {
   km: number;
   date: string;
   description?: string;
-  ownership?: "private" | "business";
+  ownership: "private" | "business";
 }
 
 export interface KmLine {
@@ -73,6 +80,8 @@ export interface Totals {
   fares: number;
   lodging: number;
   incidentals: number;
+  /** Informational: gross of the lines paid by the company, not part of total. */
+  companyPaid: number;
   total: number;
   advance: number;
   reimbursement: number;
@@ -94,16 +103,64 @@ export function nextDateKey(dateKey: string): string {
   return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
 }
 
+export interface TripRange {
+  /** Departure date "YYYY-MM-DD". */
+  from: string;
+  /** Return date "YYYY-MM-DD". */
+  to: string;
+}
+
+const outsideTrip = (date: string, range?: TripRange): boolean => range !== undefined && (date < range.from || date > range.to);
+const outsideTripText = (date: string, range: TripRange): string =>
+  `Datum ${date} liegt außerhalb der Reise (${range.from} bis ${range.to}); Zuordnung zu dieser Reise prüfen.`;
+
+// Lines with the same receipt_id form one receipt: one currency, one invoice recipient, one gross for the 250 EUR limit.
+function receiptGroups(expenses: Expense[]): Map<string, { gross: number; label: string }> {
+  const groups = new Map<string, { gross: number; currency: string; recipient: string; label: string }>();
+  for (const expense of expenses) {
+    const id = expense.receipt_id?.trim();
+    if (!id) continue;
+    const currency = (expense.currency ?? "EUR").toUpperCase();
+    const recipient = expense.invoice_recipient ?? "unknown";
+    const factor = currency === "EUR" ? 1 : (expense.fx_rate ?? Number.NaN);
+    const group = groups.get(id);
+    if (!group) {
+      groups.set(id, { gross: round2(expense.amount * factor), currency, recipient, label: id });
+      continue;
+    }
+    if (group.currency !== currency) {
+      throw new Error(`receipt_id "${id}": alle Positionen eines Belegs brauchen dieselbe Währung (${group.currency}, ${currency}).`);
+    }
+    if (group.recipient !== recipient) {
+      throw new Error(`receipt_id "${id}": alle Positionen eines Belegs brauchen denselben invoice_recipient (${group.recipient}, ${recipient}).`);
+    }
+    group.gross = round2(group.gross + round2(expense.amount * factor));
+  }
+  return groups;
+}
+
 export function processExpenses(
   expenses: Expense[],
-  context: { travellerType: TravellerType; breakfastRate: (date: string) => number }
+  context: {
+    travellerType: TravellerType;
+    /** 24-hour rate of the trip day (place reached that day); undefined if the date is no trip day. */
+    breakfastRate: (date: string) => number | undefined;
+    /** Country of the trip day; undefined if the date is no trip day. */
+    countryOfDate?: (date: string) => string | undefined;
+    tripRange?: TripRange;
+  }
 ): { lines: CostLine[]; warnings: string[] } {
   const warnings = new Set<string>();
   const lines: CostLine[] = [];
+  const groups = receiptGroups(expenses);
 
   for (const expense of expenses) {
     const label = `Beleg "${expense.description}"`;
     if (!isRealDate(expense.date)) throw new Error(`${label}: Datum im Format YYYY-MM-DD und als echtes Kalenderdatum angeben.`);
+    if (expense.paid_by !== undefined && expense.paid_by !== "traveller" && expense.paid_by !== "company") {
+      throw new Error(`${label}: paid_by ist "traveller" oder "company".`);
+    }
+    if (outsideTrip(expense.date, context.tripRange)) warnings.add(`${label}: ${outsideTripText(expense.date, context.tripRange as TripRange)}`);
     if (!Number.isFinite(expense.amount) || !(expense.amount > 0)) throw new Error(`${label}: amount muss eine Zahl größer 0 sein.`);
     if (expense.vat_amount !== undefined && !(Number.isFinite(expense.vat_amount) && expense.vat_amount >= 0 && expense.vat_amount <= expense.amount)) {
       throw new Error(`${label}: vat_amount muss eine Zahl zwischen 0 und amount sein.`);
@@ -125,12 +182,26 @@ export function processExpenses(
       }
       factor = expense.fx_rate;
       warnings.add(
-        "Fremdwährungsbeleg: Kurs und Quelle stehen im Beleg. Für die Einkommensteuer ist der Umrechnungskurs bei Reisekosten nicht " +
-          "ausdrücklich geregelt; der BMF-Monatsdurchschnittskurs ist eine vertretbare Schätzung (§ 16 Abs. 6 UStG gilt für die Umsatzsteuer)."
+        "Fremdwährungsbeleg: Kurs und Quelle stehen im Beleg. Der BMF-Monatsdurchschnittskurs (§ 16 Abs. 6 UStG, Umsatzsteuer) wird hier als " +
+          "Ansatz verwendet; für die Einkommensteuer ist der Umrechnungskurs bei Reisekosten nicht ausdrücklich geregelt."
       );
     }
     if ((expense.vat_amount ?? 0) > 0 && expense.vat_rate !== 7 && expense.vat_rate !== 19 && !foreignVat && !receiptMissing) {
-      throw new Error(`${label}: Bei vat_amount größer 0 ist vat_rate 7 oder 19 anzugeben (vat_rate 0 würde die Vorsteuer stillschweigend verwerfen).`);
+      throw new Error(
+        `${label}: Bei vat_amount größer 0 ist vat_rate 7 oder 19 anzugeben (vat_rate 0 würde die Vorsteuer stillschweigend verwerfen); ` +
+          "bei ausländischer Umsatzsteuer foreign_vat: true setzen."
+      );
+    }
+    // Foreign VAT must not end up as German Vorsteuer: hint when the receipt is from a foreign day or in a foreign currency.
+    const country = context.countryOfDate?.(expense.date);
+    const foreignDay = country !== undefined && !isDomesticCountry(country);
+    if ((expense.vat_amount ?? 0) > 0 && !foreignVat && !receiptMissing && (foreignDay || currency !== "EUR")) {
+      const where = [foreignDay ? `an einem Auslandstag (${country})` : "", currency !== "EUR" ? `in Fremdwährung (${currency})` : ""]
+        .filter(Boolean)
+        .join(" und ");
+      warnings.add(
+        `${label}: Beleg mit Umsatzsteuer ${where}: ausländische Umsatzsteuer? Dann foreign_vat: true setzen, sonst wird deutsche Vorsteuer angesetzt.`
+      );
     }
 
     const recipient = expense.invoice_recipient ?? "unknown";
@@ -140,10 +211,20 @@ export function processExpenses(
     let breakfastDeducted = 0;
 
     if (expense.category === "lodging" && expense.breakfast_included && context.travellerType === "self_employed") {
-      const part =
-        expense.breakfast_amount !== undefined
-          ? round2(expense.breakfast_amount * factor)
-          : round2(0.2 * context.breakfastRate(nextDateKey(expense.date)));
+      // Rz. 118 BMF 2020: 20 % of the 24-hour rate at the place of the accommodation, i.e. the day the night begins.
+      let part: number;
+      if (expense.breakfast_amount !== undefined) {
+        part = round2(expense.breakfast_amount * factor);
+      } else {
+        let rate = context.breakfastRate(expense.date);
+        if (rate === undefined) {
+          rate = 28;
+          warnings.add(
+            `${label}: Frühstücksanteil mit Inlandssatz 28 € geschätzt (das Belegdatum ${expense.date} ist kein Reisetag); Datum prüfen oder breakfast_amount angeben.`
+          );
+        }
+        part = round2(0.2 * rate);
+      }
       if (part > gross) {
         throw new Error(`${label}: Der Frühstücksbetrag (${part} €) ist größer als der Belegbetrag (${gross} €); breakfast_amount und amount prüfen.`);
       }
@@ -153,7 +234,7 @@ export function processExpenses(
       gross = round2(gross - breakfastDeducted);
       warnings.add(
         `${label}: Frühstück im Hotelpreis wird als Verpflegung herausgerechnet (Rz. 118 BMF 25.11.2020, 20 % der 24-Stunden-Pauschale ` +
-          "oder ausgewiesener Betrag). Auslegung für Selbstständige und Geschäftsführer, vom Steuerberater prüfen lassen."
+          "oder ausgewiesener Betrag). Auslegung für Selbstständige und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag, vom Steuerberater prüfen lassen."
       );
     }
 
@@ -178,20 +259,28 @@ export function processExpenses(
       );
     }
 
-    const kleinbetrag = originalGross <= KLEINBETRAG_LIMIT;
+    // § 33 UStDV: the limit applies to the whole receipt (all lines with the same receipt_id), gross before the breakfast deduction.
+    const receiptId = expense.receipt_id?.trim() || undefined;
+    const group = receiptId ? groups.get(receiptId) : undefined;
+    const receiptGross = group ? group.gross : originalGross;
+    const vatLabel = group ? `Beleg receipt_id "${group.label}" (zusammen ${receiptGross.toFixed(2).replace(".", ",")} €)` : label;
+    const kleinbetrag = receiptGross <= KLEINBETRAG_LIMIT;
     const vorsteuer = vat > 0 && !foreignVat && !receiptMissing && (recipient === "company" || kleinbetrag);
     if (vat > 0 && !foreignVat && !receiptMissing && !vorsteuer) {
       warnings.add(
         recipient === "traveller"
-          ? `${label}: Rechnung auf den Namen des Reisenden und über 250 €: kein Vorsteuerabzug für die Firma (UStAE 15.2a Abs. 3).`
-          : `${label}: Rechnungsempfänger prüfen: bei Rechnungen über 250 € setzt der Vorsteuerabzug eine Rechnung auf die Firma voraus.`
+          ? `${vatLabel}: Rechnung auf den Namen des Reisenden und über 250 €: kein Vorsteuerabzug für die Firma (UStAE 15.2a Abs. 3).`
+          : `${vatLabel}: Rechnungsempfänger prüfen: bei Rechnungen über 250 € setzt der Vorsteuerabzug eine Rechnung auf die Firma voraus.`
       );
     }
     if (expense.category === "lodging" && expense.breakfast_included) {
       warnings.add(
         `${label}: Frühstück im Hotelpreis. Der Steuersatz im Sammelposten ist nicht eindeutig (Speisen 7 % seit 1.1.2026, UStAE 12.16 Abs. 8 und 12 ` +
-          "noch uneinheitlich). Eine Zeile hat genau einen Steuersatz und Steuerbetrag; ein abgezogener Frühstücksanteil mindert die USt anteilig. " +
-          "Belege mit zwei Steuersätzen als zwei Belege erfassen."
+          "noch uneinheitlich). Eine Zeile hat genau einen Steuersatz und Steuerbetrag; " +
+          (context.travellerType === "employee"
+            ? "der Hotelpreis bleibt bei Angestellten ungekürzt (das Frühstück kürzt stattdessen die Verpflegungspauschale am Folgetag). "
+            : "ein abgezogener Frühstücksanteil mindert die USt anteilig. ") +
+          "Belege mit zwei Steuersätzen als zwei Positionen mit derselben receipt_id erfassen."
       );
     }
 
@@ -211,14 +300,20 @@ export function processExpenses(
       receiptMissing,
       foreignVat,
       breakfastDeductedEur: breakfastDeducted,
+      ...(receiptId ? { receiptId } : {}),
+      paidBy: expense.paid_by ?? "traveller",
     });
   }
   return { lines, warnings: [...warnings] };
 }
 
-export function processKmTrips(trips: KmTrip[]): { lines: KmLine[]; warnings: string[] } {
+export function processKmTrips(trips: KmTrip[], context: { tripRange?: TripRange } = {}): { lines: KmLine[]; warnings: string[] } {
   const lines: KmLine[] = [];
+  const warnings: string[] = [];
   for (const trip of trips) {
+    if (trip.ownership !== "private" && trip.ownership !== "business") {
+      throw new Error("ownership (private oder business) beim Nutzer erfragen: die Kilometerpauschale gilt nur für private Fahrzeuge.");
+    }
     if (trip.ownership === "business") {
       throw new Error(
         "Die Kilometerpauschale gilt nur für private Fahrzeuge (R 4.12 Abs. 2 EStR). Beim Betriebs-Pkw die tatsächlichen Kosten " +
@@ -228,6 +323,9 @@ export function processKmTrips(trips: KmTrip[]): { lines: KmLine[]; warnings: st
     if (!isRealDate(trip.date)) throw new Error("Datum der Fahrt im Format YYYY-MM-DD und als echtes Kalenderdatum angeben.");
     if (!Number.isFinite(trip.km) || !(trip.km > 0)) throw new Error("km muss eine Zahl größer 0 sein.");
     const rate = KM_RATES[trip.mode];
+    if (outsideTrip(trip.date, context.tripRange)) {
+      warnings.push(`Fahrt ${trip.km} km am ${trip.date}: ${outsideTripText(trip.date, context.tripRange as TripRange)}`);
+    }
     lines.push({
       mode: trip.mode,
       km: trip.km,
@@ -237,7 +335,7 @@ export function processKmTrips(trips: KmTrip[]): { lines: KmLine[]; warnings: st
       amount: round2(trip.km * rate),
     });
   }
-  return { lines, warnings: [] };
+  return { lines, warnings };
 }
 
 export function computeTotals(input: {
@@ -247,8 +345,11 @@ export function computeTotals(input: {
   kmLines: KmLine[];
   advance: number;
 }): Totals {
+  // Lines paid by the company are booked through their own receipt: shown, but not reimbursed.
+  const reimbursed = input.lines.filter((l) => l.paidBy !== "company");
   const sum = (category: ExpenseCategory) =>
-    round2(input.lines.filter((l) => l.category === category).reduce((s, l) => s + l.grossEur, 0));
+    round2(reimbursed.filter((l) => l.category === category).reduce((s, l) => s + l.grossEur, 0));
+  const companyPaid = round2(input.lines.filter((l) => l.paidBy === "company").reduce((s, l) => s + l.grossEur, 0));
   const km = round2(input.kmLines.reduce((s, l) => s + l.amount, 0));
   const fares = sum("fare");
   const lodging = sum("lodging");
@@ -261,6 +362,7 @@ export function computeTotals(input: {
     fares,
     lodging,
     incidentals,
+    companyPaid,
     total,
     advance: input.advance,
     reimbursement: round2(total - input.advance),

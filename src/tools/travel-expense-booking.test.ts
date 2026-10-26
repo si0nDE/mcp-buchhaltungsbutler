@@ -18,6 +18,7 @@ const line = (overrides: Partial<CostLine>): CostLine => ({
   receiptMissing: false,
   foreignVat: false,
   breakfastDeductedEur: 0,
+  paidBy: "traveller",
   ...overrides,
 });
 const km: KmLine = { mode: "car", km: 100, date: "2026-03-09", description: "Fahrt", rate: 0.3, amount: 30 };
@@ -119,6 +120,24 @@ describe("buildBookingHint", () => {
       ["lodging", "0_none", 90],
       ["incidental", "19_pre", 119],
     ]);
+  });
+
+  it("leaves lines paid by the company out of the splits and says so", () => {
+    const hint = buildBookingHint({
+      travellerType: "employee",
+      travellerName: "Erika Mustermann",
+      purpose: "Kundentermin Einführung Backup-Konzept bei Muster AG",
+      chart: "SKR03",
+      allowances: 14,
+      lodgingFlat: 0,
+      kmLines: [],
+      lines: [line({ paidBy: "company" }), line({ category: "fare", description: "Bahn", grossEur: 50, vatEur: 3.27, netEur: 46.73 })],
+    });
+    expect(hint.splits.map((s) => [s.group, s.amount])).toEqual([
+      ["allowance", 14],
+      ["fare", 50],
+    ]);
+    expect(hint.notes.some((n) => n.includes("vom Unternehmen gezahlt") && n.includes("107,00 €"))).toBe(true);
   });
 
   it.each(["employee", "self_employed"] as const)("posting_fields and suggested accounts satisfy the posting validation (%s)", (type) => {

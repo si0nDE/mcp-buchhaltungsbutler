@@ -28,10 +28,11 @@ const data = (overrides: Partial<TravelReportData> = {}): TravelReportData => ({
     {
       category: "lodging", description: "Hotel Musterstadt", date: "2026-03-09", currency: "EUR", fxRate: 1, grossEur: 107, vatEur: 7, netEur: 100,
       vatRate: 7, vorsteuer: true, recipient: "company", receiptMissing: false, foreignVat: false, breakfastDeductedEur: 0,
+      paidBy: "traveller",
     },
   ],
   kmLines: [],
-  totals: { allowances: 85.4, lodgingFlat: 0, km: 0, fares: 0, lodging: 107, incidentals: 0, total: 192.4, advance: 50, reimbursement: 142.4 },
+  totals: { allowances: 85.4, lodgingFlat: 0, km: 0, fares: 0, lodging: 107, incidentals: 0, companyPaid: 0, total: 192.4, advance: 50, reimbursement: 142.4 },
   warnings: ["Dreimonatsfrist nicht geprüft (same_location_since fehlt)."],
   sources: ["BMF 05.12.2025, IV C 5 - S 2353/00094/007/012"],
   ...overrides,
@@ -48,6 +49,26 @@ describe("renderTravelExpenseReport", () => {
     expect(text).toContain("142,40");
     expect(text).toContain("Elektronisch bestätigt");
     expect(text).toContain("12.03.2026, 11:30 Uhr");
+  });
+
+  it("states the electronic confirmation neutrally", async () => {
+    const text = await textOf(await renderTravelExpenseReport(data()));
+    expect(text).toContain("Die Angaben wurden elektronisch bestätigt (Name und Zeitstempel).");
+    expect(text).not.toContain("Unterschrift");
+    expect(text).not.toContain("undokumentiert");
+  });
+
+  it("marks lines paid by the company and shows their sum only when there are any", async () => {
+    const plain = await textOf(await renderTravelExpenseReport(data()));
+    expect(plain).not.toMatch(/vom\s+Unternehmen\s+gezahlt/);
+    const company = data({
+      costs: [{ ...data().costs[0], paidBy: "company" }],
+      totals: { ...data().totals, lodging: 0, companyPaid: 107, total: 85.4, reimbursement: 35.4 },
+    });
+    const text = await textOf(await renderTravelExpenseReport(company));
+    expect(text).toMatch(/vom\s+Unternehmen\s+gezahlt/);
+    expect(text).toContain("nicht im Gesamtbetrag");
+    expect(text).toContain("107,00 €");
   });
 
   it("puts all warnings and sources on a notes page", async () => {

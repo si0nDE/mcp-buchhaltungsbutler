@@ -62,7 +62,8 @@ export function buildBookingHint(input: {
 
   add("allowance", "0_none", input.allowances);
   add("km", "0_none", round2(input.kmLines.reduce((s, l) => s + l.amount, 0)));
-  for (const line of input.lines) add(line.category, vatCode(line), line.grossEur);
+  // Lines paid by the company are booked through their own receipt, not through the travel expense report.
+  for (const line of input.lines) if (line.paidBy !== "company") add(line.category, vatCode(line), line.grossEur);
   add("lodging", "0_none", input.lodgingFlat);
 
   const splits = [...sums.values()]
@@ -95,6 +96,13 @@ export function buildBookingHint(input: {
   notes.push(
     "add_receipt_postings/add_transaction_postings verlangen auf diesen Konten traveler_name, traveler_role und business_purpose (siehe posting_fields)."
   );
+  const companyPaid = round2(input.lines.filter((l) => l.paidBy === "company").reduce((s, l) => s + l.grossEur, 0));
+  if (companyPaid > 0) {
+    notes.push(
+      `Positionen, die vom Unternehmen gezahlt wurden (${companyPaid.toFixed(2).replace(".", ",")} €), sind nicht in den Splits und nicht im ` +
+        "Gesamtbetrag: sie werden über ihren eigenen Beleg gebucht."
+    );
+  }
   if (input.chart === "unknown") {
     notes.push("Kontenrahmen nicht ermittelt oder nicht SKR03: keine Kontonummern genannt; passende Reisekostenkonten per list_posting_accounts suchen.");
   }

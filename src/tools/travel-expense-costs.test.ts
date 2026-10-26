@@ -116,15 +116,15 @@ describe("processExpenses - Frühstück im Hotelpreis", () => {
 describe("processKmTrips", () => {
   it("uses 0.30 EUR for cars and 0.20 EUR for other motor vehicles", () => {
     const { lines } = processKmTrips([
-      { mode: "car", km: 100, date: "2026-03-09" },
-      { mode: "other_motor", km: 50, date: "2026-03-09" },
+      { mode: "car", km: 100, date: "2026-03-09", ownership: "private" },
+      { mode: "other_motor", km: 50, date: "2026-03-09", ownership: "private" },
     ]);
     expect(lines.map((l) => [l.rate, l.amount])).toEqual([[0.3, 30], [0.2, 10]]);
   });
 
   it("rejects the flat rate for business vehicles and non-positive distances", () => {
     expect(() => processKmTrips([{ mode: "car", km: 10, date: "2026-03-09", ownership: "business" }])).toThrow(/Betriebs/);
-    expect(() => processKmTrips([{ mode: "car", km: 0, date: "2026-03-09" }])).toThrow(/km/);
+    expect(() => processKmTrips([{ mode: "car", km: 0, date: "2026-03-09", ownership: "private" }])).toThrow(/km/);
   });
 });
 
@@ -135,7 +135,7 @@ describe("computeTotals", () => {
       { category: "fare", fare_kind: "train", description: "Bahn", date: "2026-03-09", amount: 50, vat_amount: 3.27, vat_rate: 7 },
       { category: "incidental", description: "Parken", date: "2026-03-09", amount: 8 },
     ]);
-    const km = processKmTrips([{ mode: "car", km: 100, date: "2026-03-09" }]).lines;
+    const km = processKmTrips([{ mode: "car", km: 100, date: "2026-03-09", ownership: "private" }]).lines;
     const totals = computeTotals({ allowances: 56, lodgingFlat: 20, lines, kmLines: km, advance: 100 });
     expect(totals).toEqual({
       allowances: 56,
@@ -144,6 +144,7 @@ describe("computeTotals", () => {
       fares: 50,
       lodging: 107,
       incidentals: 8,
+      companyPaid: 0,
       total: 271,
       advance: 100,
       reimbursement: 171,
@@ -224,7 +225,7 @@ describe("processExpenses - Fix round 1 (input validation and edge cases)", () =
 
   it("rejects dates that do not exist in the calendar", () => {
     expect(() => run([hotel({ date: "2026-02-31" })])).toThrow(/Datum/);
-    expect(() => processKmTrips([{ mode: "car", km: 10, date: "2026-02-31" }])).toThrow(/Datum/);
+    expect(() => processKmTrips([{ mode: "car", km: 10, date: "2026-02-31", ownership: "private" }])).toThrow(/Datum/);
   });
 
   it("totals reimburse the gross of lines with missing receipt or foreign VAT", () => {
@@ -232,5 +233,136 @@ describe("processExpenses - Fix round 1 (input validation and edge cases)", () =
     const totals = computeTotals({ allowances: 0, lodgingFlat: 0, lines, kmLines: [], advance: 0 });
     expect(totals.lodging).toBe(214);
     expect(totals.total).toBe(214);
+  });
+});
+
+describe("processExpenses - receipt_id (one receipt, two VAT rates)", () => {
+  const room = hotel({ description: "Hotel Musterstadt Zimmer", amount: 240, vat_amount: 15.7, vat_rate: 7, invoice_recipient: "traveller" });
+  const drinks = hotel({ category: "incidental", description: "Hotel Musterstadt Getränke", amount: 30, vat_amount: 4.79, vat_rate: 19, invoice_recipient: "traveller" });
+
+  it("checks the 250 EUR limit against the sum of all lines of the receipt", () => {
+    const { lines, warnings } = run([{ ...room, receipt_id: "R-1" }, { ...drinks, receipt_id: "R-1" }]);
+    expect(lines.map((l) => l.vorsteuer)).toEqual([false, false]);
+    expect(lines.map((l) => l.receiptId)).toEqual(["R-1", "R-1"]);
+    expect(warnings.filter((w) => w.includes("Namen des Reisenden"))).toHaveLength(1);
+    expect(warnings.some((w) => w.includes("R-1") && w.includes("270"))).toBe(true);
+  });
+
+  it("without receipt_id each line stands on its own", () => {
+    expect(run([room, drinks]).lines.map((l) => l.vorsteuer)).toEqual([true, true]);
+  });
+
+  it("uses the gross before the breakfast deduction for the limit", () => {
+    const { lines } = run(
+      [{ ...room, amount: 245, breakfast_included: true, receipt_id: "R-2" }, { ...drinks, amount: 10, vat_amount: 1.6, receipt_id: "R-2" }],
+      "self_employed"
+    );
+    expect(lines.map((l) => l.vorsteuer)).toEqual([false, false]);
+  });
+
+  it("rejects mixed currencies and different invoice recipients within one receipt_id", () => {
+    const chf = { currency: "CHF", fx_rate: 1.05, fx_source: "BMF Monatskurs 03/2026" };
+    expect(() => run([{ ...room, receipt_id: "R-3" }, { ...drinks, ...chf, receipt_id: "R-3" }])).toThrow(/receipt_id "R-3".*Währung/);
+    expect(() => run([{ ...room, receipt_id: "R-4" }, { ...drinks, invoice_recipient: "company", receipt_id: "R-4" }])).toThrow(
+      /receipt_id "R-4".*invoice_recipient/
+    );
+  });
+});
+
+describe("processExpenses - ausländische Umsatzsteuer", () => {
+  const withCountry = (expenses: Expense[], country: string) =>
+    processExpenses(expenses, { travellerType: "employee", breakfastRate: () => 28, countryOfDate: () => country });
+
+  it("the vat_rate error points to foreign_vat", () => {
+    expect(() => run([hotel({ vat_rate: undefined })])).toThrow(/foreign_vat: true setzen/);
+  });
+
+  it("warns about VAT on a foreign day (French TVA) but still allows it", () => {
+    const { lines, warnings } = withCountry([hotel({ description: "Hôtel Exemple Paris", vat_amount: 10, vat_rate: 7 })], "Frankreich");
+    expect(lines[0].vorsteuer).toBe(true);
+    expect(
+      warnings.some((w) => w.includes('Beleg "Hôtel Exemple Paris"') && w.includes("Auslandstag (Frankreich)") && w.includes("foreign_vat: true setzen"))
+    ).toBe(true);
+  });
+
+  it("warns about VAT in a foreign currency on a domestic day", () => {
+    const { warnings } = withCountry([hotel({ currency: "CHF", fx_rate: 1.05, fx_source: "BMF Monatskurs 03/2026" })], "Deutschland");
+    expect(warnings.some((w) => w.includes("Fremdwährung (CHF)") && w.includes("foreign_vat: true setzen"))).toBe(true);
+  });
+
+  it("does not warn for a domestic EUR receipt, a flagged foreign VAT or a missing receipt", () => {
+    const hint = (r: { warnings: string[] }) => r.warnings.some((w) => w.includes("foreign_vat: true setzen"));
+    expect(hint(withCountry([hotel()], "Deutschland"))).toBe(false);
+    expect(hint(withCountry([hotel({ foreign_vat: true })], "Frankreich"))).toBe(false);
+    expect(hint(withCountry([hotel({ receipt_missing: true })], "Frankreich"))).toBe(false);
+  });
+});
+
+describe("processExpenses - vom Unternehmen gezahlt (paid_by)", () => {
+  it("keeps the line but leaves it out of the reimbursement and the category sums", () => {
+    const { lines } = run([hotel({ paid_by: "company" }), hotel({ description: "Hotel B" })]);
+    expect(lines.map((l) => l.paidBy)).toEqual(["company", "traveller"]);
+    const totals = computeTotals({ allowances: 14, lodgingFlat: 0, lines, kmLines: [], advance: 0 });
+    expect(totals).toMatchObject({ lodging: 107, companyPaid: 107, total: 121, reimbursement: 121 });
+  });
+
+  it("rejects an unknown paid_by", () => {
+    expect(() => run([hotel({ paid_by: "boss" as never })])).toThrow(/paid_by/);
+  });
+});
+
+describe("processExpenses - Frühstück und Hinweise je Reisendem", () => {
+  it("self-employed: breakfast part from the 24-hour rate of the night's day, not the next day", () => {
+    const { lines } = processExpenses([hotel({ breakfast_included: true })], {
+      travellerType: "self_employed",
+      breakfastRate: (date) => (date === "2026-03-09" ? 58 : 99),
+    });
+    expect(lines[0].breakfastDeductedEur).toBe(11.6);
+  });
+
+  it("self-employed: warns when the domestic 28 EUR is used because no trip day matches", () => {
+    const { lines, warnings } = processExpenses([hotel({ breakfast_included: true })], { travellerType: "self_employed", breakfastRate: () => undefined });
+    expect(lines[0].breakfastDeductedEur).toBe(5.6);
+    expect(warnings.some((w) => w.includes("Frühstücksanteil mit Inlandssatz 28 € geschätzt"))).toBe(true);
+  });
+
+  it("the breakfast VAT warning matches the traveller type", () => {
+    const employee = run([hotel({ breakfast_included: true })], "employee").warnings.find((w) => w.includes("Sammelposten"));
+    expect(employee).toContain("Hotelpreis bleibt bei Angestellten ungekürzt");
+    expect(employee).not.toContain("abgezogener Frühstücksanteil");
+    const self = run([hotel({ breakfast_included: true })], "self_employed").warnings.find((w) => w.includes("Sammelposten"));
+    expect(self).toContain("abgezogener Frühstücksanteil mindert die USt anteilig");
+  });
+});
+
+describe("dates outside the trip and km ownership", () => {
+  const tripRange = { from: "2026-03-09", to: "2026-03-11" };
+
+  it("warns per receipt dated before or after the trip, not for receipts within", () => {
+    const { warnings } = processExpenses(
+      [hotel({ date: "2026-03-01", description: "Bahn Vorverkauf" }), hotel({ date: "2026-03-12", description: "Taxi" }), hotel()],
+      { travellerType: "employee", breakfastRate: () => 28, tripRange }
+    );
+    const outside = warnings.filter((w) => w.includes("außerhalb der Reise"));
+    expect(outside).toHaveLength(2);
+    expect(outside[0]).toContain("Bahn Vorverkauf");
+  });
+
+  it("warns per km trip outside the trip", () => {
+    const { warnings } = processKmTrips(
+      [
+        { mode: "car", km: 10, date: "2026-03-13", ownership: "private" },
+        { mode: "car", km: 10, date: "2026-03-10", ownership: "private" },
+      ],
+      { tripRange }
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("2026-03-13");
+  });
+
+  it("requires ownership for km trips", () => {
+    expect(() => processKmTrips([{ mode: "car", km: 10, date: "2026-03-09" } as never])).toThrow(
+      "ownership (private oder business) beim Nutzer erfragen: die Kilometerpauschale gilt nur für private Fahrzeuge."
+    );
   });
 });

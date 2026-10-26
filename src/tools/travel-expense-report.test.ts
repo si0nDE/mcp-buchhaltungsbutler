@@ -334,3 +334,73 @@ describe("upload error handling and warnings (fix round 1)", () => {
     expect(data(res).warnings.some((w: string) => w.includes("Gesamtbetrag 0 €"))).toBe(true);
   });
 });
+
+describe("final review fixes over the MCP client", () => {
+  const call = async (args: Record<string, unknown>) => {
+    const client = await connect(() => ({}));
+    return client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, ...args } });
+  };
+  const companyHotel = {
+    category: "lodging", description: "Hotel Musterstadt", date: "2026-03-09", amount: 107, vat_amount: 7, vat_rate: 7,
+    invoice_recipient: "company", paid_by: "company", breakfast_included: true,
+  };
+
+  it("returns nights, lodging_flat and sources", async () => {
+    const d = data(await call({ use_lodging_flat_rate: true }));
+    expect(d.nights).toBe(2);
+    expect(d.lodging_flat.map((l: { amount: number }) => l.amount)).toEqual([20, 20]);
+    expect(Array.isArray(d.sources)).toBe(true);
+  });
+
+  it("company-paid hotel: shown in costs, not in total, reimbursement, upload amount or splits; breakfast still reduces", async () => {
+    const res = await call({ expenses: [companyHotel] });
+    expect(res.isError).toBeFalsy();
+    const d = data(res);
+    expect(d.costs).toHaveLength(1);
+    expect(d.costs[0].paidBy).toBe("company");
+    expect(d.totals.lodging).toBe(0);
+    expect(d.totals.companyPaid).toBe(107);
+    expect(d.totals.total).toBe(50.4);
+    expect(d.totals.reimbursement).toBe(50.4);
+    expect(d.days.find((x: { date: string }) => x.date === "2026-03-10").reduction).toBe(5.6);
+    expect(d.booking_hint.splits.some((s: { group: string }) => s.group === "lodging")).toBe(false);
+
+    const upload = vi.fn(async (key: string, _params?: Record<string, unknown>) => (key === "receiptsUpload" ? { id_by_customer: 4713 } : { data: [] }));
+    const client = await connect(upload);
+    await client.callTool({ name: "generate_and_upload_travel_expense_report", arguments: { ...base, expenses: [companyHotel] } });
+    const params = upload.mock.calls.find(([key]) => key === "receiptsUpload")![1] as Record<string, unknown>;
+    expect(params.amount).toBe(50.4);
+  });
+
+  it("270 EUR hotel invoice to the traveller split by VAT rate with one receipt_id: no Vorsteuer", async () => {
+    const part = { date: "2026-03-09", invoice_recipient: "traveller", receipt_id: "H-2026-0815" };
+    const d = data(
+      await call({
+        expenses: [
+          { ...part, category: "lodging", description: "Hotel Musterstadt Zimmer", amount: 240, vat_amount: 15.7, vat_rate: 7 },
+          { ...part, category: "incidental", description: "Hotel Musterstadt Getränke", amount: 30, vat_amount: 4.79, vat_rate: 19 },
+        ],
+      })
+    );
+    expect(d.costs.map((c: { vorsteuer: boolean }) => c.vorsteuer)).toEqual([false, false]);
+    expect(d.warnings.some((w: string) => w.includes("H-2026-0815") && w.includes("Namen des Reisenden"))).toBe(true);
+  });
+
+  it("French TVA without foreign_vat on a day in France: warning", async () => {
+    const d = data(
+      await call({
+        stops: [{ country: "Frankreich", place: "Paris", arrival: "2026-03-09T12:00", transport: "train" }],
+        expenses: [{ category: "lodging", description: "Hôtel Exemple", date: "2026-03-09", amount: 110, vat_amount: 10, vat_rate: 7, invoice_recipient: "company" }],
+      })
+    );
+    expect(d.warnings.some((w: string) => w.includes("Auslandstag (Frankreich)") && w.includes("foreign_vat: true setzen"))).toBe(true);
+  });
+
+  it("km trip without ownership is rejected with the German hint; a km trip outside the trip warns", async () => {
+    const missing = await call({ km_trips: [{ mode: "car", km: 100, date: "2026-03-09" }] });
+    expect(missing.isError).toBe(true);
+    expect(errorText(missing)).toContain("ownership (private oder business) beim Nutzer erfragen");
+    const outside = data(await call({ km_trips: [{ mode: "car", km: 100, date: "2026-03-20", ownership: "private" }] }));
+    expect(outside.warnings.some((w: string) => w.includes("2026-03-20") && w.includes("außerhalb der Reise"))).toBe(true);
+  });
+});
