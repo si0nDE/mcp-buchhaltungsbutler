@@ -223,6 +223,8 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
   const chart = options.chart ? await options.chart() : "unknown";
   const hint = buildBookingHint({
     travellerType,
+    travellerName: args.traveller_name.trim(),
+    purpose: args.purpose.trim(),
     chart,
     allowances: trip.allowanceTotal,
     lodgingFlat: trip.lodgingFlatTotal,

@@ -32,6 +32,8 @@ export interface BookingSplit {
 export interface BookingHint {
   chart: Chart;
   splits: BookingSplit[];
+  /** Fields the posting tools require on the travel-expense accounts 4660-4678 (see travel-expense.ts). */
+  posting_fields: { traveler_name: string; traveler_role: "employee" | "owner_manager"; business_purpose: string };
   settlement: string;
   notes: string[];
 }
@@ -41,6 +43,8 @@ const vatCode = (line: CostLine): VatCode =>
 
 export function buildBookingHint(input: {
   travellerType: TravellerType;
+  travellerName: string;
+  purpose: string;
   chart: Chart;
   allowances: number;
   lodgingFlat: number;
@@ -74,16 +78,30 @@ export function buildBookingHint(input: {
   const settlement =
     input.travellerType === "employee"
       ? "Erstattung an die mitarbeitende Person über das Auslagen-Verfahren von BuchhaltungsButler (get_booking_guide Thema auslagen): " +
-        "Beleg dem Auslagenkonto zuweisen, Ausgleich über Geldtransit 1360 | 1460. Der Konnektor bucht nicht selbst; jede Buchung bestätigt der Nutzer."
-      : "Selbst verauslagte Kosten: Einzelunternehmen über Privateinlagen (1890 | 2180), GmbH über Verbindlichkeiten gegenüber Gesellschaftern " +
-        "(730 | 3510), siehe get_booking_guide Thema auslagen. Der Konnektor bucht nicht selbst; jede Buchung bestätigt der Nutzer.";
+        "bei regelmäßigen Auslagen ein Sonstiges Basiskonto als Auslagenkonto anlegen (create_account, type other, receipt_creates_transaction true); " +
+        "der dem Konto zugewiesene Beleg erzeugt die Zahlung. Erstattung: Bankabgang gegen Geldtransit 1360 (SKR03) | 1460 (SKR04) und eine " +
+        "manuelle Zahlung in gleicher Höhe als Zahlungseingang auf dem Auslagenkonto, ebenfalls gegen Geldtransit. " +
+        "Der Konnektor bucht nicht selbst; jede Buchung bestätigt der Nutzer."
+      : "Selbst verauslagte Kosten (get_booking_guide Thema auslagen): mit Sonstigem Basiskonto als Auslagenkonto (create_account, type other, " +
+        "receipt_creates_transaction true) wie bei Angestellten; Erstattung über Geldtransit 1360 (SKR03) | 1460 (SKR04). Ohne Basiskonto: " +
+        "Einzelunternehmen Aufwand an Privateinlagen 1890 (SKR03) | 2180 (SKR04) (laut Guide zusätzlich 2190 prüfen), GmbH Aufwand an " +
+        "Verbindlichkeiten gegenüber Gesellschaftern 730 (SKR03) | 3510 (SKR04). " +
+        "Der Konnektor bucht nicht selbst; jede Buchung bestätigt der Nutzer.";
 
   const notes = [
     "Verpflegungspauschalen und Pauschalübernachtung ohne Vorsteuer (0_none); ausländische Umsatzsteuer ebenfalls 0_none.",
     "Bewirtung von Geschäftspartnern auf der Reise gehört nicht hierher, sondern auf einen eigenen Bewirtungsbeleg (generate_entertainment_receipt).",
   ];
+  notes.push(
+    "add_receipt_postings/add_transaction_postings verlangen auf diesen Konten traveler_name, traveler_role und business_purpose (siehe posting_fields)."
+  );
   if (input.chart === "unknown") {
     notes.push("Kontenrahmen nicht ermittelt oder nicht SKR03: keine Kontonummern genannt; passende Reisekostenkonten per list_posting_accounts suchen.");
   }
-  return { chart: input.chart, splits, settlement, notes };
+  const posting_fields = {
+    traveler_name: input.travellerName,
+    traveler_role: input.travellerType === "employee" ? ("employee" as const) : ("owner_manager" as const),
+    business_purpose: input.purpose,
+  };
+  return { chart: input.chart, splits, posting_fields, settlement, notes };
 }

@@ -49,6 +49,11 @@ describe("generate_travel_expense_report over the MCP client", () => {
     expect(d.totals.total).toBe(96);
     expect(d.days).toHaveLength(3);
     expect(d.booking_hint.chart).toBe("unknown");
+    expect(d.booking_hint.posting_fields).toEqual({
+      traveler_name: "Erika Mustermann",
+      traveler_role: "employee",
+      business_purpose: "Kundentermin Einführung Backup-Konzept bei Muster AG",
+    });
     expect(d.booking_hint.splits.every((s: { account?: number }) => s.account === undefined)).toBe(true);
   });
 

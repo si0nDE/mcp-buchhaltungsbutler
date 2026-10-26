@@ -15,6 +15,17 @@ const hotel = (overrides: Partial<Expense> = {}): Expense => ({
 const run = (expenses: Expense[], travellerType: "employee" | "self_employed" = "employee") =>
   processExpenses(expenses, { travellerType, breakfastRate: () => 28 });
 
+describe("processExpenses - vat_rate 0 with a VAT amount", () => {
+  it("rejects vat_amount > 0 with vat_rate 0", () => {
+    expect(() => run([hotel({ vat_rate: 0, vat_amount: 7 })])).toThrow(/Hotel Musterstadt.*vat_rate/);
+  });
+  it("accepts vat_rate 0 with vat_amount 0, and discards VAT for foreign VAT or a missing receipt", () => {
+    expect(() => run([hotel({ vat_rate: 0, vat_amount: 0 })])).not.toThrow();
+    expect(() => run([hotel({ vat_rate: 0, vat_amount: 7, foreign_vat: true })])).not.toThrow();
+    expect(() => run([hotel({ vat_rate: 0, vat_amount: 7, receipt_missing: true })])).not.toThrow();
+  });
+});
+
 describe("processExpenses - amounts and Vorsteuer", () => {
   it("takes net and VAT as printed and allows Vorsteuer for an invoice to the company", () => {
     const { lines } = run([hotel()]);

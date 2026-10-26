@@ -129,8 +129,8 @@ export function processExpenses(
           "ausdrücklich geregelt; der BMF-Monatsdurchschnittskurs ist eine vertretbare Schätzung (§ 16 Abs. 6 UStG gilt für die Umsatzsteuer)."
       );
     }
-    if ((expense.vat_amount ?? 0) > 0 && expense.vat_rate === undefined && !foreignVat && !receiptMissing) {
-      throw new Error(`${label}: Bei vat_amount größer 0 ist vat_rate (7 oder 19) anzugeben.`);
+    if ((expense.vat_amount ?? 0) > 0 && expense.vat_rate !== 7 && expense.vat_rate !== 19 && !foreignVat && !receiptMissing) {
+      throw new Error(`${label}: Bei vat_amount größer 0 ist vat_rate 7 oder 19 anzugeben (vat_rate 0 würde die Vorsteuer stillschweigend verwerfen).`);
     }
 
     const recipient = expense.invoice_recipient ?? "unknown";
