@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **52 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **54 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.
@@ -110,6 +110,16 @@ Streamable HTTP service instead of stdio, container-ready.
    `Authorization: Bearer <token>` header — this is what makes it reachable from Claude on iOS/iPadOS,
    not just Desktop.
 
+## Reisekostenabrechnung (travel expense reports)
+
+`generate_travel_expense_report` turns trip data (times, stops, meals, journeys, receipts) into a travel expense report PDF
+plus a booking hint; the calculation (domestic and foreign per-diem rates from the 2026 BMF table, meal reductions,
+three-month rule) runs deterministically in the connector. `generate_and_upload_travel_expense_report` also uploads the PDF
+(never retried automatically, check `list_receipts` first). For employees and for self-employed persons/managing directors;
+nothing is booked automatically. The foreign rates table covers 2026 only, and the interpretation points should be reviewed by
+a tax advisor before production use. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md) (German only, it documents German
+tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-reisekosten.md).
+
 ## Tools
 
 | Category | Tools |
@@ -128,6 +138,7 @@ Streamable HTTP service instead of stdio, container-ready.
 | Booking guide | `get_booking_guide` (documented BHB special cases: Skonto, Geldtransit, Auslagen, RAP, OSS, foreign currency, ...) |
 | Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
+| Reisekostenabrechnung | `generate_travel_expense_report`, `generate_and_upload_travel_expense_report` |
 
 ## Correcting wrong postings (`cancel_posting`)
 

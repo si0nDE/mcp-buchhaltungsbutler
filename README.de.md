@@ -8,7 +8,7 @@ Ein MCP-Server (Model Context Protocol), der die [BuchhaltungsButler](https://ww
 
 ## Für Agenten gebaut, nicht nur aus der API gewrappt
 
-- **52 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
+- **54 Tools decken alle 58 Endpoints ab** — Batch-, List- und Einzel-Varianten derselben Aktion sind zu einem Tool zusammengeführt, damit dein Context-Window nicht mit Beinahe-Duplikaten vollläuft.
 - **Schlank per Default** — List-Tools liefern von Haus aus getrimmte, LLM-freundliche Felder; mit `full: true` gibt's bei Bedarf den kompletten Datensatz.
 - **Kein Array-Jonglieren** — Rechnungspositionen, Buchungs-Splits und andere API-Eigenheiten kommen als saubere, ganz normale Objekte an. Kein manuelles Synchronhalten von fünf parallelen Arrays mehr.
 - **Immer synchron mit der Spec** — Endpoint-Definitionen werden direkt aus BuchhaltungsButlers offizieller API-Spec generiert, nicht von Hand gepflegt.
@@ -108,6 +108,16 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 4. In Claude als Remote-/Custom-Connector eintragen mit `https://mcp.deine-domain.example/mcp` und
    `Authorization: Bearer <token>` — dadurch auch von Claude auf iOS/iPadOS erreichbar, nicht nur Desktop.
 
+## Reisekostenabrechnung
+
+`generate_travel_expense_report` erzeugt aus Reisedaten (Zeiten, Stationen, Mahlzeiten, Fahrten, Belege) eine
+Reisekostenabrechnung als PDF und einen Buchungshinweis; die Berechnung (Verpflegungspauschalen Inland und Ausland
+nach BMF-Tabelle 2026, Mahlzeitenkürzung, Dreimonatsfrist) läuft deterministisch im Konnektor.
+`generate_and_upload_travel_expense_report` lädt das PDF zusätzlich hoch (nie automatisch wiederholt, vorher `list_receipts`
+prüfen). Für Angestellte und für Selbstständige/Geschäftsführer; gebucht wird nicht automatisch. Auslandstabelle nur für 2026,
+Auslegungspunkte vor Produktivbetrieb vom Steuerberater prüfen lassen. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md),
+Rechtsgrundlagen: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-reisekosten.md).
+
 ## Tools
 
 | Kategorie | Tools |
@@ -122,6 +132,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 | Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_einvoice` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
+| Reisekostenabrechnung | `generate_travel_expense_report`, `generate_and_upload_travel_expense_report` |
 | USt-VA | `get_ustva_position`, `preview_vat_impact` (Summen der Steuerkonten und `elster_estimate` mit auf volle Euro abgerundeten Bemessungsgrundlagen wie in ELSTER; trotzdem nicht die ELSTER-Zahl) |
 
 ## Falsche Buchungen korrigieren (`cancel_posting`)
