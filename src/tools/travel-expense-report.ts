@@ -371,6 +371,7 @@ export function createTravelExpenseTools(client: BBClient, options: { fetchImpl?
     inputSchema: uploadShape,
     async handler(args) {
       const built = await buildTravelReport(args, { chart: () => getChart(client).catch(() => "unknown" as const), fetchImpl: options.fetchImpl });
+      const provisional = built.trip.rateTables.some((t) => t.origin === "provisional");
       let id: string | number | null = null;
       try {
         const result = await client.call<{ success?: boolean; message?: string; id_by_customer?: string | number; data?: { id_by_customer?: string | number } }>(
@@ -378,7 +379,7 @@ export function createTravelExpenseTools(client: BBClient, options: { fetchImpl?
           {
             file: Buffer.from(built.pdfBytes).toString("base64"),
             type: "invoice inbound",
-            file_name: `Reisekostenabrechnung_${args.return.slice(0, 10)}.pdf`,
+            file_name: `Reisekostenabrechnung_${args.return.slice(0, 10)}${provisional ? "_vorlaeufig" : ""}.pdf`,
             account: args.account,
             creditor_debtor: args.creditor_debtor,
             counterparty: built.data.travellerName,
@@ -398,6 +399,12 @@ export function createTravelExpenseTools(client: BBClient, options: { fetchImpl?
         );
       }
       const summed = summary(built);
+      if (provisional) {
+        summed.warnings = [
+          ...(summed.warnings ?? []),
+          "Vorläufiger Beleg hochgeladen: nach Veröffentlichung der BMF-Tabelle neu berechnen, den neuen Beleg hochladen und diesen mit set_receipt_deleted entfernen, bevor gebucht wird.",
+        ];
+      }
       if (built.totals.total === 0) {
         summed.warnings = [
           ...(summed.warnings ?? []),

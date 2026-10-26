@@ -514,6 +514,25 @@ describe("foreign rates for a year without a built-in table", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("provisional upload: file name with _vorlaeufig and a warning; a final upload keeps the plain name", async () => {
+    vi.stubGlobal("fetch", fetchWith((url) => respond("nicht gefunden", { status: 404, url })));
+    const call = vi.fn(async (key: string, _params?: Record<string, unknown>) => (key === "receiptsUpload" ? { id_by_customer: 4715 } : { data: [] }));
+    const client = await connect(call);
+    const res = await client.callTool({ name: "generate_and_upload_travel_expense_report", arguments: { ...base, ...paris2027 } });
+    expect(res.isError).toBeFalsy();
+    const params = call.mock.calls.find(([key]) => key === "receiptsUpload")![1] as Record<string, unknown>;
+    expect(params.file_name).toBe("Reisekostenabrechnung_2027-03-11_vorlaeufig.pdf");
+    expect(data(res).warnings).toContain(
+      "Vorläufiger Beleg hochgeladen: nach Veröffentlichung der BMF-Tabelle neu berechnen, den neuen Beleg hochladen und diesen mit set_receipt_deleted entfernen, bevor gebucht wird."
+    );
+
+    call.mockClear();
+    const final = await client.callTool({ name: "generate_and_upload_travel_expense_report", arguments: base });
+    const finalParams = call.mock.calls.find(([key]) => key === "receiptsUpload")![1] as Record<string, unknown>;
+    expect(finalParams.file_name).toBe("Reisekostenabrechnung_2026-03-11.pdf");
+    expect((data(final).warnings ?? []).some((w: string) => w.startsWith("Vorläufiger Beleg"))).toBe(false);
+  });
+
   it("trip in 2024 abroad: no network call, provisional with the dedicated warning", async () => {
     const fetchMock = fetchWith((url) => respond(fixtureHtml(2024), { url }));
     vi.stubGlobal("fetch", fetchMock);
