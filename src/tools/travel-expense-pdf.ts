@@ -1,5 +1,6 @@
 import { PDFDocument, PageSizes, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { DayResult, LodgingFlatLine, RateTableInfo, TravellerType } from "./travel-expense-calc.js";
+import { ONLINE_RATES_FROM_YEAR } from "./travel-rates.js";
 import type { CostLine, KmLine, Totals } from "./travel-expense-costs.js";
 import {
   formatConfirmationTimestamp,
@@ -121,7 +122,10 @@ export async function renderTravelExpenseReport(
   // Provisional foreign rates must be visible at first sight, not only on the notes page.
   for (const t of (data.rateTables ?? []).filter((r) => r.origin === "provisional")) {
     const banner = lines(
-      `VORLÄUFIG: Auslandssätze mit der Tabelle ${t.provisionalFrom} berechnet, BMF-Tabelle ${t.year} nicht verfügbar. Nach Veröffentlichung neu berechnen.`,
+      `VORLÄUFIG: Auslandssätze mit der Tabelle ${t.provisionalFrom} berechnet, BMF-Tabelle ${t.year} nicht verfügbar. ` +
+        (t.year < ONLINE_RATES_FROM_YEAR
+          ? "Das sind NICHT die Sätze des Reisejahrs, Abrechnung nicht übernehmen."
+          : "Nach Veröffentlichung neu berechnen."),
       10,
       contentWidth - 20,
       bold

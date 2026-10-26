@@ -42,9 +42,12 @@ const DOMESTIC: RateEntry = {
   night: 20,
 };
 const REST = "im Übrigen";
+/** The LStH pages exist from this year on (verified for 2025 and 2026); earlier years are never looked up online. */
+export const ONLINE_RATES_FROM_YEAR = 2025;
 
-// One table per year. A year is only available after its BMF letter was published (usually in December of
-// the previous year) and generated with scripts/generate-travel-rates.ts - never reuse another year's rates.
+// Built-in tables, one per year, generated with scripts/generate-travel-rates.ts once the BMF letter is published
+// (usually in December of the previous year). Other years are looked up online (travel-rates-online.ts); if that
+// fails, another year's values are only used through provisionalRateTable, always marked and warned.
 const TABLES: Record<number, RateTable> = { 2026: RATES_2026 };
 
 const norm = (value: string): string =>

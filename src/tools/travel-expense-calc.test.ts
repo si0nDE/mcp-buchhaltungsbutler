@@ -244,6 +244,20 @@ describe("computeTrip - Eingabefehler", () => {
     expect(domestic.rateTables).toEqual([]);
   });
 
+  it("years before 2025: dedicated warning that the rates are not those of the travel year (still provisional, no throw)", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2024-03-09T06:00",
+      returnTime: "2024-03-09T20:00",
+      stops: [{ country: "Frankreich", arrival: "2024-03-09T10:00" }],
+    });
+    expect(result.days[0]).toMatchObject({ amount: 36, provisional: true });
+    expect(result.warnings).toContain(
+      "BMF-Auslandstabelle 2024 nicht eingebaut und nicht online abrufbar (Abruf nur ab 2025): Sätze der Tabelle 2026 sind NICHT die Sätze des Reisejahrs, Abrechnung nicht übernehmen."
+    );
+    expect(result.warnings.some((w) => w.includes("Nach Veröffentlichung neu berechnen"))).toBe(false);
+  });
+
   it("uses supplied rate tables (e.g. online) for a year without a built-in table", () => {
     const online = { ...getRateTable(2026), year: 2027, origin: "online" as const, source: "BMF, LStH 2027 Anhang 25 I, online", entries: getRateTable(2026).entries.map((e) => ({ ...e, full: e.full + 2, partial: e.partial + 1 })) };
     const result = computeTrip({

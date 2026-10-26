@@ -89,6 +89,14 @@ describe("renderTravelExpenseReport", () => {
     expect(plain).not.toContain("VORLÄUFIG");
   });
 
+  it("banner for a year before 2025 says the rates are not those of the travel year", async () => {
+    const rateTables = [{ year: 2024, origin: "provisional" as const, source: "Vorläufig", retrievedAt: "2026-10-26", provisionalFrom: 2026 }];
+    const text = await textOf(await renderTravelExpenseReport(data({ rateTables })));
+    expect(text).toContain("VORLÄUFIG: Auslandssätze mit der Tabelle 2026 berechnet, BMF-Tabelle 2024 nicht verfügbar");
+    expect(text).toContain("NICHT die Sätze des Reisejahrs");
+    expect(text).not.toContain("Nach Veröffentlichung neu berechnen");
+  });
+
   it("puts all warnings and sources on a notes page", async () => {
     const bytes = await renderTravelExpenseReport(data());
     const text = await textOf(bytes);

@@ -514,6 +514,21 @@ describe("foreign rates for a year without a built-in table", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("trip in 2024 abroad: no network call, provisional with the dedicated warning", async () => {
+    const fetchMock = fetchWith((url) => respond(fixtureHtml(2024), { url }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await connect(() => ({}));
+    const d = data(
+      await client.callTool({
+        name: "generate_travel_expense_report",
+        arguments: { ...base, departure: "2024-03-09T07:00", return: "2024-03-11T18:00", stops: [{ country: "Frankreich", arrival: "2024-03-09T12:00" }] },
+      })
+    );
+    expect(d.rates_provisional).toBe(true);
+    expect(d.warnings.some((w: string) => w.startsWith("BMF-Auslandstabelle 2024 nicht eingebaut und nicht online abrufbar"))).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("opt-out BHB_TRAVEL_RATES_ONLINE=0: provisional without a network call", async () => {
     vi.stubEnv("BHB_TRAVEL_RATES_ONLINE", "0");
     const fetchMock = fetchWith((url) => respond(fixtureHtml(2027), { url }));

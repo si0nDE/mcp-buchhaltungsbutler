@@ -3,6 +3,7 @@ import {
   DOMESTIC_COUNTRY,
   isDomesticCountry,
   lookupRate,
+  ONLINE_RATES_FROM_YEAR,
   provisionalRateTable,
   type RateTable,
   type RateTables,
@@ -247,8 +248,11 @@ export function computeTrip(input: TripInput): TripResult {
     }
     if (rate.provisional) {
       warnings.add(
-        `BMF-Auslandstabelle ${year} nicht verfügbar (noch nicht veröffentlicht oder Abruf nicht möglich): Auslandssätze vorläufig mit der ` +
-          `Tabelle ${rate.provisionalFrom} berechnet. Nach Veröffentlichung neu berechnen, bevor die Buchung bestätigt wird.`
+        year < ONLINE_RATES_FROM_YEAR
+          ? `BMF-Auslandstabelle ${year} nicht eingebaut und nicht online abrufbar (Abruf nur ab ${ONLINE_RATES_FROM_YEAR}): Sätze der Tabelle ` +
+              `${rate.provisionalFrom} sind NICHT die Sätze des Reisejahrs, Abrechnung nicht übernehmen.`
+          : `BMF-Auslandstabelle ${year} nicht verfügbar (noch nicht veröffentlicht oder Abruf nicht möglich): Auslandssätze vorläufig mit der ` +
+              `Tabelle ${rate.provisionalFrom} berechnet. Nach Veröffentlichung neu berechnen, bevor die Buchung bestätigt wird.`
       );
     }
     if (rate.fallback === "luxembourg") {

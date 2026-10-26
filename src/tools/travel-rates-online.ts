@@ -1,4 +1,4 @@
-import { builtinRateTable, provisionalRateTable, type RateTable, type RateTables } from "./travel-rates.js";
+import { builtinRateTable, ONLINE_RATES_FROM_YEAR, provisionalRateTable, type RateTable, type RateTables } from "./travel-rates.js";
 import { parseRatesHtml, type ParsedRate } from "./travel-rates-parse.js";
 
 // Online lookup of the BMF table of foreign per-diem rates for years without a built-in table (LStH Anhang 25 I).
@@ -7,7 +7,7 @@ import { parseRatesHtml, type ParsedRate } from "./travel-rates-parse.js";
 // Any problem (network, HTTP status, redirect, size, content type, validation) means "not available", never an error:
 // the caller then continues with a provisional table. Opt-out: BHB_TRAVEL_RATES_ONLINE=0 or false.
 export const RATE_HOSTS = ["lsth.bundesfinanzministerium.de", "ksth.bundesfinanzministerium.de"] as const;
-const MIN_YEAR = 2025;
+const MIN_YEAR = ONLINE_RATES_FROM_YEAR;
 const MAX_YEAR = 2100;
 const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 3 * 1024 * 1024;
