@@ -51,6 +51,11 @@ const stopSchema = z.object({
   place: z.string().optional().describe('Stadt, wenn die BMF-Tabelle sie gesondert führt (z. B. "Paris", "London", "New York City").'),
   arrival: z.string().regex(LOCAL_DATE_TIME).describe("Ankunft an diesem Ort in Ortszeit dort, YYYY-MM-DDTHH:mm."),
   transport: z.enum(["car", "train", "flight", "ship", "other"]).optional().describe("Beförderungsart der Etappe zu diesem Ort. Flug über mehr als zwei Kalendertage und Schiff haben eigene Regeln (R 9.6 Abs. 3 LStR)."),
+  departs_at: z.string().regex(LOCAL_DATE_TIME).optional().describe(
+    "Nur ab der zweiten Station: Beginn der Etappe zu diesem Ort (Abflug/Abfahrt), YYYY-MM-DDTHH:mm in Ortszeit am vorigen Ort; zwischen der Ankunft an der vorigen Station und der Ankunft hier. " +
+      "Bei Flug oder Schiff über mehrere Kalendertage angeben: nur dann rechnet das Tool Zwischentage (Flug Österreich, Schiff Luxemburg) und zählt die Nächte an Bord nicht als Übernachtung. " +
+      "Ohne departs_at gilt die Etappe als am Ankunftstag zurückgelegt. Die erste Etappe beginnt mit departure."
+  ),
 });
 
 const expenseSchema = z.object({
@@ -88,7 +93,10 @@ const generateShape = {
   purpose: z.string().describe("Konkreter Reisezweck (wen/was/warum). Pauschalangaben wie 'Geschäftsreise' werden abgelehnt."),
   departure: z.string().regex(LOCAL_DATE_TIME).describe("Abreise von Wohnung bzw. erster Tätigkeitsstätte, YYYY-MM-DDTHH:mm (Ortszeit am Wohnort)."),
   return: z.string().regex(LOCAL_DATE_TIME).describe("Rückkehr zur Wohnung bzw. ersten Tätigkeitsstätte, YYYY-MM-DDTHH:mm."),
-  stops: z.array(stopSchema).min(1).describe("Stationen der Reise in zeitlicher Reihenfolge."),
+  stops: z.array(stopSchema).min(1).describe(
+    "Stationen der Reise in zeitlicher Reihenfolge. Die Rückkehr nach Hause muss nicht als Station erfasst werden; wird sie als " +
+      "letzte Station (Deutschland) nach Auslandsstationen erfasst, gilt für den Rückreisetag der Satz des letzten Auslandsorts (§ 9 Abs. 4a Satz 5 EStG)."
+  ),
   meals_provided: z.record(z.string().regex(DATE_ONLY), z.array(z.enum(MEALS))).optional().describe('Vom Arbeitgeber oder Dritten gestellte Mahlzeiten je Datum, z. B. {"2026-03-10": ["breakfast"]}. Kürzung 20 %/40 % der 24-Stunden-Pauschale.'),
   overnight_without_accommodation: z.boolean().optional().describe("Einsatz über Nacht ohne Übernachtung (14 € für den Tag mit der überwiegenden Abwesenheit)."),
   same_location_since: z.string().regex(DATE_ONLY).optional().describe("Beginn der Tätigkeit an derselben Tätigkeitsstätte (Dreimonatsfrist)."),
@@ -170,7 +178,7 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
     travellerType,
     departure: args.departure,
     returnTime: args.return,
-    stops: args.stops,
+    stops: args.stops.map((s) => ({ country: s.country, place: s.place, arrival: s.arrival, transport: s.transport, departs: s.departs_at })),
     mealsProvided: meals,
     overnightWithoutAccommodation: args.overnight_without_accommodation,
     sameLocationSince: args.same_location_since,

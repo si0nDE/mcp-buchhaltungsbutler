@@ -195,6 +195,29 @@ describe("lodging_nights and two-rate receipts", () => {
   });
 });
 
+describe("stops with departs_at and the home stop", () => {
+  it("passes departs_at to the calculation and rates the return day with the last foreign place", async () => {
+    const client = await connect(() => ({}));
+    const res = await client.callTool({
+      name: "generate_travel_expense_report",
+      arguments: {
+        ...base,
+        departure: "2026-05-03T08:00",
+        return: "2026-05-09T20:00",
+        stops: [
+          { country: "Frankreich", place: "Paris", arrival: "2026-05-03T13:00", transport: "train" },
+          { country: "Japan", place: "Tokio", departs_at: "2026-05-05T22:00", arrival: "2026-05-07T08:00", transport: "flight" },
+          { country: "Deutschland", departs_at: "2026-05-09T10:00", arrival: "2026-05-09T18:00", transport: "flight" },
+        ],
+      },
+    });
+    expect(res.isError).toBeFalsy();
+    const d = data(res);
+    expect(d.days.find((x: { date: string }) => x.date === "2026-05-06").country).toBe("Österreich");
+    expect(d.days.at(-1).country).toBe("Japan");
+  });
+});
+
 describe("generate_and_upload_travel_expense_report", () => {
   const chartRows = { data: [{ postingaccount_number: "8400", name: "Erlöse 19 % USt" }] };
 

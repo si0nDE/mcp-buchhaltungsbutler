@@ -1,4 +1,4 @@
-import { DOMESTIC_COUNTRY, lookupRate, type ResolvedRate } from "./travel-rates.js";
+import { DOMESTIC_COUNTRY, isDomesticCountry, lookupRate, type ResolvedRate } from "./travel-rates.js";
 
 export type TravellerType = "employee" | "self_employed";
 export type Meal = "breakfast" | "lunch" | "dinner";
@@ -11,6 +11,11 @@ export interface Stop {
   arrival: string;
   /** Mode of transport of the leg that leads to this stop. */
   transport?: Transport;
+  /**
+   * Start of the leg to this stop, local time at the previous place, "YYYY-MM-DDTHH:mm". Only for stops after the first
+   * (the first leg starts at the departure). Without it, a flight/ship leg gets no days in between or nights on board.
+   */
+  departs?: string;
 }
 
 export interface TripInput {
@@ -105,17 +110,31 @@ export function computeTrip(input: TripInput): TripResult {
     throw new Error('Mindestens eine Station angeben (stops), z. B. { country: "Deutschland", arrival: "…" }.');
   }
 
-  const stops = input.stops.map((stop) => ({ ...stop, arrivalMs: parseLocal(stop.arrival) }));
+  const stops = input.stops.map((stop) => ({
+    ...stop,
+    arrivalMs: parseLocal(stop.arrival),
+    departsMs: stop.departs === undefined ? undefined : parseLocal(stop.departs),
+  }));
   let previous = departure;
-  for (const stop of stops) {
+  stops.forEach((stop, index) => {
     if (stop.arrivalMs < previous) {
       throw new Error(`Station "${stop.country}": Ankunft ${stop.arrival} liegt vor der vorigen Station bzw. der Abreise.`);
     }
     if (stop.arrivalMs > returnMs) {
       throw new Error(`Station "${stop.country}": Ankunft ${stop.arrival} liegt nach der Rückkehr.`);
     }
+    if (stop.departsMs !== undefined) {
+      if (index === 0) {
+        throw new Error(`Station "${stop.country}": departs_at gilt erst ab der zweiten Station; die erste Etappe beginnt mit der Abreise (departure).`);
+      }
+      if (stop.departsMs < previous || stop.departsMs > stop.arrivalMs) {
+        throw new Error(
+          `Station "${stop.country}": departs_at ${stop.departs} muss zwischen der Ankunft an der vorigen Station und der Ankunft ${stop.arrival} liegen.`
+        );
+      }
+    }
     previous = stop.arrivalMs;
-  }
+  });
 
   const firstDay = startOfDay(departure);
   // A return at exactly 00:00 ends the absence at 24:00 of the previous day: that day is the last one.
@@ -139,6 +158,7 @@ export function computeTrip(input: TripInput): TripResult {
         : lastDay
       : undefined;
 
+  const warnings = new Set<string>();
   // R 9.6 Abs. 3 LStR: days in between on long flights (more than two calendar days) use Österreich,
   // days in between on ship passages use Luxemburg.
   const transitCountry = new Map<string, string>();
@@ -146,7 +166,18 @@ export function computeTrip(input: TripInput): TripResult {
   const transitNights = new Set<string>();
   stops.forEach((stop, index) => {
     if (stop.transport !== "flight" && stop.transport !== "ship") return;
-    const legStart = startOfDay(index === 0 ? departure : stops[index - 1].arrivalMs);
+    // A stop has no departure time of its own: after the first stop the leg start is only known from departs.
+    // Without it the leg is treated as a leg within the arrival day (the previous arrival may be days earlier).
+    if (index > 0 && stop.departsMs === undefined) {
+      if (startOfDay(stop.arrivalMs) - startOfDay(stops[index - 1].arrivalMs) >= 2 * DAY_MS) {
+        warnings.add(
+          `Flug-/Schiffsetappe nach Station ${index + 1} ohne departs_at: Zwischentage und Transitnächte nicht berechnet; ` +
+            "bei einer Reise über mehrere Kalendertage departs_at angeben."
+        );
+      }
+      return;
+    }
+    const legStart = startOfDay(index === 0 ? departure : (stop.departsMs as number));
     const legEnd = startOfDay(stop.arrivalMs);
     if (stop.transport === "flight" && (legEnd - legStart) / DAY_MS < 2) return;
     if (legEnd - legStart > DAY_MS) transitNights.add(dayKey(legStart));
@@ -155,15 +186,25 @@ export function computeTrip(input: TripInput): TripResult {
     }
   });
 
+  // § 9 Abs. 4a Satz 5 EStG: if the place reached last is in Germany, the last place of work abroad counts. Applied to
+  // the return day only, when the return to Germany was entered as the last stop.
+  const lastStop = stops[stops.length - 1];
+  const lastForeign = isDomesticCountry(lastStop.country)
+    ? [...stops].reverse().find((stop) => !isDomesticCountry(stop.country))
+    : undefined;
+  if (lastForeign) {
+    warnings.add(
+      `Rückreise nach Deutschland als Station erfasst: Rückreisetag mit dem letzten Auslandsort (${lastForeign.country.trim()}) angesetzt (§ 9 Abs. 4a Satz 5 EStG).`
+    );
+  }
   const locate = (day: number, isLast: boolean): { country: string; place?: string } => {
-    if (isLast) return stops[stops.length - 1];
+    if (isLast) return lastForeign ?? lastStop;
     const transit = transitCountry.get(dayKey(day));
     if (transit) return { country: transit };
     const reached = stops.filter((stop) => startOfDay(stop.arrivalMs) <= day).pop();
     return reached ?? { country: DOMESTIC_COUNTRY };
   };
 
-  const warnings = new Set<string>();
   const sources = new Set<string>();
   const noteRate = (rate: ResolvedRate, place?: string) => {
     if (rate.source) sources.add(rate.source);

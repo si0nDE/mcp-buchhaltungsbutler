@@ -382,6 +382,153 @@ describe("computeTrip - Übernachtungsnächte", () => {
   });
 });
 
+describe("computeTrip - Etappen nach der ersten Station (departs)", () => {
+  const paris = { country: "Frankreich", place: "Paris", arrival: "2026-04-06T12:00", transport: "train" as const };
+
+  it("short flight home after three nights in Paris without departs: no transit days, hotel nights paid, hint", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-09T19:00",
+      stops: [paris, { country: "Deutschland", arrival: "2026-04-09T18:00", transport: "flight" }],
+      useLodgingFlatRate: true,
+    });
+    expect(result.days.map((d) => [d.date, d.country, d.amount])).toEqual([
+      ["2026-04-06", "Frankreich", 39],
+      ["2026-04-07", "Frankreich", 58],
+      ["2026-04-08", "Frankreich", 58],
+      ["2026-04-09", "Frankreich", 39],
+    ]);
+    expect(result.lodgingFlat.map((l) => [l.date, l.amount])).toEqual([
+      ["2026-04-06", 159],
+      ["2026-04-07", 159],
+      ["2026-04-08", 159],
+    ]);
+    expect(result.warnings.some((w) => w.includes("R 9.6 Abs. 3 LStR"))).toBe(false);
+    expect(result.warnings.filter((w) => w.startsWith("Flug-/Schiffsetappe nach Station 2 ohne departs_at"))).toHaveLength(1);
+  });
+
+  it("does not hint for a flight leg that ends on the day after the previous arrival", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-07T21:00",
+      stops: [paris, { country: "Vereinigtes Königreich", place: "London", arrival: "2026-04-07T10:00", transport: "flight" }],
+    });
+    expect(result.warnings.some((w) => w.includes("ohne departs_at"))).toBe(false);
+  });
+
+  it("Paris, then a flight to London with departs: London from the day of arrival, no transit", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-09T21:00",
+      stops: [
+        paris,
+        { country: "Vereinigtes Königreich", place: "London", departs: "2026-04-08T09:00", arrival: "2026-04-08T09:30", transport: "flight" },
+      ],
+      useLodgingFlatRate: true,
+    });
+    expect(result.days.map((d) => [d.date, d.amount])).toEqual([
+      ["2026-04-06", 39],
+      ["2026-04-07", 58],
+      ["2026-04-08", 66],
+      ["2026-04-09", 44],
+    ]);
+    expect(result.lodgingFlat.map((l) => l.amount)).toEqual([159, 159, 163]);
+    expect(result.warnings.some((w) => w.includes("departs_at") || w.includes("R 9.6 Abs. 3 LStR"))).toBe(false);
+  });
+
+  it("long flight with departs over three calendar days: Österreich for the day in between, no night in the air", () => {
+    const tokio = lookupRate("Japan", "Tokio", 2026);
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-05-03T08:00",
+      returnTime: "2026-05-09T20:00",
+      stops: [
+        { country: "Frankreich", place: "Paris", arrival: "2026-05-03T13:00", transport: "train" },
+        { country: "Japan", place: "Tokio", departs: "2026-05-05T22:00", arrival: "2026-05-07T08:00", transport: "flight" },
+      ],
+      useLodgingFlatRate: true,
+    });
+    expect(result.days.map((d) => [d.date, d.country, d.amount])).toEqual([
+      ["2026-05-03", "Frankreich", 39],
+      ["2026-05-04", "Frankreich", 58],
+      ["2026-05-05", "Frankreich", 58],
+      ["2026-05-06", "Österreich", 50],
+      ["2026-05-07", "Japan", tokio.full],
+      ["2026-05-08", "Japan", tokio.full],
+      ["2026-05-09", "Japan", tokio.partial],
+    ]);
+    expect(result.lodgingFlat.map((l) => l.date)).toEqual(["2026-05-03", "2026-05-04", "2026-05-07", "2026-05-08"]);
+    expect(result.warnings.some((w) => w.includes("R 9.6 Abs. 3 LStR"))).toBe(true);
+  });
+
+  it("rejects departs outside the previous arrival and this arrival, and on the first stop", () => {
+    const trip = (departs: string, first = false) =>
+      computeTrip({
+        travellerType: "employee",
+        departure: "2026-04-06T07:00",
+        returnTime: "2026-04-09T21:00",
+        stops: first
+          ? [{ ...paris, departs }]
+          : [paris, { country: "Vereinigtes Königreich", place: "London", departs, arrival: "2026-04-08T09:30", transport: "flight" }],
+      });
+    expect(() => trip("2026-04-06T11:00")).toThrow(/departs_at/);
+    expect(() => trip("2026-04-08T10:00")).toThrow(/departs_at/);
+    expect(() => trip("2026-04-08T25:00")).toThrow(/Ungültige Zeitangabe/);
+    expect(() => trip("2026-04-06T08:00", true)).toThrow(/departs_at/);
+  });
+});
+
+describe("computeTrip - Rückreise nach Deutschland als Station (§ 9 Abs. 4a Satz 5 EStG)", () => {
+  const home = (arrival: string) => ({ country: "Deutschland", arrival });
+
+  it("Wien: the return day uses Österreich (33 EUR), not the domestic 14 EUR", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-08T21:00",
+      stops: [{ country: "Österreich", place: "Wien", arrival: "2026-04-06T12:00" }, home("2026-04-08T20:00")],
+    });
+    expect(result.days.map((d) => d.amount)).toEqual([33, 50, 33]);
+    expect(result.days[2].country).toBe("Österreich");
+    expect(
+      result.warnings.filter((w) => w.startsWith("Rückreise nach Deutschland als Station erfasst: Rückreisetag mit dem letzten Auslandsort (Österreich)"))
+    ).toHaveLength(1);
+  });
+
+  it("Basel day trip with the home stop: 47 EUR", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-06T19:00",
+      stops: [{ country: "Schweiz", place: "Basel", arrival: "2026-04-06T09:00" }, home("2026-04-06T18:30")],
+    });
+    expect(result.days.map((d) => d.amount)).toEqual([47]);
+  });
+
+  it("Paris, London and the home stop: the return day uses London (44 EUR)", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-09T21:00",
+      stops: [
+        { country: "Frankreich", place: "Paris", arrival: "2026-04-06T12:00", transport: "train" },
+        { country: "Vereinigtes Königreich", place: "London", departs: "2026-04-08T09:00", arrival: "2026-04-08T09:30", transport: "flight" },
+        { country: "Deutschland", departs: "2026-04-09T17:00", arrival: "2026-04-09T20:00", transport: "flight" },
+      ],
+    });
+    expect(result.days.map((d) => d.amount)).toEqual([39, 58, 66, 44]);
+  });
+
+  it("a trip with only domestic stops is unchanged", () => {
+    const result = computeTrip(inland({ stops: [home("2026-03-09T09:00"), home("2026-03-11T17:00")] }));
+    expect(result.days.map((d) => d.amount)).toEqual([14, 28, 14]);
+    expect(result.warnings.some((w) => w.includes("Rückreise nach Deutschland"))).toBe(false);
+  });
+});
+
 describe("computeTrip - weitere Eingabeprüfungen", () => {
   it("allows 366 calendar days and rejects 367", () => {
     const trip = (returnTime: string) =>

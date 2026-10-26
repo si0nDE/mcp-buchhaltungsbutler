@@ -53,6 +53,7 @@ const placeMatches = (wanted: string, candidate: string): boolean =>
   words(candidate).includes(words(wanted)) ||
   words(wanted).includes(words(candidate));
 const DOMESTIC_NAMES = new Set(["deutschland", "de", "inland"]);
+export const isDomesticCountry = (country: string): boolean => DOMESTIC_NAMES.has(norm(country));
 
 const UK = "Vereinigtes Königreich von Großbritannien und Nordirland";
 const TRINIDAD = "Trinidad und Tobago";
