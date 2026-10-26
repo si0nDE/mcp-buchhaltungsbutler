@@ -266,6 +266,8 @@ describe("processExpenses - receipt_id (one receipt, two VAT rates)", () => {
     expect(() => run([{ ...room, receipt_id: "R-4" }, { ...drinks, invoice_recipient: "company", receipt_id: "R-4" }])).toThrow(
       /receipt_id "R-4".*invoice_recipient/
     );
+    expect(() => run([{ ...room, receipt_id: "R-5" }, { ...drinks, paid_by: "company", receipt_id: "R-5" }])).toThrow(/receipt_id "R-5".*paid_by/);
+    expect(() => run([{ ...room, paid_by: "company", receipt_id: "R-6" }, { ...drinks, paid_by: "company", receipt_id: "R-6" }])).not.toThrow();
   });
 });
 

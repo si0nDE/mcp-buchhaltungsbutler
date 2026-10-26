@@ -115,8 +115,9 @@ Streamable HTTP service instead of stdio, container-ready.
 `generate_travel_expense_report` turns trip data (times, stops, meals, journeys, receipts) into a travel expense report PDF
 plus a booking hint; the calculation (domestic and foreign per-diem rates from the 2026 BMF table, meal reductions,
 three-month rule) runs deterministically in the connector. `generate_and_upload_travel_expense_report` also uploads the PDF
-(never retried automatically, check `list_receipts` first). For employees and for self-employed persons/managing directors;
-nothing is booked automatically. The foreign rates table covers 2026 only, and the interpretation points should be reviewed by
+(never retried automatically, check `list_receipts` first). For employees, including shareholder managing directors with
+an employment contract (`employee`), and for self-employed persons, sole proprietors and shareholder managing directors
+without an employment contract (`self_employed`); nothing is booked automatically. The foreign rates table covers 2026 only, and the interpretation points should be reviewed by
 a tax advisor before production use. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md) (German only, it documents German
 tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-reisekosten.md).
 

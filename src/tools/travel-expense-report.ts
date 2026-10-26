@@ -241,7 +241,13 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
     kmLines: km.lines,
     advance: round2(args.advance_paid ?? 0),
   });
-  if (totals.total === 0) warnings.push("Gesamtbetrag 0 €: keine Verpflegungspauschale, keine Kosten erfasst — Eingaben prüfen.");
+  if (totals.total === 0) {
+    warnings.push(
+      totals.companyPaid > 0
+        ? "Gesamtbetrag 0 €: keine Verpflegungspauschale und nur vom Unternehmen gezahlte Kosten erfasst (paid_by company), es wird nichts erstattet — Eingaben prüfen."
+        : "Gesamtbetrag 0 €: keine Verpflegungspauschale, keine Kosten erfasst — Eingaben prüfen."
+    );
+  }
   const allWarnings = [...warnings, ...trip.warnings, ...costs.warnings, ...km.warnings];
   const chart = options.chart ? await options.chart() : "unknown";
   const hint = buildBookingHint({
@@ -330,7 +336,9 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
       "Gesamtbetrag (ohne vom Unternehmen gezahlte Positionen), nicht der Erstattungsbetrag nach Vorschuss. traveller_type: employee = " +
       "Angestellte UND Gesellschafter-Geschäftsführer mit Anstellungsvertrag; self_employed = Selbstständige, Einzelunternehmer und " +
       "Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (owner_manager); im Zweifel beim Nutzer erfragen. Reisende Person, Reisezweck, " +
-      "Rechnungsempfänger und Zahler (paid_by) der Belege beim Nutzer erfragen, nie ableiten; traveller_confirmed erst nach Bestätigung der reisenden Person setzen. Der Buchungshinweis nennt bei " +
+      "Rechnungsempfänger und Zahler (paid_by) der Belege beim Nutzer erfragen, nie ableiten; traveller_confirmed erst nach Bestätigung der reisenden Person setzen. " +
+      "Eingaben wie bei generate_travel_expense_report, siehe die Feldbeschreibungen: stops[].departs_at bei Flug/Schiff ab der zweiten Station " +
+      "über mehrere Kalendertage, km_trips[].ownership (Pflicht), expenses[].receipt_id (zwei Steuersätze = ein Beleg) und expenses[].paid_by. Der Buchungshinweis nennt bei " +
       "erkanntem SKR03 die Konten. Der Konnektor bucht nicht selbst; Buchungen legst du nach Rückfrage selbst an.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
@@ -364,6 +372,12 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
         );
       }
       const summed = summary(built);
+      if (built.totals.total === 0) {
+        summed.warnings = [
+          ...(summed.warnings ?? []),
+          "Upload mit Betrag 0 €: der Beleg dokumentiert die Reise, es gibt nichts zu erstatten und nichts über die Reisekostenabrechnung zu buchen.",
+        ];
+      }
       if (id === null) {
         summed.warnings = [...(summed.warnings ?? []), "Upload ohne ID quittiert: per list_receipts prüfen, nicht erneut hochladen."];
       }

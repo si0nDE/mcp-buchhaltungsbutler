@@ -114,18 +114,20 @@ const outsideTrip = (date: string, range?: TripRange): boolean => range !== unde
 const outsideTripText = (date: string, range: TripRange): string =>
   `Datum ${date} liegt außerhalb der Reise (${range.from} bis ${range.to}); Zuordnung zu dieser Reise prüfen.`;
 
-// Lines with the same receipt_id form one receipt: one currency, one invoice recipient, one gross for the 250 EUR limit.
+// Lines with the same receipt_id form one receipt: one currency, one invoice recipient, one payer, one gross for the
+// 250 EUR limit.
 function receiptGroups(expenses: Expense[]): Map<string, { gross: number; label: string }> {
-  const groups = new Map<string, { gross: number; currency: string; recipient: string; label: string }>();
+  const groups = new Map<string, { gross: number; currency: string; recipient: string; paidBy: string; label: string }>();
   for (const expense of expenses) {
     const id = expense.receipt_id?.trim();
     if (!id) continue;
     const currency = (expense.currency ?? "EUR").toUpperCase();
     const recipient = expense.invoice_recipient ?? "unknown";
+    const paidBy = expense.paid_by ?? "traveller";
     const factor = currency === "EUR" ? 1 : (expense.fx_rate ?? Number.NaN);
     const group = groups.get(id);
     if (!group) {
-      groups.set(id, { gross: round2(expense.amount * factor), currency, recipient, label: id });
+      groups.set(id, { gross: round2(expense.amount * factor), currency, recipient, paidBy, label: id });
       continue;
     }
     if (group.currency !== currency) {
@@ -133,6 +135,9 @@ function receiptGroups(expenses: Expense[]): Map<string, { gross: number; label:
     }
     if (group.recipient !== recipient) {
       throw new Error(`receipt_id "${id}": alle Positionen eines Belegs brauchen denselben invoice_recipient (${group.recipient}, ${recipient}).`);
+    }
+    if (group.paidBy !== paidBy) {
+      throw new Error(`receipt_id "${id}": alle Positionen eines Belegs brauchen denselben paid_by (${group.paidBy}, ${paidBy}).`);
     }
     group.gross = round2(group.gross + round2(expense.amount * factor));
   }

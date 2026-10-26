@@ -114,8 +114,9 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 Reisekostenabrechnung als PDF und einen Buchungshinweis; die Berechnung (Verpflegungspauschalen Inland und Ausland
 nach BMF-Tabelle 2026, Mahlzeitenkürzung, Dreimonatsfrist) läuft deterministisch im Konnektor.
 `generate_and_upload_travel_expense_report` lädt das PDF zusätzlich hoch (nie automatisch wiederholt, vorher `list_receipts`
-prüfen). Für Angestellte und für Selbstständige/Geschäftsführer; gebucht wird nicht automatisch. Auslandstabelle nur für 2026,
-Auslegungspunkte vor Produktivbetrieb vom Steuerberater prüfen lassen. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md),
+prüfen). Für Angestellte und Gesellschafter-Geschäftsführer mit Anstellungsvertrag (`employee`) sowie für
+Selbstständige, Einzelunternehmer und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (`self_employed`); gebucht
+wird nicht automatisch. Auslandstabelle nur für 2026, Auslegungspunkte vor Produktivbetrieb vom Steuerberater prüfen lassen. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md),
 Rechtsgrundlagen: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-reisekosten.md).
 
 ## Tools

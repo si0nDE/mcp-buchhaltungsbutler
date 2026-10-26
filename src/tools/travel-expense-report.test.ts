@@ -99,6 +99,7 @@ describe("generate_travel_expense_report over the MCP client", () => {
       arguments: { ...base, km_trips: [{ mode: "car", km: 100, date: "2026-03-09", ownership: "business" }] },
     });
     expect(car.isError).toBe(true);
+    expect(errorText(car)).toContain("Die Kilometerpauschale gilt nur für private Fahrzeuge (R 4.12 Abs. 2 EStR). Beim Betriebs-Pkw");
   });
 
   it("warns when a trip with nights has neither lodging receipts nor a flat rate", async () => {
@@ -402,5 +403,29 @@ describe("final review fixes over the MCP client", () => {
     expect(errorText(missing)).toContain("ownership (private oder business) beim Nutzer erfragen");
     const outside = data(await call({ km_trips: [{ mode: "car", km: 100, date: "2026-03-20", ownership: "private" }] }));
     expect(outside.warnings.some((w: string) => w.includes("2026-03-20") && w.includes("außerhalb der Reise"))).toBe(true);
+  });
+});
+
+describe("only company-paid costs (total 0)", () => {
+  const shortTrip = { departure: "2026-03-09T09:00", return: "2026-03-09T13:00", stops: [{ country: "Deutschland", arrival: "2026-03-09T10:00" }] };
+  const companyTaxi = { category: "fare", description: "Taxi Firmenkarte", date: "2026-03-09", amount: 25, vat_amount: 1.64, vat_rate: 7, invoice_recipient: "company", paid_by: "company" };
+
+  it("says that only company-paid costs were entered and nothing is reimbursed", async () => {
+    const client = await connect(() => ({}));
+    const d = data(await client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, ...shortTrip, expenses: [companyTaxi] } }));
+    expect(d.totals.total).toBe(0);
+    expect(d.totals.companyPaid).toBe(25);
+    const w = d.warnings.find((x: string) => x.startsWith("Gesamtbetrag 0 €"));
+    expect(w).toContain("vom Unternehmen gezahlt");
+    expect(w).toContain("nichts erstattet");
+    expect(w).not.toContain("keine Kosten erfasst");
+  });
+
+  it("the upload tool warns about an upload with amount 0", async () => {
+    const call = vi.fn(async (key: string, _params?: Record<string, unknown>) => (key === "receiptsUpload" ? { id_by_customer: 4714 } : { data: [] }));
+    const client = await connect(call);
+    const res = await client.callTool({ name: "generate_and_upload_travel_expense_report", arguments: { ...base, ...shortTrip, expenses: [companyTaxi] } });
+    expect(res.isError).toBeFalsy();
+    expect(data(res).warnings.some((w: string) => w.startsWith("Upload mit Betrag 0 €:"))).toBe(true);
   });
 });
