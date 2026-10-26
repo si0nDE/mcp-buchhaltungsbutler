@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { Express, NextFunction, Request, Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import type { BBClient } from "./bb-client/client.js";
 import { createClient } from "./bb-client/client.js";
 import { loadConfig } from "./config.js";
@@ -39,7 +39,16 @@ function logRequests(req: Request, res: Response, next: NextFunction): void {
 }
 
 export function createHttpApp(bbClient: BBClient, authToken: string, allowedHosts?: string[]): Express {
-  const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts });
+  const app = express();
+
+  if (allowedHosts) {
+    app.use(hostHeaderValidation(allowedHosts));
+  } else {
+    console.warn(
+      "Warning: Server is binding to 0.0.0.0 without DNS rebinding protection. " +
+        "Set MCP_ALLOWED_HOSTS to restrict allowed hosts.",
+    );
+  }
 
   app.use(logRequests);
 
@@ -48,6 +57,10 @@ export function createHttpApp(bbClient: BBClient, authToken: string, allowedHost
   });
 
   app.use(requireBearerToken(authToken));
+
+  // Body erst nach der Authentifizierung lesen und nie entpacken (inflate: false):
+  // MCP-Clients senden unkomprimiert, und der Decoder (gzip/deflate/br) bleibt unerreichbar.
+  app.use(express.json({ inflate: false }));
 
   app.post("/mcp", async (req, res) => {
     try {
