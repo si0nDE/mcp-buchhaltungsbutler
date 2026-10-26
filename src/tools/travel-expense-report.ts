@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { buildBookingHint, type BookingHint, type Chart } from "./travel-expense-booking.js";
-import { computeTrip, round2, type Meal, type TripResult } from "./travel-expense-calc.js";
+import { computeTrip, round2, type Meal, type TripInput, type TripResult } from "./travel-expense-calc.js";
 import {
   computeTotals,
   nextDateKey,
@@ -15,6 +15,7 @@ import {
 } from "./travel-expense-costs.js";
 import { mergeAttachments, renderTravelExpenseReport, type TravelReportData } from "./travel-expense-pdf.js";
 import { getChart } from "./posting-accounts.js";
+import { resolveRateTables } from "./travel-rates-online.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 // Reasons the connector rejects: generic purposes say nothing about the professional cause. R 9.4 Abs. 1 Satz 5 LStR
@@ -167,7 +168,13 @@ function validateRequest(args: GenerateArgs): string[] {
   return warnings;
 }
 
-export async function buildTravelReport(args: GenerateArgs, options: { chart?: () => Promise<Chart> } = {}): Promise<BuiltReport & { hint: BookingHint }> {
+export interface BuildOptions {
+  chart?: () => Promise<Chart>;
+  /** fetch used for the online lookup of a missing BMF table (default: global fetch). */
+  fetchImpl?: typeof fetch;
+}
+
+export async function buildTravelReport(args: GenerateArgs, options: BuildOptions = {}): Promise<BuiltReport & { hint: BookingHint }> {
   const warnings = validateRequest(args);
   const travellerType = args.traveller_type;
   const expenses = (args.expenses ?? []) as Expense[];
@@ -185,7 +192,7 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
     }
   }
 
-  const trip = computeTrip({
+  const tripInput: TripInput = {
     travellerType,
     departure: args.departure,
     returnTime: args.return,
@@ -195,7 +202,14 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
     sameLocationSince: args.same_location_since,
     useLodgingFlatRate: args.use_lodging_flat_rate,
     lodgingNights: args.lodging_nights,
-  });
+  };
+  // First pass without network: it tells which years with foreign days have no built-in table (provisional). Only
+  // those are looked up online; domestic-only trips never trigger a request.
+  let trip = computeTrip(tripInput);
+  const missingYears = trip.rateTables.filter((t) => t.origin === "provisional").map((t) => t.year);
+  if (missingYears.length > 0) {
+    trip = computeTrip({ ...tripInput, rateTables: await resolveRateTables(missingYears, { fetchImpl: options.fetchImpl }) });
+  }
   const fullRateByDate = new Map(trip.days.map((d) => [d.date, d.fullRate]));
   const countryByDate = new Map(trip.days.map((d) => [d.date, d.country]));
   const tripRange = { from: args.departure.slice(0, 10), to: args.return.slice(0, 10) };
@@ -282,6 +296,7 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: (
     totals,
     warnings: allWarnings,
     sources: trip.sources,
+    rateTables: trip.rateTables,
   };
   let pdfBytes = await renderTravelExpenseReport(data);
   if (args.attachments && args.attachments.length > 0) pdfBytes = await mergeAttachments(pdfBytes, args.attachments);
@@ -297,17 +312,26 @@ function summary(built: BuiltReport & { hint: BookingHint }) {
     costs: built.lines,
     km: built.kmLines,
     sources: built.trip.sources,
+    rates_provisional: built.trip.rateTables.some((t) => t.origin === "provisional"),
+    rates_sources: built.trip.rateTables.map((t) => ({
+      year: t.year,
+      origin: t.origin,
+      source: t.source,
+      ...(t.origin === "provisional" ? { provisional_from: t.provisionalFrom } : {}),
+    })),
     ...(built.warnings.length > 0 ? { warnings: built.warnings } : {}),
     booking_hint: built.hint,
   };
 }
 
-export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
+export function createTravelExpenseTools(client: BBClient, options: { fetchImpl?: typeof fetch } = {}): [ToolDef, ToolDef] {
   const generate = defineTool({
     name: "generate_travel_expense_report",
     description:
       "Erzeugt eine Reisekostenabrechnung als PDF (Verpflegungspauschalen Inland und Ausland nach BMF-Tabelle mit Mahlzeitenkürzung und " +
-      "Dreimonatsfrist, Übernachtung, Fahrt, Kilometer, Nebenkosten) und einen Buchungshinweis. traveller_type: employee = Angestellte UND " +
+      "Dreimonatsfrist, Übernachtung, Fahrt, Kilometer, Nebenkosten) und einen Buchungshinweis. Auslandssätze: eingebaute BMF-Tabelle; fehlt sie " +
+      "für ein Reisejahr, ruft der Konnektor die BMF-Tabelle online ab (LStH Anhang 25 I), sonst rechnet er vorläufig mit der letzten bekannten " +
+      "Tabelle und markiert das (rates_provisional, Warnung, VORLÄUFIG im PDF; vor dem Buchen neu berechnen). traveller_type: employee = Angestellte UND " +
       "Gesellschafter-Geschäftsführer mit Anstellungsvertrag (Erstattung durch den Arbeitgeber); self_employed = Selbstständige, Einzelunternehmer " +
       "und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (owner_manager; Betriebsausgabe, nur tatsächliche Übernachtungskosten). Im " +
       "Zweifel beim Nutzer erfragen. Ohne BuchhaltungsButler-Zugriff; zum Hochladen generate_and_upload_travel_expense_report nutzen. Reisende " +
@@ -322,7 +346,7 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
     async handler(args) {
-      const built = await buildTravelReport(args);
+      const built = await buildTravelReport(args, { fetchImpl: options.fetchImpl });
       return ok({ pdf_base64: Buffer.from(built.pdfBytes).toString("base64"), ...summary(built) });
     },
   });
@@ -332,6 +356,8 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
     description:
       "Erzeugt die Reisekostenabrechnung (siehe generate_travel_expense_report) und lädt sie in einem Aufruf nach BuchhaltungsButler hoch, " +
       "statt das Base64-PDF zweimal durch das Modell zu schicken. Liefert id_by_customer des neuen Belegs, nicht das PDF. " +
+      "Fehlt die BMF-Auslandstabelle des Reisejahrs, gilt dasselbe wie beim Erzeugen: Online-Abruf, sonst vorläufig markiert (rates_provisional); " +
+      "eine vorläufige Abrechnung erst nach Rückfrage hochladen. " +
       "BuchhaltungsButler erkennt Duplikate nicht: bei einem erneuten Upload vorher list_receipts prüfen. Der Belegbetrag ist der " +
       "Gesamtbetrag (ohne vom Unternehmen gezahlte Positionen), nicht der Erstattungsbetrag nach Vorschuss. traveller_type: employee = " +
       "Angestellte UND Gesellschafter-Geschäftsführer mit Anstellungsvertrag; self_employed = Selbstständige, Einzelunternehmer und " +
@@ -344,7 +370,7 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
     async handler(args) {
-      const built = await buildTravelReport(args, { chart: () => getChart(client).catch(() => "unknown" as const) });
+      const built = await buildTravelReport(args, { chart: () => getChart(client).catch(() => "unknown" as const), fetchImpl: options.fetchImpl });
       let id: string | number | null = null;
       try {
         const result = await client.call<{ success?: boolean; message?: string; id_by_customer?: string | number; data?: { id_by_customer?: string | number } }>(

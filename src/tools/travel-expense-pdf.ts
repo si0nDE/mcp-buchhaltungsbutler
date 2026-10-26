@@ -1,5 +1,5 @@
 import { PDFDocument, PageSizes, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import type { DayResult, LodgingFlatLine, TravellerType } from "./travel-expense-calc.js";
+import type { DayResult, LodgingFlatLine, RateTableInfo, TravellerType } from "./travel-expense-calc.js";
 import type { CostLine, KmLine, Totals } from "./travel-expense-costs.js";
 import {
   formatConfirmationTimestamp,
@@ -27,12 +27,16 @@ export interface TravelReportData {
   totals: Totals;
   warnings: string[];
   sources: string[];
+  /** Foreign rate tables used per year; provisional ones get a banner on page 1. */
+  rateTables?: RateTableInfo[];
 }
 
 const BLACK = rgb(0.1, 0.1, 0.1);
 const GRAY = rgb(0.46, 0.46, 0.46);
 const RULE = rgb(0.82, 0.82, 0.82);
 const PANEL = rgb(0.955, 0.955, 0.955);
+const ALERT = rgb(0.62, 0.08, 0.08);
+const ALERT_PANEL = rgb(0.99, 0.92, 0.92);
 
 // Latin-1 plus the Windows-1252 extras used in German text (€, „ “ ” ‘ ’ – — … •).
 const ALLOWED = new Set<number>([
@@ -113,6 +117,21 @@ export async function renderTravelExpenseReport(
   y -= 12;
   rule(y, 2, BLACK);
   y -= 8;
+
+  // Provisional foreign rates must be visible at first sight, not only on the notes page.
+  for (const t of (data.rateTables ?? []).filter((r) => r.origin === "provisional")) {
+    const banner = lines(
+      `VORLÄUFIG: Auslandssätze mit der Tabelle ${t.provisionalFrom} berechnet, BMF-Tabelle ${t.year} nicht verfügbar. Nach Veröffentlichung neu berechnen.`,
+      10,
+      contentWidth - 20,
+      bold
+    );
+    const bannerHeight = banner.length * 13 + 12;
+    y -= 6;
+    page.drawRectangle({ x: MARGIN, y: y - bannerHeight, width: contentWidth, height: bannerHeight, color: ALERT_PANEL, borderColor: ALERT, borderWidth: 1 });
+    banner.forEach((line, i) => page.drawText(line, { x: MARGIN + 10, y: y - 16 - i * 13, size: 10, font: bold, color: ALERT }));
+    y -= bannerHeight + 4;
+  }
 
   // Key/value block
   const kv = (label: string, value: string) => {
@@ -278,7 +297,9 @@ export async function renderTravelExpenseReport(
   block("Warnungen und Auslegungen", data.warnings);
   const noted = data.days.filter((d) => d.note).map((d) => `${formatDate(d.date)} *: ${d.note}`);
   block("Hinweise zu einzelnen Tagen", noted);
-  block("Quellen der Sätze", data.sources.length > 0 ? data.sources : ["Inland: § 9 Abs. 4a EStG (28 €/14 €), R 9.7 Abs. 3 LStR (20 € Übernachtung bei Erstattung)."]);
+  const domesticSource = "Inland: § 9 Abs. 4a EStG (28 €/14 €), R 9.7 Abs. 3 LStR (20 € Übernachtung bei Erstattung).";
+  const perYear = (data.rateTables ?? []).map((t) => `Auslandssätze ${t.year}: ${t.source}`);
+  block("Quellen der Sätze", perYear.length > 0 ? [...perYear, domesticSource] : data.sources.length > 0 ? data.sources : [domesticSource]);
   block("Rechtsstand", [
     "Reisekosten nach § 9 Abs. 4a EStG, BMF-Schreiben vom 25.11.2020 (IV C 5 - S 2353/19/10011 :006) und BMF vom 05.12.2025 (Auslandsreisen ab 2026). Vor Produktivbetrieb vom Steuerberater gegenlesen lassen; dies ist keine Steuerberatung.",
   ]);

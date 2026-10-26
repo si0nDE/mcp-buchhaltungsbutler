@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeTrip, type TripInput } from "./travel-expense-calc.js";
-import { lookupRate } from "./travel-rates.js";
+import { getRateTable, lookupRate } from "./travel-rates.js";
 
 const inland = (overrides: Partial<TripInput> = {}): TripInput => ({
   travellerType: "employee",
@@ -222,10 +222,44 @@ describe("computeTrip - Eingabefehler", () => {
     expect(() => computeTrip(inland({ departure: "09.03.2026 08:00" }))).toThrow(/YYYY-MM-DDTHH:mm/);
   });
 
-  it("year change: foreign trip without a 2027 table throws, domestic trip works", () => {
+  it("year change: foreign days without a 2027 table are provisional with the 2026 values and a warning; domestic trip works", () => {
     const base = { travellerType: "employee" as const, departure: "2026-12-31T08:00", returnTime: "2027-01-02T18:00" };
-    expect(() => computeTrip({ ...base, stops: [{ country: "Frankreich", arrival: "2026-12-31T12:00" }] })).toThrow(/2027/);
-    expect(amounts({ ...base, stops: [{ country: "Deutschland", arrival: "2026-12-31T12:00" }] })).toEqual([14, 28, 14]);
+    const foreign = computeTrip({ ...base, stops: [{ country: "Frankreich", arrival: "2026-12-31T12:00" }] });
+    expect(foreign.days.map((d) => [d.date, d.amount, d.provisional ?? false])).toEqual([
+      ["2026-12-31", 36, false],
+      ["2027-01-01", 53, true],
+      ["2027-01-02", 36, true],
+    ]);
+    expect(
+      foreign.warnings.filter((w) =>
+        w.startsWith("BMF-Auslandstabelle 2027 nicht verfügbar (noch nicht veröffentlicht oder Abruf nicht möglich): Auslandssätze vorläufig mit der Tabelle 2026 berechnet.")
+      )
+    ).toHaveLength(1);
+    expect(foreign.rateTables.map((t) => [t.year, t.origin, t.provisionalFrom])).toEqual([
+      [2026, "builtin", undefined],
+      [2027, "provisional", 2026],
+    ]);
+    const domestic = computeTrip({ ...base, stops: [{ country: "Deutschland", arrival: "2026-12-31T12:00" }] });
+    expect(domestic.days.map((d) => d.amount)).toEqual([14, 28, 14]);
+    expect(domestic.rateTables).toEqual([]);
+  });
+
+  it("uses supplied rate tables (e.g. online) for a year without a built-in table", () => {
+    const online = { ...getRateTable(2026), year: 2027, origin: "online" as const, source: "BMF, LStH 2027 Anhang 25 I, online", entries: getRateTable(2026).entries.map((e) => ({ ...e, full: e.full + 2, partial: e.partial + 1 })) };
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-12-31T08:00",
+      returnTime: "2027-01-02T18:00",
+      stops: [{ country: "Frankreich", arrival: "2026-12-31T12:00" }],
+      rateTables: { 2027: online },
+    });
+    expect(result.days.map((d) => [d.amount, d.provisional ?? false])).toEqual([
+      [36, false],
+      [55, false],
+      [37, false],
+    ]);
+    expect(result.warnings.some((w) => w.includes("nicht verfügbar"))).toBe(false);
+    expect(result.sources).toContain("BMF, LStH 2027 Anhang 25 I, online");
   });
 });
 

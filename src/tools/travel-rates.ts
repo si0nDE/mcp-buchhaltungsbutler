@@ -13,11 +13,21 @@ export interface RateTable {
   source: string;
   retrievedAt: string;
   entries: RateEntry[];
+  /** builtin: generated module in the repo; online: fetched from the BMF LStH page; provisional: another year's values. */
+  origin?: "builtin" | "online" | "provisional";
+  /** provisional only: the year whose values are used. */
+  provisionalFrom?: number;
 }
+
+/** Tables resolved for a trip (online or provisional), consulted before the built-in registry. */
+export type RateTables = Partial<Record<number, RateTable>>;
 
 export interface ResolvedRate extends RateEntry {
   fallback: "none" | "luxembourg";
   source: string | null;
+  /** true if the values come from a provisional table (another year). */
+  provisional: boolean;
+  provisionalFrom?: number;
   // "n/a": domestic or a country with a single row; "city": a city row matched; "rest": the row "im Übrigen" was used
   placeMatched: "city" | "rest" | "n/a";
 }
@@ -111,6 +121,25 @@ export const PLACE_ALIASES: Record<string, string> = {
   roissy: PARIS,
 };
 
+export function builtinRateTable(year: number): RateTable | undefined {
+  const table = TABLES[year];
+  return table ? { ...table, origin: "builtin" } : undefined;
+}
+
+// Never silent: the result is marked provisional and the caller warns. Latest built-in year <= year, else the highest.
+export function provisionalRateTable(year: number): RateTable {
+  const years = Object.keys(TABLES).map(Number).sort((a, b) => a - b);
+  const from = years.filter((y) => y <= year).pop() ?? years[years.length - 1];
+  const base = TABLES[from];
+  return {
+    ...base,
+    year,
+    origin: "provisional",
+    provisionalFrom: from,
+    source: `Vorläufig: BMF-Auslandstabelle ${year} nicht verfügbar, Sätze der Tabelle ${from} (${base.source})`,
+  };
+}
+
 export function getRateTable(year: number): RateTable {
   const table = TABLES[year];
   if (!table) {
@@ -127,12 +156,15 @@ export function lookupRate(
   country: string,
   place: string | undefined,
   year: number,
+  tables?: RateTables,
 ): ResolvedRate {
   const wanted = norm(country);
   if (DOMESTIC_NAMES.has(wanted))
-    return { ...DOMESTIC, fallback: "none", source: null, placeMatched: "n/a" };
+    return { ...DOMESTIC, fallback: "none", source: null, placeMatched: "n/a", provisional: false };
 
-  const table = getRateTable(year);
+  // Without supplied tables a missing year throws (getRateTable): no silent fallback for direct callers.
+  const table = tables?.[year] ?? getRateTable(year);
+  const flag = table.origin === "provisional" ? { provisional: true, provisionalFrom: table.provisionalFrom } : { provisional: false };
   const canonical = norm(COUNTRY_ALIASES[wanted] ?? country);
   const entries = table.entries.filter(
     (entry) => norm(entry.country) === canonical,
@@ -152,6 +184,7 @@ export function lookupRate(
       fallback: "luxembourg",
       source: table.source,
       placeMatched: "n/a",
+      ...flag,
     };
   }
   // A given place is ignored for countries with a single row.
@@ -161,6 +194,7 @@ export function lookupRate(
       fallback: "none",
       source: table.source,
       placeMatched: "n/a",
+      ...flag,
     };
 
   const rest = entries.find(isRest);
@@ -184,6 +218,6 @@ export function lookupRate(
     }
   }
   return city
-    ? { ...city, fallback: "none", source: table.source, placeMatched: "city" }
-    : { ...rest, fallback: "none", source: table.source, placeMatched: "rest" };
+    ? { ...city, fallback: "none", source: table.source, placeMatched: "city", ...flag }
+    : { ...rest, fallback: "none", source: table.source, placeMatched: "rest", ...flag };
 }

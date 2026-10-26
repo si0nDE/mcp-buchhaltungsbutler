@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   COUNTRY_ALIASES,
   PLACE_ALIASES,
+  builtinRateTable,
   getRateTable,
   lookupRate,
+  provisionalRateTable,
+  type RateTable,
 } from "./travel-rates.js";
 
 const rate = (country: string, place: string | undefined) => {
@@ -21,6 +24,27 @@ describe("lookupRate", () => {
   it("throws for a foreign country when the year has no table (no silent fallback to a previous year)", () => {
     expect(() => lookupRate("Frankreich", undefined, 2027)).toThrow(/2027/);
     expect(() => getRateTable(2027)).toThrow(/Dezember/);
+  });
+
+  it("uses supplied tables before the built-in registry and marks provisional tables", () => {
+    const base = getRateTable(2026);
+    const online: RateTable = { ...base, year: 2027, origin: "online", entries: base.entries.map((e) => ({ ...e, full: e.full + 1 })) };
+    const fromOnline = lookupRate("Österreich", undefined, 2027, { 2027: online });
+    expect([fromOnline.full, fromOnline.provisional]).toEqual([51, false]);
+    const provisional = lookupRate("Österreich", undefined, 2027, { 2027: provisionalRateTable(2027) });
+    expect([provisional.full, provisional.provisional, provisional.provisionalFrom]).toEqual([50, true, 2026]);
+    expect(lookupRate("Österreich", undefined, 2026).provisional).toBe(false);
+    expect(lookupRate("Deutschland", undefined, 2027, {}).provisional).toBe(false);
+  });
+
+  it("builtinRateTable marks the origin, provisionalRateTable takes the latest table up to the year, else the highest", () => {
+    expect(builtinRateTable(2026)?.origin).toBe("builtin");
+    expect(builtinRateTable(2027)).toBeUndefined();
+    const p2027 = provisionalRateTable(2027);
+    expect([p2027.year, p2027.origin, p2027.provisionalFrom]).toEqual([2027, "provisional", 2026]);
+    expect(p2027.source).toContain("Vorläufig");
+    expect(p2027.entries).toBe(getRateTable(2026).entries);
+    expect(provisionalRateTable(2020).provisionalFrom).toBe(2026);
   });
 
   it.each([

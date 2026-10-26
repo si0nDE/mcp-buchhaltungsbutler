@@ -71,6 +71,24 @@ describe("renderTravelExpenseReport", () => {
     expect(text).toContain("107,00 €");
   });
 
+  it("shows a VORLÄUFIG banner on page 1 for provisional rates and lists the table source per year", async () => {
+    const rateTables = [
+      { year: 2026, origin: "builtin" as const, source: "BMF 05.12.2025 (Auslandsreisekosten ab 01.01.2026)", retrievedAt: "2026-10-26" },
+      { year: 2027, origin: "provisional" as const, source: "Vorläufig: BMF-Auslandstabelle 2027 nicht verfügbar, Sätze der Tabelle 2026", retrievedAt: "2026-10-26", provisionalFrom: 2026 },
+    ];
+    const bytes = await renderTravelExpenseReport(data({ rateTables }));
+    const doc = await PDFDocument.load(bytes);
+    const first = await PDFDocument.create();
+    first.addPage((await first.copyPages(doc, [0]))[0]);
+    const page1 = await textOf(await first.save());
+    expect(page1).toContain("VORLÄUFIG: Auslandssätze mit der Tabelle 2026 berechnet, BMF-Tabelle 2027 nicht verfügbar");
+    const text = await textOf(bytes);
+    expect(text).toContain("Auslandssätze 2026: BMF 05.12.2025");
+    expect(text).toContain("Auslandssätze 2027: Vorläufig");
+    const plain = await textOf(await renderTravelExpenseReport(data({ rateTables: [rateTables[0]] })));
+    expect(plain).not.toContain("VORLÄUFIG");
+  });
+
   it("puts all warnings and sources on a notes page", async () => {
     const bytes = await renderTravelExpenseReport(data());
     const text = await textOf(bytes);

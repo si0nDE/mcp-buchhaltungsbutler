@@ -1,4 +1,13 @@
-import { DOMESTIC_COUNTRY, isDomesticCountry, lookupRate, type ResolvedRate } from "./travel-rates.js";
+import {
+  builtinRateTable,
+  DOMESTIC_COUNTRY,
+  isDomesticCountry,
+  lookupRate,
+  provisionalRateTable,
+  type RateTable,
+  type RateTables,
+  type ResolvedRate,
+} from "./travel-rates.js";
 
 export type TravellerType = "employee" | "self_employed";
 export type Meal = "breakfast" | "lunch" | "dinner";
@@ -35,6 +44,11 @@ export interface TripInput {
   useLodgingFlatRate?: boolean;
   /** Caps the number of nights derived from the times (non-negative integer). */
   lodgingNights?: number;
+  /**
+   * Foreign rate tables per year resolved by the caller (online or provisional), consulted before the built-in ones.
+   * A year without a table here and without a built-in table is calculated provisionally with the latest built-in table.
+   */
+  rateTables?: RateTables;
 }
 
 export interface DayResult {
@@ -50,6 +64,8 @@ export interface DayResult {
   /** 24-hour rate of the day's country: basis for the meal reduction and the breakfast part of a hotel price. */
   fullRate: number;
   note?: string;
+  /** true if the rate comes from a provisional table (another year's values). */
+  provisional?: boolean;
 }
 
 export interface LodgingFlatLine {
@@ -57,6 +73,9 @@ export interface LodgingFlatLine {
   country: string;
   amount: number;
 }
+
+/** The foreign rate table used for a year (without its entries). */
+export type RateTableInfo = Pick<RateTable, "year" | "origin" | "source" | "retrievedAt" | "provisionalFrom">;
 
 export interface TripResult {
   days: DayResult[];
@@ -67,6 +86,8 @@ export interface TripResult {
   lodgingFlatTotal: number;
   warnings: string[];
   sources: string[];
+  /** Foreign rate tables used, one per year with foreign days (empty for domestic-only trips). */
+  rateTables: RateTableInfo[];
 }
 
 const DAY_MS = 86_400_000;
@@ -211,9 +232,25 @@ export function computeTrip(input: TripInput): TripResult {
     return reached ?? { country: DOMESTIC_COUNTRY };
   };
 
+  // Foreign lookups only: a missing year falls back to a provisional table (marked and warned), never silently.
+  const tables: RateTables = { ...input.rateTables };
+  const usedYears = new Set<number>();
+  const rateOf = (country: string, place: string | undefined, year: number): ResolvedRate => {
+    if (!isDomesticCountry(country) && !tables[year]) tables[year] = builtinRateTable(year) ?? provisionalRateTable(year);
+    return lookupRate(country, place, year, tables);
+  };
   const sources = new Set<string>();
-  const noteRate = (rate: ResolvedRate, place?: string) => {
-    if (rate.source) sources.add(rate.source);
+  const noteRate = (rate: ResolvedRate, year: number, place?: string) => {
+    if (rate.source) {
+      sources.add(rate.source);
+      usedYears.add(year);
+    }
+    if (rate.provisional) {
+      warnings.add(
+        `BMF-Auslandstabelle ${year} nicht verfügbar (noch nicht veröffentlicht oder Abruf nicht möglich): Auslandssätze vorläufig mit der ` +
+          `Tabelle ${rate.provisionalFrom} berechnet. Nach Veröffentlichung neu berechnen, bevor die Buchung bestätigt wird.`
+      );
+    }
     if (rate.fallback === "luxembourg") {
       warnings.add(
         `Land "${rate.country}" steht nicht in der BMF-Tabelle: Luxemburg-Satz angesetzt (nicht erfasste Länder, BMF 05.12.2025).`
@@ -255,8 +292,9 @@ export function computeTrip(input: TripInput): TripResult {
     else if (hours > 0) kind = day === firstDay || isLast ? "partial" : "full";
 
     const where = locate(day, isLast);
-    const rate = lookupRate(where.country, where.place, Number(key.slice(0, 4)));
-    noteRate(rate, where.place);
+    const year = Number(key.slice(0, 4));
+    const rate = rateOf(where.country, where.place, year);
+    noteRate(rate, year, where.place);
     if (transitCountry.has(key)) {
       warnings.add("Flug- oder Schiffsreise über mehrere Kalendertage: Zwischentage nach R 9.6 Abs. 3 LStR (Österreich bzw. Luxemburg).");
     }
@@ -284,6 +322,7 @@ export function computeTrip(input: TripInput): TripResult {
       meals,
       fullRate: rate.full,
       note,
+      ...(rate.provisional ? { provisional: true } : {}),
     });
   }
 
@@ -314,7 +353,9 @@ export function computeTrip(input: TripInput): TripResult {
   if (input.useLodgingFlatRate) {
     for (const day of lodgingDates.slice(0, input.lodgingNights ?? lodgingDates.length)) {
       const where = locate(day, false);
-      const rate = lookupRate(where.country, where.place, Number(dayKey(day).slice(0, 4)));
+      const year = Number(dayKey(day).slice(0, 4));
+      const rate = rateOf(where.country, where.place, year);
+      noteRate(rate, year);
       lodgingFlat.push({ date: dayKey(day), country: rate.country, amount: rate.country === DOMESTIC_COUNTRY ? 20 : rate.night });
     }
     warnings.add(
@@ -334,5 +375,11 @@ export function computeTrip(input: TripInput): TripResult {
     lodgingFlatTotal: round2(lodgingFlat.reduce((sum, l) => sum + l.amount, 0)),
     warnings: [...warnings],
     sources: [...sources],
+    rateTables: [...usedYears]
+      .sort((a, b) => a - b)
+      .map((year) => {
+        const t = tables[year] as RateTable;
+        return { year, origin: t.origin, source: t.source, retrievedAt: t.retrievedAt, provisionalFrom: t.provisionalFrom };
+      }),
   };
 }

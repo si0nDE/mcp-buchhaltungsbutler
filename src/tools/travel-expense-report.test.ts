@@ -1,9 +1,12 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { createServer } from "../server.js";
-import { assertPurposeIsConcrete } from "./travel-expense-report.js";
+import { extractReceiptText } from "./receipt-text-extraction.js";
+import { assertPurposeIsConcrete, buildTravelReport } from "./travel-expense-report.js";
+import { fixtureHtml, respond } from "./travel-rates-online.fixture.js";
+import { clearRateTableCache } from "./travel-rates-online.js";
 
 // All data is invented.
 async function connect(call: (key: string, params: Record<string, unknown>) => unknown) {
@@ -427,5 +430,107 @@ describe("only company-paid costs (total 0)", () => {
     const res = await client.callTool({ name: "generate_and_upload_travel_expense_report", arguments: { ...base, ...shortTrip, expenses: [companyTaxi] } });
     expect(res.isError).toBeFalsy();
     expect(data(res).warnings.some((w: string) => w.startsWith("Upload mit Betrag 0 €:"))).toBe(true);
+  });
+});
+
+describe("foreign rates for a year without a built-in table", () => {
+  const paris2027 = {
+    departure: "2027-03-09T07:00",
+    return: "2027-03-11T18:00",
+    stops: [{ country: "Frankreich", place: "Paris", arrival: "2027-03-09T12:00", transport: "train" }],
+  };
+  const fetchWith = (handler: (url: string) => Response) => vi.fn(async (input: string | URL | Request, _init?: RequestInit) => handler(String(input)));
+  let errorLog: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    clearRateTableCache();
+    vi.stubEnv("BHB_TRAVEL_RATES_ONLINE", "");
+    errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    errorLog.mockRestore();
+  });
+
+  it("not published: provisional with the 2026 table, flag, warning and VORLÄUFIG in the PDF", async () => {
+    const fetchMock = fetchWith((url) => respond("nicht gefunden", { status: 404, url }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await connect(() => ({}));
+    const res = await client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, ...paris2027 } });
+    expect(res.isError).toBeFalsy();
+    const d = data(res);
+    expect(d.rates_provisional).toBe(true);
+    expect(d.rates_sources).toEqual([expect.objectContaining({ year: 2027, origin: "provisional", provisional_from: 2026 })]);
+    expect(d.days.map((x: { amount: number }) => x.amount)).toEqual([39, 58, 39]);
+    expect(d.warnings.filter((w: string) => w.startsWith("BMF-Auslandstabelle 2027 nicht verfügbar"))).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const text = (await extractReceiptText(d.pdf_base64)) ?? "";
+    expect(text).toContain("VORLÄUFIG");
+  });
+
+  it("published online: the online table is used and its URL is the source, no provisional warning", async () => {
+    vi.stubGlobal("fetch", fetchWith((url) => respond(fixtureHtml(2027), { url })));
+    const client = await connect(() => ({}));
+    const d = data(await client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, ...paris2027 } }));
+    expect(d.rates_provisional).toBe(false);
+    expect(d.rates_sources[0].origin).toBe("online");
+    expect(d.rates_sources[0].source).toContain("https://lsth.bundesfinanzministerium.de/lsth/2027/B-Anhaenge/Anhang-25/I/inhalt.html");
+    expect(d.sources[0]).toContain("online abgerufen");
+    expect((d.warnings ?? []).some((w: string) => w.includes("nicht verfügbar"))).toBe(false);
+  });
+
+  it("year change 2026 -> 2027 abroad: 2026 days built-in, 2027 days online", async () => {
+    const fetchMock = fetchWith((url) => respond(fixtureHtml(2027), { url }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await connect(() => ({}));
+    const d = data(
+      await client.callTool({
+        name: "generate_travel_expense_report",
+        arguments: { ...base, departure: "2026-12-30T07:00", return: "2027-01-02T18:00", stops: [{ country: "Österreich", arrival: "2026-12-30T12:00" }] },
+      })
+    );
+    expect(d.rates_sources.map((t: { year: number; origin: string }) => [t.year, t.origin])).toEqual([
+      [2026, "builtin"],
+      [2027, "online"],
+    ]);
+    expect(d.rates_provisional).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/lsth/2027/");
+  });
+
+  it("domestic-only trip in 2027: no network call, no table needed", async () => {
+    const fetchMock = fetchWith((url) => respond(fixtureHtml(2027), { url }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await connect(() => ({}));
+    const d = data(
+      await client.callTool({
+        name: "generate_travel_expense_report",
+        arguments: { ...base, departure: "2027-03-09T07:00", return: "2027-03-11T18:00", stops: [{ country: "Deutschland", arrival: "2027-03-09T09:00" }] },
+      })
+    );
+    expect(d.totals.allowances).toBe(56);
+    expect(d.rates_provisional).toBe(false);
+    expect(d.rates_sources).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("opt-out BHB_TRAVEL_RATES_ONLINE=0: provisional without a network call", async () => {
+    vi.stubEnv("BHB_TRAVEL_RATES_ONLINE", "0");
+    const fetchMock = fetchWith((url) => respond(fixtureHtml(2027), { url }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await connect(() => ({}));
+    const d = data(await client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, ...paris2027 } }));
+    expect(d.rates_provisional).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("buildTravelReport passes an injected fetch implementation through", async () => {
+    const fetchImpl = fetchWith((url) => respond(fixtureHtml(2027), { url }));
+    const global = fetchWith((url) => respond("nicht gefunden", { status: 404, url }));
+    vi.stubGlobal("fetch", global);
+    const built = await buildTravelReport({ ...base, ...paris2027 } as never, { fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(built.trip.rateTables[0].origin).toBe("online");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(global).not.toHaveBeenCalled();
   });
 });
