@@ -55,13 +55,35 @@ describe("computeTrip - Inland", () => {
     expect(outside.warnings.some((w) => w.includes("2026-04-01") && w.includes("außerhalb"))).toBe(true);
   });
 
-  it("gives no allowance for the last day when the return is exactly 00:00 and no night for it", () => {
+  it("treats a return at exactly 00:00 as the end of the previous day: no trailing day, no night for it", () => {
+    const at = (departure: string, returnTime: string) =>
+      computeTrip(
+        inland({ departure, returnTime, stops: [{ country: "Deutschland", arrival: departure }], useLodgingFlatRate: true })
+      );
+    const single = at("2026-03-09T08:00", "2026-03-10T00:00");
+    expect(single.days.map((d) => [d.date, d.hours, d.amount])).toEqual([["2026-03-09", 16, 14]]);
+    expect(single.nights).toBe(0);
+    expect(single.lodgingFlatTotal).toBe(0);
+    const short = at("2026-03-09T17:00", "2026-03-10T00:00");
+    expect(short.days.map((d) => [d.hours, d.amount])).toEqual([[7, 0]]);
+    const two = at("2026-03-09T08:00", "2026-03-11T00:00");
+    expect(two.days.map((d) => [d.date, d.kind, d.amount])).toEqual([
+      ["2026-03-09", "partial", 14],
+      ["2026-03-10", "partial", 14],
+    ]);
+    expect(two.nights).toBe(1);
+  });
+
+  it("gives no allowance for work through the night when both days together are 8 hours or less", () => {
     const result = computeTrip(
-      inland({ departure: "2026-03-09T08:00", returnTime: "2026-03-10T00:00", useLodgingFlatRate: true })
+      inland({
+        departure: "2026-03-09T22:00",
+        returnTime: "2026-03-10T03:00",
+        stops: [{ country: "Deutschland", arrival: "2026-03-09T22:30" }],
+        overnightWithoutAccommodation: true,
+      })
     );
-    expect(result.days.map((d) => d.amount)).toEqual([14, 0]);
-    expect(result.nights).toBe(0);
-    expect(result.lodgingFlatTotal).toBe(0);
+    expect(result.days.map((d) => d.amount)).toEqual([0, 0]);
   });
 
   it("treats work through the night without accommodation as 14 EUR for the day with most absence", () => {
@@ -273,8 +295,15 @@ describe("computeTrip - BMF-Beispiele", () => {
       departure: "2026-03-09T10:30",
       returnTime: "2026-03-12T01:45",
       stops: [{ country: "Deutschland", arrival: "2026-03-09T14:00" }],
+      useLodgingFlatRate: true,
     });
     expect(result.days.map((d) => d.amount)).toEqual([14, 28, 28, 14]);
+    // the return at 01:45 is the journey home: only the nights Mon-Tue and Tue-Wed count
+    expect(result.nights).toBe(2);
+    expect(result.lodgingFlat.map((l) => [l.date, l.amount])).toEqual([
+      ["2026-03-09", 20],
+      ["2026-03-10", 20],
+    ]);
   });
 
   it("Beispiel 37: Berlin - Brüssel - Amsterdam - Berlin uses the country reached before 24:00 local time", () => {
@@ -287,13 +316,44 @@ describe("computeTrip - BMF-Beispiele", () => {
         { country: "Niederlande", place: "Amsterdam", arrival: "2026-03-11T14:00" },
       ],
     });
-    const belgium = lookupRate("Belgien", "Brüssel", 2026);
-    const netherlands = lookupRate("Niederlande", "Amsterdam", 2026);
+    // 2026 BMF table values
+    const belgium = { full: 59, partial: 40 };
+    const netherlands = { full: 58, partial: 39 };
     expect(result.days.map((d) => [d.date, d.country, d.amount])).toEqual([
       ["2026-03-09", "Deutschland", 14],
       ["2026-03-10", "Belgien", belgium.full],
       ["2026-03-11", "Niederlande", netherlands.full],
       ["2026-03-12", "Niederlande", netherlands.partial],
     ]);
+  });
+});
+
+describe("computeTrip - Übernachtungsnächte", () => {
+  it("does not count the lodging flat rate for nights in the air on a long flight and warns about the count", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-05-04T10:00",
+      returnTime: "2026-05-08T20:00",
+      stops: [{ country: "Japan", place: "Tokio", arrival: "2026-05-07T08:00", transport: "flight" }],
+      useLodgingFlatRate: true,
+    });
+    expect(result.lodgingFlat.map((l) => l.date)).toEqual(["2026-05-04", "2026-05-07"]);
+    expect(result.warnings.some((w) => w.includes("Übernachtungspauschale für 2 Nächte angesetzt"))).toBe(true);
+  });
+
+  it("caps the nights with lodgingNights and rejects a larger number", () => {
+    expect(computeTrip(inland({ useLodgingFlatRate: true, lodgingNights: 1 })).lodgingFlat).toHaveLength(1);
+    expect(() => computeTrip(inland({ useLodgingFlatRate: true, lodgingNights: 3 }))).toThrow(/lodgingNights/);
+  });
+});
+
+describe("computeTrip - weitere Eingabeprüfungen", () => {
+  it("rejects trips longer than 366 days", () => {
+    expect(() => computeTrip(inland({ departure: "2026-01-01T08:00", returnTime: "2027-03-01T08:00" }))).toThrow(/366/);
+  });
+
+  it("validates sameLocationSince as a date not after the trip", () => {
+    expect(() => computeTrip(inland({ sameLocationSince: "09.01.2026" }))).toThrow(/same_location_since/);
+    expect(() => computeTrip(inland({ sameLocationSince: "2026-03-10" }))).toThrow(/same_location_since/);
   });
 });

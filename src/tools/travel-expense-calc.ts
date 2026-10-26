@@ -28,6 +28,8 @@ export interface TripInput {
   sameLocationSince?: string;
   /** Lodging flat rates, only for employee reimbursement by the employer. */
   useLodgingFlatRate?: boolean;
+  /** Caps the number of nights derived from the times (non-negative integer). */
+  lodgingNights?: number;
 }
 
 export interface DayResult {
@@ -115,18 +117,26 @@ export function computeTrip(input: TripInput): TripResult {
   }
 
   const firstDay = startOfDay(departure);
-  const lastDay = startOfDay(returnMs);
+  // A return at exactly 00:00 ends the absence at 24:00 of the previous day: that day is the last one.
+  const effectiveReturn = returnMs % DAY_MS === 0 ? returnMs - 60_000 : returnMs;
+  const lastDay = startOfDay(effectiveReturn);
   const multiDay = lastDay > firstDay;
-  if (input.overnightWithoutAccommodation && (lastDay - firstDay) / DAY_MS !== 1) {
+  if ((lastDay - firstDay) / DAY_MS > 366) throw new Error("Die Reise darf höchstens 366 Kalendertage umfassen.");
+  if (input.lodgingNights !== undefined && (!Number.isInteger(input.lodgingNights) || input.lodgingNights < 0)) {
+    throw new Error("lodgingNights muss eine nicht-negative ganze Zahl sein.");
+  }
+  if (input.overnightWithoutAccommodation && (lastDay - firstDay) / DAY_MS > 1) {
     throw new Error("overnight_without_accommodation gilt nur für Einsätze über genau zwei Kalendertage.");
   }
   const hoursOf = (day: number): number =>
     (Math.min(returnMs, day + DAY_MS) - Math.max(departure, day)) / HOUR_MS;
-  const overnightDay = input.overnightWithoutAccommodation
-    ? hoursOf(firstDay) >= hoursOf(lastDay)
-      ? firstDay
-      : lastDay
-    : undefined;
+  // Both days together must exceed 8 hours (§ 9 Abs. 4a Satz 3 Nr. 3 EStG), the day with the larger part gets the 14 EUR.
+  const overnightDay =
+    input.overnightWithoutAccommodation && multiDay && hoursOf(firstDay) + hoursOf(lastDay) > 8
+      ? hoursOf(firstDay) >= hoursOf(lastDay)
+        ? firstDay
+        : lastDay
+      : undefined;
 
   // R 9.6 Abs. 3 LStR: days in between on long flights (more than two calendar days) use Österreich,
   // days in between on ship passages use Luxemburg.
@@ -165,9 +175,17 @@ export function computeTrip(input: TripInput): TripResult {
     }
   };
 
-  const fristEnd = input.sameLocationSince
-    ? addMonths(parseLocal(`${input.sameLocationSince}T00:00`), 3) - DAY_MS
-    : undefined;
+  let sinceMs: number | undefined;
+  if (input.sameLocationSince) {
+    try {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(input.sameLocationSince)) throw new Error("format");
+      sinceMs = parseLocal(`${input.sameLocationSince}T00:00`);
+    } catch {
+      throw new Error(`Ungültiges Datum für same_location_since "${input.sameLocationSince}" (erwartet YYYY-MM-DD).`);
+    }
+    if (sinceMs > firstDay) throw new Error("same_location_since darf nicht nach dem ersten Reisetag liegen.");
+  }
+  const fristEnd = sinceMs === undefined ? undefined : addMonths(sinceMs, 3) - DAY_MS;
   if (fristEnd === undefined) {
     warnings.add(
       "Dreimonatsfrist nicht geprüft (same_location_since fehlt): Die Verpflegungspauschale entfällt nach drei Monaten an " +
@@ -224,16 +242,34 @@ export function computeTrip(input: TripInput): TripResult {
     }
   }
 
-  const dayDifference = (lastDay - firstDay) / DAY_MS;
-  const nights = input.overnightWithoutAccommodation ? 0 : Math.max(0, dayDifference - (hoursOf(lastDay) === 0 ? 1 : 0));
+  // Nights from the date difference; a return before 06:00 is the journey home, not a night in accommodation.
+  const returnedEarly = effectiveReturn - lastDay < 6 * HOUR_MS;
+  const derivedNights = input.overnightWithoutAccommodation
+    ? 0
+    : Math.max(0, (lastDay - firstDay) / DAY_MS - (returnedEarly && multiDay ? 1 : 0));
+  // Nights in the air or on a ship (days in between, R 9.6 Abs. 3 LStR) are no accommodation nights.
+  const lodgingDates: number[] = [];
+  for (let night = 0; night < derivedNights; night += 1) {
+    const day = firstDay + night * DAY_MS;
+    if (!transitCountry.has(dayKey(day))) lodgingDates.push(day);
+  }
+  if (input.lodgingNights !== undefined && input.lodgingNights > lodgingDates.length) {
+    throw new Error(
+      `lodgingNights (${input.lodgingNights}) ist größer als die aus den Zeiten abgeleitete Zahl der Übernachtungen (${lodgingDates.length}).`
+    );
+  }
+  const nights = input.lodgingNights ?? derivedNights;
   const lodgingFlat: LodgingFlatLine[] = [];
   if (input.useLodgingFlatRate) {
-    for (let night = 0; night < nights; night += 1) {
-      const day = firstDay + night * DAY_MS;
+    for (const day of lodgingDates.slice(0, input.lodgingNights ?? lodgingDates.length)) {
       const where = locate(day, false);
       const rate = lookupRate(where.country, where.place, Number(dayKey(day).slice(0, 4)));
       lodgingFlat.push({ date: dayKey(day), country: rate.country, amount: rate.country === DOMESTIC_COUNTRY ? 20 : rate.night });
     }
+    warnings.add(
+      `Übernachtungspauschale für ${lodgingFlat.length} ${lodgingFlat.length === 1 ? "Nacht" : "Nächte"} angesetzt (aus den Zeiten abgeleitet: ` +
+        "Nacht der Heimreise vor 06:00 und Nächte im Flugzeug oder Schiff zählen nicht; Anzahl mit lodgingNights korrigieren)."
+    );
   }
 
   return {
