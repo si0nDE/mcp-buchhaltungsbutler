@@ -154,3 +154,81 @@ describe("validateRatePage - hostile input stays linear", () => {
     expect(performance.now() - started).toBeLessThan(1000);
   });
 });
+
+describe("fetchRateTable - redirects, body handling, concurrency, log length", () => {
+  const redirect = (location: string, status = 302) => respond("", { status, headers: { location } });
+
+  it("requests with redirect manual and does not contact a foreign or http redirect target", async () => {
+    for (const target of ["https://example.org/lsth/2027/inhalt.html", lsth.replace("https:", "http:"), "//example.org/x"]) {
+      clearRateTableCache();
+      const fetchImpl = mockFetch(() => redirect(target));
+      expect(await run(fetchImpl)).toBeNull();
+      // one request per host attempt, never to the redirect target
+      expect(fetchImpl.mock.calls.map(([u]) => String(u))).toEqual([lsth, ksth]);
+      expect(fetchImpl.mock.calls.every(([, init]) => init?.redirect === "manual")).toBe(true);
+    }
+  });
+
+  it("follows a legitimate redirect from lsth to ksth and names the final URL as source", async () => {
+    const moved = `${ksth}?von=lsth`;
+    const fetchImpl = mockFetch((url) =>
+      url === lsth ? redirect(moved, 301) : url === moved ? respond(fixtureHtml(2027)) : respond("nicht gefunden", { status: 404 })
+    );
+    const table = await run(fetchImpl);
+    expect(table?.source).toContain(moved);
+    expect(fetchImpl.mock.calls.map(([u]) => String(u))).toEqual([lsth, moved]);
+  });
+
+  it("follows at most 3 hops", async () => {
+    const fetchImpl = mockFetch((url) => redirect(url));
+    expect(await run(fetchImpl)).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(8); // per host: the request and 3 hops
+  });
+
+  it.each<[string, Record<string, string>, number]>([
+    ["non-OK status", {}, 404],
+    ["wrong content-type", { "content-type": "application/json" }, 200],
+    ["oversize content-length", { "content-length": String(4 * 1024 * 1024) }, 200],
+  ])("cancels the body before rejecting (%s)", async (_name, headers, status) => {
+    let cancelled = 0;
+    const fetchImpl = mockFetch(() => {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new TextEncoder().encode("x"));
+        },
+        cancel() {
+          cancelled += 1;
+        },
+      });
+      return new Response(body, { status, headers: { "content-type": "text/html", ...headers } });
+    });
+    expect(await run(fetchImpl)).toBeNull();
+    expect(cancelled).toBe(2);
+  });
+
+  it("shares one in-flight request between concurrent calls", async () => {
+    let release!: (res: Response) => void;
+    const pending = new Promise<Response>((resolve) => (release = resolve));
+    const fetchImpl = mockFetch(() => pending);
+    const calls = [run(fetchImpl), run(fetchImpl), run(fetchImpl)];
+    await Promise.resolve();
+    release(respond(fixtureHtml(2027), { url: lsth }));
+    const [a, b, c] = await Promise.all(calls);
+    expect(a).not.toBeNull();
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("truncates page-derived text in the log line to 60 characters", async () => {
+    const longName = "X".repeat(500);
+    const entries = RATES_2026.entries.map((e, i) => (i === 5 ? { ...e, country: longName, night: 5000 } : e));
+    const fetchImpl = mockFetch((url) => (url === lsth ? respond(fixtureHtml(2027, entries), { url }) : redirect(`https://${"y".repeat(300)}.example/`)));
+    expect(await run(fetchImpl)).toBeNull();
+    const line = String(errorLog.mock.calls[0][0]);
+    expect(line).toContain("XXXX");
+    expect(line).toContain("yyyy");
+    expect(line).not.toMatch(/X{61}/);
+    expect(line).not.toMatch(/y{61}/);
+  });
+});

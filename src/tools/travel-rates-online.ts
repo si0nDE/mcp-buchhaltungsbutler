@@ -2,7 +2,8 @@ import { builtinRateTable, provisionalRateTable, type RateTable, type RateTables
 import { parseRatesHtml, type ParsedRate } from "./travel-rates-parse.js";
 
 // Online lookup of the BMF table of foreign per-diem rates for years without a built-in table (LStH Anhang 25 I).
-// Only these two hosts, https only, URL built from an integer year; the page is parsed as data and validated before use.
+// Only these two hosts, https only, URL built from an integer year; redirects are followed by hand (at most 3 hops) and
+// only to https on these hosts, checked before the target is requested. The page is parsed as data and validated.
 // Any problem (network, HTTP status, redirect, size, content type, validation) means "not available", never an error:
 // the caller then continues with a provisional table. Opt-out: BHB_TRAVEL_RATES_ONLINE=0 or false.
 export const RATE_HOSTS = ["lsth.bundesfinanzministerium.de", "ksth.bundesfinanzministerium.de"] as const;
@@ -12,6 +13,8 @@ const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 3 * 1024 * 1024;
 const FAILURE_TTL_MS = 10 * 60_000;
 const MIN_COUNTRIES = 150;
+const MAX_REDIRECTS = 3;
+const MAX_LOG_TEXT = 60;
 
 export interface FetchRateOptions {
   fetchImpl?: typeof fetch;
@@ -21,7 +24,25 @@ export interface FetchRateOptions {
 
 // Successes are kept for the process, failures for 10 minutes (so repeated tool calls do not each wait for a timeout).
 const cache = new Map<number, { table: RateTable | null; at: number }>();
-export const clearRateTableCache = (): void => cache.clear();
+// Concurrent calls for the same year share one lookup.
+const inflight = new Map<number, Promise<RateTable | null>>();
+export const clearRateTableCache = (): void => {
+  cache.clear();
+  inflight.clear();
+};
+
+// Page-derived text (country names, redirect targets) is shortened before it goes into a message or log line.
+const clip = (text: string): string => (text.length > MAX_LOG_TEXT ? `${text.slice(0, MAX_LOG_TEXT - 1)}…` : text);
+
+async function discard(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // the body is not needed; a failing cancel changes nothing
+  }
+}
+
+const allowedUrl = (url: URL): boolean => url.protocol === "https:" && (RATE_HOSTS as readonly string[]).includes(url.hostname);
 
 export const rateTableUrl = (host: string, year: number): string => `https://${host}/lsth/${year}/B-Anhaenge/Anhang-25/I/inhalt.html`;
 
@@ -63,26 +84,55 @@ export function validateRatePage(year: number, html: string): ParsedRate[] {
   for (const required of ["Luxemburg", "Österreich"]) if (!countries.has(required)) throw new Error(`${required} fehlt`);
   for (const e of entries) {
     const values = [e.full, e.partial, e.night];
-    if (!values.every((v) => Number.isInteger(v) && v >= 1 && v <= 1000)) throw new Error(`unplausibler Wert bei ${e.country}`);
-    if (e.partial > e.full) throw new Error(`Teilsatz über Vollsatz bei ${e.country}`);
+    if (!values.every((v) => Number.isInteger(v) && v >= 1 && v <= 1000)) throw new Error(`unplausibler Wert bei ${clip(e.country)}`);
+    if (e.partial > e.full) throw new Error(`Teilsatz über Vollsatz bei ${clip(e.country)}`);
   }
   for (const country of countries) {
     const rows = entries.filter((e) => e.country === country);
-    if (rows.some((e) => e.place !== null) && !rows.some((e) => e.place === "im Übrigen")) throw new Error(`"im Übrigen" fehlt bei ${country}`);
+    if (rows.some((e) => e.place !== null) && !rows.some((e) => e.place === "im Übrigen")) throw new Error(`"im Übrigen" fehlt bei ${clip(country)}`);
   }
   return entries;
 }
 
 async function fetchFrom(host: string, year: number, fetchImpl: typeof fetch, date: string): Promise<RateTable> {
-  const url = rateTableUrl(host, year);
-  const res = await fetchImpl(url, { signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "follow", headers: { accept: "text/html" } });
-  const finalUrl = new URL(res.url || url);
-  if (finalUrl.protocol !== "https:" || !(RATE_HOSTS as readonly string[]).includes(finalUrl.hostname)) {
-    throw new Error(`Weiterleitung auf ${finalUrl.protocol}//${finalUrl.host} abgelehnt`);
+  let url = rateTableUrl(host, year);
+  const signal = AbortSignal.timeout(TIMEOUT_MS);
+  let res: Response;
+  for (let hop = 0; ; hop += 1) {
+    res = await fetchImpl(url, { signal, redirect: "manual", headers: { accept: "text/html" } });
+    if (res.status < 300 || res.status > 399) break;
+    await discard(res);
+    const location = res.headers.get("location");
+    if (!location) throw new Error(`HTTP ${res.status} ohne Ziel`);
+    if (hop >= MAX_REDIRECTS) throw new Error("mehr als 3 Weiterleitungen");
+    let next: URL;
+    try {
+      next = new URL(location, url);
+    } catch {
+      throw new Error(`Weiterleitung auf ungültige Adresse ${clip(location)} abgelehnt`);
+    }
+    // Checked before the target is contacted.
+    if (!allowedUrl(next)) throw new Error(`Weiterleitung auf ${clip(`${next.protocol}//${next.host}`)} abgelehnt`);
+    url = next.href;
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  if (!/^text\/html\b/i.test(res.headers.get("content-type") ?? "")) throw new Error("kein HTML");
-  if (Number(res.headers.get("content-length") ?? 0) > MAX_BYTES) throw new Error("Antwort größer als 3 MB");
+  // Defence in depth for fetch implementations that follow redirects themselves.
+  const finalUrl = new URL(res.url || url);
+  if (!allowedUrl(finalUrl)) {
+    await discard(res);
+    throw new Error(`Weiterleitung auf ${clip(`${finalUrl.protocol}//${finalUrl.host}`)} abgelehnt`);
+  }
+  if (!res.ok) {
+    await discard(res);
+    throw new Error(`HTTP ${res.status}`);
+  }
+  if (!/^text\/html\b/i.test(res.headers.get("content-type") ?? "")) {
+    await discard(res);
+    throw new Error("kein HTML");
+  }
+  if (Number(res.headers.get("content-length") ?? 0) > MAX_BYTES) {
+    await discard(res);
+    throw new Error("Antwort größer als 3 MB");
+  }
   const html = await readLimited(res);
   if (html.length > MAX_BYTES) throw new Error("Antwort größer als 3 MB");
   const entries = validateRatePage(year, html);
@@ -103,7 +153,14 @@ export async function fetchRateTable(year: number, options: FetchRateOptions = {
   const cached = cache.get(year);
   if (cached && (cached.table !== null || now - cached.at < FAILURE_TTL_MS)) return cached.table;
 
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const running = inflight.get(year);
+  if (running) return running;
+  const lookup = lookupOnline(year, options.fetchImpl ?? globalThis.fetch, now).finally(() => inflight.delete(year));
+  inflight.set(year, lookup);
+  return lookup;
+}
+
+async function lookupOnline(year: number, fetchImpl: typeof fetch, now: number): Promise<RateTable | null> {
   const date = new Date(now).toISOString().slice(0, 10);
   const reasons: string[] = [];
   for (const host of RATE_HOSTS) {
