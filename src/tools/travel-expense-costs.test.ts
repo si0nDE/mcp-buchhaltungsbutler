@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { round2 } from "./travel-expense-calc.js";
 import { computeTotals, processExpenses, processKmTrips, type Expense } from "./travel-expense-costs.js";
 
 const hotel = (overrides: Partial<Expense> = {}): Expense => ({
@@ -136,5 +137,89 @@ describe("computeTotals", () => {
       advance: 100,
       reimbursement: 171,
     });
+  });
+});
+
+describe("processExpenses - Fix round 1 (input validation and edge cases)", () => {
+  it("does not demand vat_rate when the VAT is discarded anyway", () => {
+    for (const flag of [{ receipt_missing: true }, { foreign_vat: true }]) {
+      const { lines } = run([hotel({ vat_rate: undefined, ...flag })]);
+      expect(lines[0].vatEur).toBe(0);
+      expect(lines[0].vorsteuer).toBe(false);
+    }
+  });
+
+  it("treats exactly 250.00 EUR as Kleinbetrag and 250.01 EUR as above the limit", () => {
+    const at = run([hotel({ amount: 250, vat_amount: 16.36, vat_rate: 19, invoice_recipient: "traveller" })]);
+    expect(at.lines[0].vorsteuer).toBe(true);
+    const above = run([hotel({ amount: 250.01, vat_amount: 16.36, vat_rate: 19, invoice_recipient: "traveller" })]);
+    expect(above.lines[0].vorsteuer).toBe(false);
+  });
+
+  it("applies the 250 EUR limit to the converted amount", () => {
+    const base = { vat_rate: 19 as const, currency: "USD", fx_rate: 0.9, fx_source: "EZB", invoice_recipient: "traveller" as const };
+    expect(run([hotel({ ...base, amount: 270, vat_amount: 43.11 })]).lines[0].vorsteuer).toBe(true);
+    expect(run([hotel({ ...base, amount: 280, vat_amount: 44.71 })]).lines[0].vorsteuer).toBe(false);
+  });
+
+  it("foreign VAT with a Kleinbetrag: no Vorsteuer and no recipient warning", () => {
+    const { lines, warnings } = run([hotel({ foreign_vat: true, invoice_recipient: "traveller" })]);
+    expect(lines[0].vorsteuer).toBe(false);
+    expect(warnings.some((w) => w.includes("Namen des Reisenden") || w.includes("Rechnungsempfänger"))).toBe(false);
+  });
+
+  it("flight with printed VAT: no flight warning, follows the recipient rule", () => {
+    const flight = (overrides: Partial<Expense>): Expense => ({
+      category: "fare", fare_kind: "flight", description: "Flug Inland", date: "2026-03-09", amount: 107, vat_amount: 7, vat_rate: 7, ...overrides,
+    });
+    const company = run([flight({ invoice_recipient: "company" })]);
+    expect(company.lines[0].vorsteuer).toBe(true);
+    expect(company.warnings.some((w) => w.includes("§ 26 Abs. 3 UStG"))).toBe(false);
+    const traveller = run([flight({ amount: 300, vat_amount: 19.63, invoice_recipient: "traveller" })]);
+    expect(traveller.lines[0].vorsteuer).toBe(false);
+  });
+
+  it("flight with foreign VAT warns only about the refund procedure", () => {
+    const { warnings } = run([
+      { category: "fare", fare_kind: "flight", description: "Flug", date: "2026-03-09", amount: 100, vat_amount: 10, vat_rate: 7, foreign_vat: true },
+    ]);
+    expect(warnings.some((w) => w.includes("§ 26 Abs. 3 UStG"))).toBe(false);
+  });
+
+  it("rejects a breakfast amount larger than the receipt and negative amounts; 0 means no deduction", () => {
+    expect(() => run([hotel({ breakfast_included: true, breakfast_amount: 200 })], "self_employed")).toThrow(/breakfast_amount/);
+    expect(() => run([hotel({ breakfast_included: true, breakfast_amount: -1 })], "self_employed")).toThrow(/breakfast_amount/);
+    const { lines } = run([hotel({ breakfast_included: true, breakfast_amount: 0 })], "self_employed");
+    expect(lines[0].breakfastDeductedEur).toBe(0);
+    expect(lines[0].grossEur).toBe(107);
+  });
+
+  it("keeps net = gross - VAT and VAT <= gross after breakfast deduction plus conversion", () => {
+    const { lines } = run(
+      [hotel({ amount: 99.99, vat_amount: 6.54, currency: "USD", fx_rate: 0.93, fx_source: "EZB", breakfast_included: true, breakfast_amount: 9.99 })],
+      "self_employed"
+    );
+    expect(lines[0].netEur).toBe(round2(lines[0].grossEur - lines[0].vatEur));
+    expect(lines[0].vatEur).toBeLessThanOrEqual(lines[0].grossEur);
+  });
+
+  it("validates vat_amount and non-finite numbers", () => {
+    expect(() => run([hotel({ vat_amount: -1 })])).toThrow(/vat_amount/);
+    expect(() => run([hotel({ vat_amount: 200 })])).toThrow(/vat_amount/);
+    expect(() => run([hotel({ vat_amount: Number.NaN })])).toThrow(/vat_amount/);
+    expect(() => run([hotel({ amount: Number.POSITIVE_INFINITY })])).toThrow(/amount/);
+    expect(() => run([hotel({ currency: "USD", fx_rate: Number.POSITIVE_INFINITY, fx_source: "EZB" })])).toThrow(/fx_rate/);
+  });
+
+  it("rejects dates that do not exist in the calendar", () => {
+    expect(() => run([hotel({ date: "2026-02-31" })])).toThrow(/Datum/);
+    expect(() => processKmTrips([{ mode: "car", km: 10, date: "2026-02-31" }])).toThrow(/Datum/);
+  });
+
+  it("totals reimburse the gross of lines with missing receipt or foreign VAT", () => {
+    const { lines } = run([hotel({ receipt_missing: true }), hotel({ foreign_vat: true, description: "Hotel B" })]);
+    const totals = computeTotals({ allowances: 0, lodgingFlat: 0, lines, kmLines: [], advance: 0 });
+    expect(totals.lodging).toBe(214);
+    expect(totals.total).toBe(214);
   });
 });

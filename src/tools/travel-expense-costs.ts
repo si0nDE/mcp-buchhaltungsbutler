@@ -21,7 +21,11 @@ export interface Expense {
   foreign_vat?: boolean;
   receipt_missing?: boolean;
   breakfast_included?: boolean;
-  /** Breakfast amount if shown separately on the receipt (receipt currency). */
+  /**
+   * Breakfast amount if shown separately on the receipt (receipt currency). 0 means "no deduction"; only undefined falls
+   * back to 20 % of the 24-hour rate. A line carries ONE vat_rate/vat_amount: a receipt with two VAT rates must be
+   * entered as two expenses.
+   */
   breakfast_amount?: number;
   fare_kind?: FareKind;
 }
@@ -78,6 +82,13 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const KLEINBETRAG_LIMIT = 250; // § 33 UStDV, gross
 const KM_RATES: Record<KmTrip["mode"], number> = { car: 0.3, other_motor: 0.2 };
 
+// Real calendar date (2026-02-31 fails): round-trip through Date.
+function isRealDate(value: string): boolean {
+  if (!DATE_ONLY.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0, 10) === value;
+}
+
 export function nextDateKey(dateKey: string): string {
   const [year, month, day] = dateKey.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
@@ -92,12 +103,21 @@ export function processExpenses(
 
   for (const expense of expenses) {
     const label = `Beleg "${expense.description}"`;
-    if (!DATE_ONLY.test(expense.date)) throw new Error(`${label}: Datum im Format YYYY-MM-DD angeben.`);
-    if (!(expense.amount > 0)) throw new Error(`${label}: amount muss größer 0 sein.`);
+    if (!isRealDate(expense.date)) throw new Error(`${label}: Datum im Format YYYY-MM-DD und als echtes Kalenderdatum angeben.`);
+    if (!Number.isFinite(expense.amount) || !(expense.amount > 0)) throw new Error(`${label}: amount muss eine Zahl größer 0 sein.`);
+    if (expense.vat_amount !== undefined && !(Number.isFinite(expense.vat_amount) && expense.vat_amount >= 0 && expense.vat_amount <= expense.amount)) {
+      throw new Error(`${label}: vat_amount muss eine Zahl zwischen 0 und amount sein.`);
+    }
+    if (expense.breakfast_amount !== undefined && !(Number.isFinite(expense.breakfast_amount) && expense.breakfast_amount >= 0)) {
+      throw new Error(`${label}: breakfast_amount muss eine Zahl größer oder gleich 0 sein.`);
+    }
+    // Flags first: the VAT of such lines is discarded, so a missing vat_rate is irrelevant for them.
+    const foreignVat = expense.foreign_vat === true;
+    const receiptMissing = expense.receipt_missing === true;
     const currency = (expense.currency ?? "EUR").toUpperCase();
     let factor = 1;
     if (currency !== "EUR") {
-      if (!(expense.fx_rate && expense.fx_rate > 0)) {
+      if (!(expense.fx_rate && Number.isFinite(expense.fx_rate) && expense.fx_rate > 0)) {
         throw new Error(`${label}: Fremdwährung ${currency} braucht fx_rate (EUR je 1 ${currency}).`);
       }
       if (!expense.fx_source) {
@@ -109,7 +129,7 @@ export function processExpenses(
           "ausdrücklich geregelt; der BMF-Monatsdurchschnittskurs ist eine vertretbare Schätzung (§ 16 Abs. 6 UStG gilt für die Umsatzsteuer)."
       );
     }
-    if ((expense.vat_amount ?? 0) > 0 && expense.vat_rate === undefined) {
+    if ((expense.vat_amount ?? 0) > 0 && expense.vat_rate === undefined && !foreignVat && !receiptMissing) {
       throw new Error(`${label}: Bei vat_amount größer 0 ist vat_rate (7 oder 19) anzugeben.`);
     }
 
@@ -124,7 +144,10 @@ export function processExpenses(
         expense.breakfast_amount !== undefined
           ? round2(expense.breakfast_amount * factor)
           : round2(0.2 * context.breakfastRate(nextDateKey(expense.date)));
-      breakfastDeducted = Math.min(part, gross);
+      if (part > gross) {
+        throw new Error(`${label}: Der Frühstücksbetrag (${part} €) ist größer als der Belegbetrag (${gross} €); breakfast_amount und amount prüfen.`);
+      }
+      breakfastDeducted = part;
       const share = gross > 0 ? (gross - breakfastDeducted) / gross : 1;
       vat = round2(vat * share);
       gross = round2(gross - breakfastDeducted);
@@ -134,8 +157,6 @@ export function processExpenses(
       );
     }
 
-    const foreignVat = expense.foreign_vat === true;
-    const receiptMissing = expense.receipt_missing === true;
     if (foreignVat) {
       vat = 0;
       warnings.add(
@@ -150,7 +171,7 @@ export function processExpenses(
           "sonst schätzt das Finanzamt nach § 162 AO. Kein Vorsteuerabzug ohne Rechnung."
       );
     }
-    if (expense.category === "fare" && expense.fare_kind === "flight" && (expense.vat_amount ?? 0) === 0 && !receiptMissing) {
+    if (expense.category === "fare" && expense.fare_kind === "flight" && vat === 0 && !receiptMissing && !foreignVat) {
       warnings.add(
         `${label}: Flugticket ohne ausgewiesene Umsatzsteuer: kein Vorsteuerabzug (§ 35 Abs. 2 UStDV; bei grenzüberschreitenden ` +
           "Flügen ggf. Erlass nach § 26 Abs. 3 UStG, nur der Inlandsanteil ist steuerbar)."
@@ -158,7 +179,7 @@ export function processExpenses(
     }
 
     const kleinbetrag = originalGross <= KLEINBETRAG_LIMIT;
-    let vorsteuer = vat > 0 && !foreignVat && !receiptMissing && (recipient === "company" || kleinbetrag);
+    const vorsteuer = vat > 0 && !foreignVat && !receiptMissing && (recipient === "company" || kleinbetrag);
     if (vat > 0 && !foreignVat && !receiptMissing && !vorsteuer) {
       warnings.add(
         recipient === "traveller"
@@ -169,11 +190,10 @@ export function processExpenses(
     if (expense.category === "lodging" && expense.breakfast_included) {
       warnings.add(
         `${label}: Frühstück im Hotelpreis. Der Steuersatz im Sammelposten ist nicht eindeutig (Speisen 7 % seit 1.1.2026, UStAE 12.16 Abs. 8 und 12 ` +
-          "noch uneinheitlich): übernommen wird der auf dem Beleg je Steuersatz ausgewiesene Steuerbetrag."
+          "noch uneinheitlich). Eine Zeile hat genau einen Steuersatz und Steuerbetrag; ein abgezogener Frühstücksanteil mindert die USt anteilig. " +
+          "Belege mit zwei Steuersätzen als zwei Belege erfassen."
       );
     }
-    // A flight without printed tax never gets Vorsteuer, whatever the recipient says.
-    if (expense.fare_kind === "flight" && vat === 0) vorsteuer = false;
 
     lines.push({
       category: expense.category,
@@ -205,7 +225,8 @@ export function processKmTrips(trips: KmTrip[]): { lines: KmLine[]; warnings: st
           "als Beleg (category fare) erfassen."
       );
     }
-    if (!(trip.km > 0)) throw new Error("km muss größer 0 sein.");
+    if (!isRealDate(trip.date)) throw new Error("Datum der Fahrt im Format YYYY-MM-DD und als echtes Kalenderdatum angeben.");
+    if (!Number.isFinite(trip.km) || !(trip.km > 0)) throw new Error("km muss eine Zahl größer 0 sein.");
     const rate = KM_RATES[trip.mode];
     lines.push({
       mode: trip.mode,
