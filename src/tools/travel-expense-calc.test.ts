@@ -522,6 +522,48 @@ describe("computeTrip - Rückreise nach Deutschland als Station (§ 9 Abs. 4a Sa
     expect(result.days.map((d) => d.amount)).toEqual([39, 58, 66, 44]);
   });
 
+  it("does not apply when the traveller worked in Germany after the foreign stop (Wien, then München)", () => {
+    for (const extra of [[], [home("2026-04-10T17:00")]]) {
+      const result = computeTrip({
+        travellerType: "employee",
+        departure: "2026-04-06T07:00",
+        returnTime: "2026-04-10T18:00",
+        stops: [
+          { country: "Österreich", place: "Wien", arrival: "2026-04-06T12:00" },
+          { country: "Deutschland", place: "München", arrival: "2026-04-07T18:00" },
+          ...extra,
+        ],
+      });
+      expect(result.days.at(-1)?.amount, `extra=${extra.length}`).toBe(14);
+      expect(result.warnings.some((w) => w.includes("Rückreise nach Deutschland"))).toBe(false);
+    }
+  });
+
+  it("applies when the first domestic stop after the foreign stop arrives on the return day itself", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-08T22:00",
+      stops: [
+        { country: "Österreich", place: "Wien", arrival: "2026-04-06T12:00" },
+        { country: "Deutschland", place: "München", arrival: "2026-04-08T18:00" },
+        home("2026-04-08T21:00"),
+      ],
+    });
+    expect(result.days.map((d) => d.amount)).toEqual([33, 50, 33]);
+    expect(result.warnings.filter((w) => w.startsWith("Rückreise nach Deutschland als Station erfasst"))).toHaveLength(1);
+  });
+
+  it("covers a return at 00:00: the domestic stop arriving at 00:00 belongs to the previous (last) day", () => {
+    const result = computeTrip({
+      travellerType: "employee",
+      departure: "2026-04-06T07:00",
+      returnTime: "2026-04-09T00:00",
+      stops: [{ country: "Österreich", place: "Wien", arrival: "2026-04-06T12:00" }, home("2026-04-09T00:00")],
+    });
+    expect(result.days.map((d) => d.amount)).toEqual([33, 50, 33]);
+  });
+
   it("a trip with only domestic stops is unchanged", () => {
     const result = computeTrip(inland({ stops: [home("2026-03-09T09:00"), home("2026-03-11T17:00")] }));
     expect(result.days.map((d) => d.amount)).toEqual([14, 28, 14]);

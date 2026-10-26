@@ -33,7 +33,7 @@ Eigene Mahlzeiten des Reisenden sind nur über die Pauschale abziehbar. Bewirtun
 
 Eintägige Reise ohne Übernachtung: 14 € ab mehr als 8 Stunden (Inland). Mehrtägig: 14 € am An- und Abreisetag (ohne Mindestdauer), 28 € für Tage dazwischen. Rückkehr um genau 00:00 Uhr zählt als Ende um 24:00 Uhr des Vortags. Tätigkeit über Nacht ohne Übernachtung (`overnight_without_accommodation`, nur über genau zwei Kalendertage): 14 € für den Tag mit der überwiegenden Abwesenheit, aber nur, wenn die Abwesenheit an beiden Tagen zusammen mehr als 8 Stunden beträgt.
 
-Im Ausland zählt der Ort, der vor 24 Uhr Ortszeit zuletzt erreicht wird. Die Rückkehr nach Hause muss nicht als Station erfasst werden. Wird sie doch als letzte Station (Deutschland) nach Auslandsstationen erfasst, rechnet das Tool den Rückreisetag mit dem Satz des letzten Auslandsorts (§ 9 Abs. 4a Satz 5 EStG: liegt der zuletzt erreichte Ort im Inland, gilt der letzte Tätigkeitsort im Ausland) und weist darauf hin. Das gilt nur für den letzten Reisetag.
+Im Ausland zählt der Ort, der vor 24 Uhr Ortszeit zuletzt erreicht wird. Die Rückkehr nach Hause muss nicht als Station erfasst werden. Wird sie doch als letzte Station (Deutschland) nach Auslandsstationen erfasst und kommt die erste Inlandsstation nach dem letzten Auslandsort am Rückreisetag an, rechnet das Tool den Rückreisetag mit dem Satz des letzten Auslandsorts (§ 9 Abs. 4a Satz 5 EStG: liegt der zuletzt erreichte Ort im Inland, gilt der letzte Tätigkeitsort im Ausland) und weist darauf hin. Das gilt nur für den letzten Reisetag. Kommt die erste Inlandsstation früher an (z. B. Wien, dann zwei Tage Arbeit in München), gilt am Rückreisetag der Inlandssatz.
 
 ## Dreimonatsfrist und Unterbrechung
 

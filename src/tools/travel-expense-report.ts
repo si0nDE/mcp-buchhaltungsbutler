@@ -105,7 +105,7 @@ const generateShape = {
   return: z.string().regex(LOCAL_DATE_TIME).describe("Rückkehr zur Wohnung bzw. ersten Tätigkeitsstätte, YYYY-MM-DDTHH:mm."),
   stops: z.array(stopSchema).min(1).describe(
     "Stationen der Reise in zeitlicher Reihenfolge. Die Rückkehr nach Hause muss nicht als Station erfasst werden; wird sie als " +
-      "letzte Station (Deutschland) nach Auslandsstationen erfasst, gilt für den Rückreisetag der Satz des letzten Auslandsorts (§ 9 Abs. 4a Satz 5 EStG)."
+      "letzte Station (Deutschland) nach Auslandsstationen erfasst und kommt die erste Inlandsstation danach am Rückreisetag an, gilt für den Rückreisetag der Satz des letzten Auslandsorts (§ 9 Abs. 4a Satz 5 EStG)."
   ),
   meals_provided: z.record(z.string().regex(DATE_ONLY), z.array(z.enum(MEALS))).optional().describe('Vom Arbeitgeber oder Dritten gestellte Mahlzeiten je Datum, z. B. {"2026-03-10": ["breakfast"]}. Kürzung 20 %/40 % der 24-Stunden-Pauschale.'),
   overnight_without_accommodation: z.boolean().optional().describe("Einsatz über Nacht ohne Übernachtung (14 € für den Tag mit der überwiegenden Abwesenheit)."),

@@ -187,11 +187,17 @@ export function computeTrip(input: TripInput): TripResult {
   });
 
   // § 9 Abs. 4a Satz 5 EStG: if the place reached last is in Germany, the last place of work abroad counts. Applied to
-  // the return day only, when the return to Germany was entered as the last stop.
+  // the return day only, when the return to Germany was entered as the last stop and the first domestic stop after
+  // the last foreign one arrives on the return day (an earlier domestic stop means work in Germany before returning).
   const lastStop = stops[stops.length - 1];
-  const lastForeign = isDomesticCountry(lastStop.country)
-    ? [...stops].reverse().find((stop) => !isDomesticCountry(stop.country))
-    : undefined;
+  let lastForeignIndex = -1;
+  if (isDomesticCountry(lastStop.country)) {
+    for (let i = stops.length - 1; i >= 0 && lastForeignIndex < 0; i -= 1) if (!isDomesticCountry(stops[i].country)) lastForeignIndex = i;
+  }
+  const lastForeign =
+    lastForeignIndex >= 0 && startOfDay(Math.min(stops[lastForeignIndex + 1].arrivalMs, effectiveReturn)) === lastDay
+      ? stops[lastForeignIndex]
+      : undefined;
   if (lastForeign) {
     warnings.add(
       `Rückreise nach Deutschland als Station erfasst: Rückreisetag mit dem letzten Auslandsort (${lastForeign.country.trim()}) angesetzt (§ 9 Abs. 4a Satz 5 EStG).`
