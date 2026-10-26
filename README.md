@@ -95,6 +95,7 @@ Streamable HTTP service instead of stdio, container-ready.
    - `MCP_ALLOWED_HOSTS` (recommended) — comma-separated hostnames this server is reachable as (e.g. your reverse proxy's domain), for DNS-rebinding protection.
    - `PORT` (optional, default `3000`).
    - `BHB_POLICY_FILE` (optional) — where `set_policy` stores the house rules (default `~/.mcp-buchhaltungsbutler/policy.json`). In a container, mount a volume writable by the `node` user (uid 1000), e.g. `-v bhb-policy:/data -e BHB_POLICY_FILE=/data/policy.json`; otherwise the rule is gone after a restart.
+   - `BHB_TRAVEL_RATES_ONLINE` (optional) — `0` or `false` disables the online lookup of a missing BMF foreign per-diem table (travel expense reports are then calculated provisionally with the latest built-in table). Default: enabled (https to `lsth.`/`ksth.bundesfinanzministerium.de` only).
 
    ```bash
    docker run -d --name mcp-buchhaltungsbutler \
@@ -117,8 +118,11 @@ plus a booking hint; the calculation (domestic and foreign per-diem rates from t
 three-month rule) runs deterministically in the connector. `generate_and_upload_travel_expense_report` also uploads the PDF
 (never retried automatically, check `list_receipts` first). For employees, including shareholder managing directors with
 an employment contract (`employee`), and for self-employed persons, sole proprietors and shareholder managing directors
-without an employment contract (`self_employed`); nothing is booked automatically. The foreign rates table covers 2026 only, and the interpretation points should be reviewed by
-a tax advisor before production use. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md) (German only, it documents German
+without an employment contract (`self_employed`); nothing is booked automatically. The foreign rates table is built in
+for 2026; for other years with foreign days the connector fetches the BMF table from the LStH page
+(`lsth.bundesfinanzministerium.de`, validated; opt-out `BHB_TRAVEL_RATES_ONLINE=0`), otherwise it calculates with the
+latest built-in table and marks the result as provisional (`rates_provisional`, VORLÄUFIG in the PDF). The interpretation
+points should be reviewed by a tax advisor before production use. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md) (German only, it documents German
 tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-reisekosten.md).
 
 ## Tools

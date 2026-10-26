@@ -94,6 +94,7 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
    - `MCP_ALLOWED_HOSTS` (empfohlen) — kommagetrennte Hostnamen, unter denen der Server erreichbar ist (z. B. deine Reverse-Proxy-Domain), für DNS-Rebinding-Schutz.
    - `PORT` (optional, Standard `3000`).
    - `BHB_POLICY_FILE` (optional) — Speicherort der Hausregeln für `set_policy` (Standard `~/.mcp-buchhaltungsbutler/policy.json`). Im Container ein Volume einhängen, das der Benutzer `node` (uid 1000) beschreiben darf, z. B. `-v bhb-policy:/data -e BHB_POLICY_FILE=/data/policy.json`; sonst ist die Regel nach einem Neustart weg.
+   - `BHB_TRAVEL_RATES_ONLINE` (optional) — `0` oder `false` schaltet den Online-Abruf einer fehlenden BMF-Auslandstabelle ab (Reisekostenabrechnungen werden dann vorläufig mit der letzten eingebauten Tabelle gerechnet). Standard: an (nur https zu `lsth.`/`ksth.bundesfinanzministerium.de`).
 
    ```bash
    docker run -d --name mcp-buchhaltungsbutler \
@@ -116,7 +117,10 @@ nach BMF-Tabelle 2026, Mahlzeitenkürzung, Dreimonatsfrist) läuft deterministis
 `generate_and_upload_travel_expense_report` lädt das PDF zusätzlich hoch (nie automatisch wiederholt, vorher `list_receipts`
 prüfen). Für Angestellte und Gesellschafter-Geschäftsführer mit Anstellungsvertrag (`employee`) sowie für
 Selbstständige, Einzelunternehmer und Gesellschafter-Geschäftsführer ohne Anstellungsvertrag (`self_employed`); gebucht
-wird nicht automatisch. Auslandstabelle nur für 2026, Auslegungspunkte vor Produktivbetrieb vom Steuerberater prüfen lassen. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md),
+wird nicht automatisch. Auslandstabelle eingebaut für 2026; für andere Jahre mit Auslandstagen ruft der Konnektor die
+BMF-Tabelle von der LStH-Seite ab (`lsth.bundesfinanzministerium.de`, geprüft; abschaltbar mit
+`BHB_TRAVEL_RATES_ONLINE=0`), sonst rechnet er mit der letzten eingebauten Tabelle und kennzeichnet das Ergebnis als
+vorläufig (`rates_provisional`, VORLÄUFIG im PDF). Auslegungspunkte vor Produktivbetrieb vom Steuerberater prüfen lassen. FAQ: [docs/reisekosten-faq.md](docs/reisekosten-faq.md),
 Rechtsgrundlagen: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-reisekosten.md).
 
 ## Tools

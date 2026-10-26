@@ -43,7 +43,14 @@ Nur die ersten drei Monate an derselben Tätigkeitsstätte erhalten Verpflegungs
 
 Die Sätze stammen aus der BMF-Tabelle ab 01.01.2026 (BMF 05.12.2025, IV C 5 - S 2353/00094/007/012, BStBl I S. 2078; 166 Länder, 214 Einträge). Sie liegt als erzeugte Datei `src/tools/travel-rates-2026.ts` im Repo. Orte werden exakt, über Aliase oder über einen eindeutigen Namensanfang erkannt; ein unbekannter Ort fällt mit Warnung auf den Satz "im Übrigen" zurück. Länder, die nicht in der Tabelle stehen, erhalten den Luxemburg-Satz (mit Warnung); Mikronesien und mehrere karibische Staaten verwenden nach den Fußnoten der Tabelle die Sätze der Philippinen bzw. von Trinidad und Tobago.
 
-**Nur 2026.** Hat eine Reise in einem anderen Jahr Auslandstage, bricht das Tool mit Fehlermeldung ab; es rechnet nie still mit Vorjahreswerten. Inlandstage brauchen keine Tabelle (28 €, 14 € und 20 € stehen im Gesetz bzw. in R 9.7 Abs. 3 LStR) und werden in jedem Jahr gerechnet. Das BMF veröffentlicht die Tabelle für das Folgejahr üblicherweise im Dezember (für 2027 ist sie noch nicht veröffentlicht, U). Jährlich: Tabelle mit `scripts/generate-travel-rates.ts` erzeugen (`npx tsx scripts/generate-travel-rates.ts <Jahr> <HTML-Datei> "<Quellenangabe>" <Abrufdatum>`) und in `src/tools/travel-rates.ts` in `TABLES` eintragen.
+**Eingebaut ist nur 2026.** Inlandstage brauchen keine Tabelle (28 €, 14 € und 20 € stehen im Gesetz bzw. in R 9.7 Abs. 3 LStR) und werden in jedem Jahr gerechnet; reine Inlandsreisen lösen nie einen Abruf aus. Für ein Reisejahr mit Auslandstagen ohne eingebaute Tabelle bricht das Tool nicht ab, sondern geht so vor:
+
+1. **Online-Abruf** der Tabelle von der Seite der Lohnsteuer-Hinweise: `https://lsth.bundesfinanzministerium.de/lsth/<Jahr>/B-Anhaenge/Anhang-25/I/inhalt.html`, ersatzweise derselbe Pfad auf `ksth.bundesfinanzministerium.de`. Nur diese beiden Hosts, nur https, die Adresse wird nur aus der Jahreszahl (2025 bis 2100) gebildet; eine Weiterleitung auf einen anderen Host wird abgelehnt; Zeitlimit 15 Sekunden, höchstens 3 MB, nur HTML. Die Seite wird nur als Daten gelesen und vor der Verwendung geprüft: Überschrift "Übersicht über die ab 1. Januar <Jahr> geltenden Pauschbeträge ..." mit genau diesem Jahr, mindestens 150 Länder, Luxemburg und Österreich vorhanden, Teilsatz nie über dem Vollsatz, Werte zwischen 1 und 1000, bei Ländern mit Städten eine Zeile "im Übrigen". Jeder Fehler (Netz, Status, Prüfung) gilt als "nicht verfügbar", nie als Abbruch. Die Quelle (Adresse und Abrufdatum) steht in der Antwort (`rates_sources`) und auf der Hinweisseite des PDF.
+2. **Vorläufig:** Ist die Tabelle nicht verfügbar, rechnet das Tool die Auslandstage mit der letzten eingebauten Tabelle (höchstes Jahr bis zum Reisejahr, sonst das höchste) und markiert das deutlich: Warnung "BMF-Auslandstabelle <Jahr> nicht verfügbar … vorläufig mit der Tabelle <Jahr> berechnet", `rates_provisional: true`, `provisional` an den betroffenen Tagen, Hinweis **VORLÄUFIG** auf Seite 1 des PDF. Nach Veröffentlichung neu berechnen, bevor die Buchung bestätigt wird.
+
+Ein erfolgreicher Abruf bleibt für die Laufzeit des Konnektors im Speicher, ein Fehlschlag 10 Minuten (damit nicht jeder Aufruf erneut auf das Zeitlimit wartet). Mit `BHB_TRAVEL_RATES_ONLINE=0` (oder `false`) ist der Abruf abgeschaltet; dann wird ohne Netzzugriff sofort vorläufig gerechnet.
+
+Das BMF-Schreiben für das Folgejahr erscheint üblicherweise im Dezember; die LStH-Seite kann später folgen. Geprüft am 26.10.2026: Die Seiten für 2025 und 2026 existieren unter diesem Adressmuster (Abruf und Prüfung erfolgreich, 2025: 179 Länder, 224 Einträge), für 2027 kam HTTP 404. Eine eingebaute Tabelle fügt man weiterhin mit dem Skript hinzu: `npx tsx scripts/generate-travel-rates.ts <Jahr> <HTML-Datei> "<Quellenangabe>" <Abrufdatum>` und in `src/tools/travel-rates.ts` in `TABLES` eintragen; dann ist kein Abruf mehr nötig.
 
 ## Flug- und Schiffsreisen: Zwischentage
 
@@ -134,7 +141,7 @@ Gegenüber der Spezifikation geändert oder ergänzt:
 | `expenses[].paid_by` | Ergänzt: `traveller` (Standard, erstattet) oder `company` (vom Unternehmen gezahlt, nicht im Gesamtbetrag). |
 | `lodging_nights` | Ergänzt: begrenzt die Zahl der Pauschalnächte nach unten. |
 
-Die Antwort enthält neben `totals`, `days`, `costs` und `km` auch `nights` (aus den Zeiten abgeleitet, informativ), `lodging_flat` (gezahlte Pauschalnächte) und `sources` (Quellen der Sätze).
+Die Antwort enthält neben `totals`, `days`, `costs` und `km` auch `nights` (aus den Zeiten abgeleitet, informativ), `lodging_flat` (gezahlte Pauschalnächte), `sources` (Quellen der Sätze), `rates_provisional` (Auslandssätze vorläufig ja/nein) und `rates_sources` (Tabelle je Jahr mit Auslandstagen: `year`, `origin` `builtin`/`online`/`provisional`, `source`, bei vorläufig `provisional_from`).
 
 ## Offene Punkte für den Steuerberater
 
@@ -149,7 +156,7 @@ Diese Punkte sind Auslegung (A) oder nicht verifiziert (U) und sollten vor Produ
 7. Einordnung des Gesellschafter-Geschäftsführers mit Anstellungsvertrag (Arbeitnehmer, § 19 EStG) vs. ohne (Betriebsausgabe): Übernachtungspauschale und Frühstückskürzung hängen daran.
 8. Frühstück im Hotelpreis bei Angestellten als gestellte Mahlzeit, auch bei vom Unternehmen bezahltem Hotel (A, Rz. 117 BMF 25.11.2020).
 
-Ebenfalls offen: Auslandstabelle 2027 (nicht veröffentlicht, U). Außerdem sind Rechenregeln wie die Behandlung der Nacht der Heimreise vor 06:00 Uhr, die 8-Stunden-Prüfung über beide Tage bei Tätigkeit über Nacht, Flug- und Schiffsetappen ohne `departs_at` als Etappe am Ankunftstag und die Anwendung von § 9 Abs. 4a Satz 5 EStG (letzter Auslandsort) nur auf den Rückreisetag Lesarten bzw. Vereinfachungen (A).
+Ebenfalls offen: Auslandstabelle 2027 (nicht veröffentlicht, U; bis dahin rechnet das Tool 2027 vorläufig oder mit der online abgerufenen Tabelle, siehe oben). Außerdem sind Rechenregeln wie die Behandlung der Nacht der Heimreise vor 06:00 Uhr, die 8-Stunden-Prüfung über beide Tage bei Tätigkeit über Nacht, Flug- und Schiffsetappen ohne `departs_at` als Etappe am Ankunftstag und die Anwendung von § 9 Abs. 4a Satz 5 EStG (letzter Auslandsort) nur auf den Rückreisetag Lesarten bzw. Vereinfachungen (A).
 
 Stand der Tests: Die Tools sind mit erfundenen Daten und über einen echten MCP-Client getestet; gegen ein echtes BuchhaltungsButler-Konto sind sie noch nicht gelaufen.
 

@@ -22,7 +22,8 @@ Gelesene Quellen: BMF-Schreiben bzw. LStH 2026 Anhang 25 I (Auslandstabelle) und
   - Umsetzung im Tool: Die Tabelle liegt als erzeugtes Modul `src/tools/travel-rates-2026.ts` vor (166 Länder, 214 Einträge, abgerufen 26.10.2026). Städte werden exakt, über Aliase oder über einen eindeutigen Präfix erkannt; ein nicht erkannter Ort fällt mit Warnung auf "im Übrigen" zurück.
 - Flug und Schiff (R 9.6 Abs. 3 LStR, V): Bei Flügen zählt der Staat der Landung; Zwischenlandungen bleiben unberücksichtigt, außer sie machen Übernachtungen nötig. Bei Flugreisen über mehr als zwei Kalendertage gilt für die Zwischentage der Satz für Österreich. Bei Schiffsreisen gilt der Satz für Luxemburg, am Ein- und Ausschiffungstag der des Hafenorts. Maßgeblich ist der Ort, der vor 24 Uhr Ortszeit zuletzt erreicht wird; eine eigene Zeitzonenregel gibt es nicht.
   - Umsetzung im Tool (A): Eine Station hat nur eine Ankunftszeit. Die erste Etappe beginnt mit der Abreise; für Etappen ab der zweiten Station rechnet das Tool Zwischentage (Flug Österreich, Schiff Luxemburg) und Transitnächte nur, wenn `departs_at` (Beginn der Etappe) angegeben ist. Ohne `departs_at` gilt die Etappe als am Ankunftstag zurückgelegt, mit Hinweis, wenn zwischen den Ankünften zwei oder mehr Kalendertage liegen.
-- Auslandstabelle 2027 (U): noch nicht veröffentlicht, Erwartung Dezember 2026. Für Reisen mit Auslandstagen in 2027 rechnet das Tool nicht mit Vorjahreswerten, sondern bricht mit Fehler ab; Inlandstage (28/14 € gesetzlich, 20 € R 9.7 Abs. 3 LStR) brauchen keine Tabelle.
+- Auslandstabelle 2027 (U): noch nicht veröffentlicht, Erwartung Dezember 2026. Inlandstage (28/14 € gesetzlich, 20 € R 9.7 Abs. 3 LStR) brauchen keine Tabelle.
+  - Umsetzung im Tool: Für Jahre mit Auslandstagen ohne eingebaute Tabelle ruft der Konnektor die Tabelle von der LStH-Seite Anhang 25 I ab (`lsth.bundesfinanzministerium.de`, ersatzweise `ksth.bundesfinanzministerium.de`, Pfad `/lsth/<Jahr>/B-Anhaenge/Anhang-25/I/inhalt.html`) und prüft sie (Überschrift mit genau diesem Jahr, mindestens 150 Länder, Luxemburg und Österreich, plausible Werte, "im Übrigen" bei Städten). Ist sie nicht verfügbar, rechnet er mit der letzten eingebauten Tabelle und kennzeichnet das als vorläufig (Warnung, `rates_provisional`, VORLÄUFIG im PDF). Vorjahreswerte werden also verwendet, aber nie still. Stand 26.10.2026 (V, selbst abgerufen): Seiten für 2025 und 2026 vorhanden, 2027 HTTP 404. Das BMF-Schreiben erscheint üblicherweise im Dezember, die LStH-Seite kann später folgen (A).
 
 ## Übernachtung
 
@@ -77,6 +78,7 @@ Gelesene Quellen: BMF-Schreiben bzw. LStH 2026 Anhang 25 I (Auslandstabelle) und
 |---|---|---|
 | BMF 05.12.2025, Auslandsreisekosten ab 01.01.2026 | IV C 5 - S 2353/00094/007/012, BStBl I S. 2078 | LStH 2026 Anhang 25 I (bundesfinanzministerium.de) |
 | BMF 25.11.2020, Reisekosten ab 2020 | IV C 5 - S 2353/19/10011 :006, BStBl I S. 1228 | LStH 2026 Anhang 25 III (bundesfinanzministerium.de) |
+| LStH <Jahr> Anhang 25 I (Online-Abruf für Jahre ohne eingebaute Tabelle) | Seite `lsth.bundesfinanzministerium.de/lsth/<Jahr>/B-Anhaenge/Anhang-25/I/inhalt.html` | Abruf zur Laufzeit, Adresse und Datum in `rates_sources` |
 | BMF 22.12.2025, Umsatzsteuer Verpflegung/Hotel | III C 2 - S 7220/00023/014/027 | BMF-Schreiben |
 | BMF 19.11.2025, Bewirtung | IV C 6 - S 2145/00026/005/033 | BMF-Schreiben |
 | BMF 14.07.2025, Änderung GoBD (E-Rechnung) | GoBD Rz. 131 | BMF-Schreiben |
