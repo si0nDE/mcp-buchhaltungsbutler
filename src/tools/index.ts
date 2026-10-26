@@ -5,6 +5,7 @@ import { createCommentsTools } from "./comments.js";
 import { createContactsTools } from "./contacts.js";
 import { createCostLocationsTools } from "./cost-locations.js";
 import { createEntertainmentReceiptTools } from "./entertainment-receipt.js";
+import { createTravelExpenseTools } from "./travel-expense-tools.js";
 import { createInvoicesTools } from "./invoices.js";
 import { createMonthEndTools } from "./month-end.js";
 import { createPostingAccountsTools } from "./posting-accounts.js";
@@ -28,6 +29,7 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createCostLocationsTools(client),
     ...createContactsTools(client),
     ...createEntertainmentReceiptTools(client),
+    ...createTravelExpenseTools(client),
     ...createPostingAccountsTools(client),
     ...createReceiptsTools(client),
     ...createReceiptFamilyTools(client),
