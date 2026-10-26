@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRatesHtml } from "./generate-travel-rates.js";
+import { parseRatesHtml } from "./travel-rates-parse.js";
 
 // Invented minimal fixture that mirrors the structure of the BMF table (header rows, bold cells, <br/> in names).
 const FIXTURE = `
