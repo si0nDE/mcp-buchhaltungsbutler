@@ -149,7 +149,7 @@ function validateRequest(args: GenerateArgs): string[] {
   return warnings;
 }
 
-export async function buildTravelReport(args: GenerateArgs, options: { chart?: Chart } = {}): Promise<BuiltReport & { hint: BookingHint }> {
+export async function buildTravelReport(args: GenerateArgs, options: { chart?: () => Promise<Chart> } = {}): Promise<BuiltReport & { hint: BookingHint }> {
   const warnings = validateRequest(args);
   const travellerType = args.traveller_type;
   const expenses = (args.expenses ?? []) as Expense[];
@@ -191,6 +191,13 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: C
         "nachtragen (Beleg oder, bei Angestellten mit Arbeitgebererstattung, use_lodging_flat_rate)."
     );
   }
+  if (trip.lodgingFlat.length > 0 && costs.lines.some((l) => l.category === "lodging")) {
+    const n = trip.lodgingFlat.length;
+    warnings.push(
+      `Übernachtungspauschale für ${n} ${n === 1 ? "Nacht" : "Nächte"} und Übernachtungsbeleg gleichzeitig erfasst: nur eines von beiden je Nacht ` +
+        "ansetzen (lodging_nights begrenzt die Pauschale auf die Nächte ohne Beleg)."
+    );
+  }
   if (args.attachments && args.attachments.length > 0) {
     warnings.push(
       "Anhänge werden als Seiten hinter die Abrechnung gehängt; eine in einer E-Rechnung eingebettete XML-Datei (ZUGFeRD/XRechnung) geht dabei " +
@@ -211,10 +218,12 @@ export async function buildTravelReport(args: GenerateArgs, options: { chart?: C
     kmLines: km.lines,
     advance: round2(args.advance_paid ?? 0),
   });
+  if (totals.total === 0) warnings.push("Gesamtbetrag 0 €: keine Verpflegungspauschale, keine Kosten erfasst — Eingaben prüfen.");
   const allWarnings = [...warnings, ...trip.warnings, ...costs.warnings, ...km.warnings];
+  const chart = options.chart ? await options.chart() : "unknown";
   const hint = buildBookingHint({
     travellerType,
-    chart: options.chart ?? "unknown",
+    chart,
     allowances: trip.allowanceTotal,
     lodgingFlat: trip.lodgingFlatTotal,
     kmLines: km.lines,
@@ -270,7 +279,7 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
       "Belege beim Nutzer erfragen, nie ableiten; erst nach Bestätigung der reisenden Person traveller_confirmed setzen. Ein Beleg mit zwei " +
       "Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst (jede Ausgabe trägt einen vat_rate/vat_amount). In " +
       "totals und days zählt als gezahlte Übernachtungspauschale totals.lodgingFlat (die aus den Zeiten abgeleitete Nachtzahl ist nur " +
-      "informativ; mit lodging_nights korrigierbar). Der Konnektor bucht nicht selbst. Die rechtlichen Aussagen sind vor Produktivbetrieb vom Steuerberater gegenzulesen (docs/reisekosten-faq.md).",
+      "informativ; mit lodging_nights korrigierbar). Der Konnektor bucht nicht selbst. Beim Hochladen ist der Belegbetrag der Gesamtbetrag, nicht der Erstattungsbetrag nach Vorschuss. Die rechtlichen Aussagen sind vor Produktivbetrieb vom Steuerberater gegenzulesen (docs/reisekosten-faq.md).",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
@@ -285,27 +294,46 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
     description:
       "Erzeugt die Reisekostenabrechnung (siehe generate_travel_expense_report) und lädt sie in einem Aufruf nach BuchhaltungsButler hoch, " +
       "statt das Base64-PDF zweimal durch das Modell zu schicken. Liefert id_by_customer des neuen Belegs, nicht das PDF. " +
-      "BuchhaltungsButler erkennt Duplikate nicht: bei einem erneuten Upload vorher list_receipts prüfen. Der Buchungshinweis nennt " +
-      "bei erkanntem SKR03 die Konten; gebucht wird erst nach Bestätigung des Nutzers.",
+      "BuchhaltungsButler erkennt Duplikate nicht: bei einem erneuten Upload vorher list_receipts prüfen. Der Belegbetrag ist der " +
+      "Gesamtbetrag, nicht der Erstattungsbetrag nach Vorschuss. Reisende Person, Reisezweck und Rechnungsempfänger der Belege beim Nutzer " +
+      "erfragen, nie ableiten; traveller_confirmed erst nach Bestätigung der reisenden Person setzen. Der Buchungshinweis nennt bei " +
+      "erkanntem SKR03 die Konten. Der Konnektor bucht nicht selbst; Buchungen legst du nach Rückfrage selbst an.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
     async handler(args) {
-      const chart = await getChart(client).catch(() => "unknown" as const);
-      const built = await buildTravelReport(args, { chart });
-      const result = await client.call<{ id_by_customer?: string | number; data?: { id_by_customer?: string | number } }>("receiptsUpload", {
-        file: Buffer.from(built.pdfBytes).toString("base64"),
-        type: "invoice inbound",
-        file_name: `Reisekostenabrechnung_${args.return.slice(0, 10)}.pdf`,
-        account: args.account,
-        creditor_debtor: args.creditor_debtor,
-        counterparty: built.data.travellerName,
-        invoice_number: args.report_number,
-        date: args.return.slice(0, 10),
-        amount: built.totals.total,
-        currency: "EUR",
-      });
-      return ok({ id_by_customer: result.id_by_customer ?? result.data?.id_by_customer ?? null, ...summary(built) });
+      const built = await buildTravelReport(args, { chart: () => getChart(client).catch(() => "unknown" as const) });
+      let id: string | number | null = null;
+      try {
+        const result = await client.call<{ success?: boolean; message?: string; id_by_customer?: string | number; data?: { id_by_customer?: string | number } }>(
+          "receiptsUpload",
+          {
+            file: Buffer.from(built.pdfBytes).toString("base64"),
+            type: "invoice inbound",
+            file_name: `Reisekostenabrechnung_${args.return.slice(0, 10)}.pdf`,
+            account: args.account,
+            creditor_debtor: args.creditor_debtor,
+            counterparty: built.data.travellerName,
+            invoice_number: args.report_number,
+            date: args.return.slice(0, 10),
+            amount: built.totals.total,
+            currency: "EUR",
+          }
+        );
+        if (result?.success === false) throw new Error(result.message || "BuchhaltungsButler meldet success: false");
+        id = result?.id_by_customer ?? result?.data?.id_by_customer ?? null;
+      } catch (error) {
+        throw new Error(
+          `Upload fehlgeschlagen (${error instanceof Error ? error.message : String(error)}). Der Beleg kann trotzdem angelegt worden sein. ` +
+            "Nicht automatisch wiederholt (BuchhaltungsButler erkennt keine Duplikate, das Upload-Kontingent wird nicht erstattet). Vor einem " +
+            `erneuten Versuch per list_receipts (Gegenpartei ${built.data.travellerName}, Datum ${args.return.slice(0, 10)}) prüfen.`
+        );
+      }
+      const summed = summary(built);
+      if (id === null) {
+        summed.warnings = [...(summed.warnings ?? []), "Upload ohne ID quittiert: per list_receipts prüfen, nicht erneut hochladen."];
+      }
+      return ok({ id_by_customer: id, ...summed });
     },
   });
 

@@ -210,3 +210,71 @@ describe("generate_and_upload_travel_expense_report", () => {
     expect(d.booking_hint.splits.every((s: { account?: number }) => s.account === undefined)).toBe(true);
   });
 });
+
+describe("upload error handling and warnings (fix round 1)", () => {
+  const upload = (call: (k: string, p: Record<string, unknown>) => unknown, args: Record<string, unknown> = {}) =>
+    connect(call).then((c) =>
+      c.callTool({ name: "generate_and_upload_travel_expense_report", arguments: { ...base, use_lodging_flat_rate: true, ...args } })
+    );
+  const hotel = { category: "lodging", description: "Hotel Musterstadt", date: "2026-03-09", amount: 107, vat_amount: 7, vat_rate: 7, invoice_recipient: "company" };
+
+  it("rethrows an upload failure with the duplicate-risk text", async () => {
+    const res = await upload((k) => {
+      if (k === "receiptsUpload") throw new Error("HTTP 500");
+      return { data: [] };
+    });
+    expect(res.isError).toBe(true);
+    expect(errorText(res)).toContain("HTTP 500");
+    expect(errorText(res)).toContain("list_receipts");
+  });
+
+  it("treats success:false as a failure", async () => {
+    const res = await upload((k) => (k === "receiptsUpload" ? { success: false, message: "Kontingent erschöpft" } : { data: [] }));
+    expect(res.isError).toBe(true);
+    expect(errorText(res)).toContain("Kontingent erschöpft");
+    expect(errorText(res)).toContain("list_receipts");
+  });
+
+  it.each([{}, undefined])("warns instead of failing when the response has no id (%j)", async (response) => {
+    const res = await upload((k) => (k === "receiptsUpload" ? response : { data: [] }));
+    expect(res.isError).toBeFalsy();
+    expect(data(res).id_by_customer).toBeNull();
+    expect(data(res).warnings).toContain("Upload ohne ID quittiert: per list_receipts prüfen, nicht erneut hochladen.");
+  });
+
+  it("warns about lodging flat rate plus lodging receipt", async () => {
+    const client = await connect(() => ({}));
+    const both = data(
+      await client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, use_lodging_flat_rate: true, expenses: [hotel] } })
+    );
+    expect(both.warnings.some((w: string) => w.includes("Übernachtungspauschale für 2 Nächte und Übernachtungsbeleg"))).toBe(true);
+    const capped = data(
+      await client.callTool({
+        name: "generate_travel_expense_report",
+        arguments: { ...base, use_lodging_flat_rate: true, lodging_nights: 1, expenses: [hotel] },
+      })
+    );
+    const w = capped.warnings.find((x: string) => x.includes("Übernachtungsbeleg gleichzeitig"));
+    expect(w).toContain("lodging_nights");
+    expect(w).toContain("1 Nacht ");
+    const none = data(await client.callTool({ name: "generate_travel_expense_report", arguments: { ...base, use_lodging_flat_rate: true } }));
+    expect(none.warnings?.some((x: string) => x.includes("Übernachtungsbeleg gleichzeitig")) ?? false).toBe(false);
+  });
+
+  it("does not look up the chart when validation fails", async () => {
+    const call = vi.fn(async (_k: string, _p?: Record<string, unknown>) => ({ data: [] }));
+    const res = await upload(call, { traveller_confirmed: false });
+    expect(res.isError).toBe(true);
+    expect(call.mock.calls.some(([k]) => k === "settingsGetPostingaccounts")).toBe(false);
+  });
+
+  it("warns when the total is 0", async () => {
+    const client = await connect(() => ({}));
+    const res = await client.callTool({
+      name: "generate_travel_expense_report",
+      arguments: { ...base, departure: "2026-03-09T09:00", return: "2026-03-09T13:00", stops: [{ country: "Deutschland", arrival: "2026-03-09T10:00" }] },
+    });
+    expect(data(res).totals.total).toBe(0);
+    expect(data(res).warnings.some((w: string) => w.includes("Gesamtbetrag 0 €"))).toBe(true);
+  });
+});
