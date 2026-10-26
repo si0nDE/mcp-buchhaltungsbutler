@@ -141,3 +141,16 @@ describe("resolveRateTables", () => {
     expect(provisional[2027]).toMatchObject({ year: 2027, origin: "provisional", provisionalFrom: 2026 });
   });
 });
+
+describe("validateRatePage - hostile input stays linear", () => {
+  const MB3 = 3 * 1024 * 1024;
+  it.each(["<", "<tr", "<td"])("3 MB of %j is rejected well under 1 s", async (unit) => {
+    const { validateRatePage } = await import("./travel-rates-online.js");
+    const html =
+      "Übersicht über die ab 1. Januar 2027 geltenden Pauschbeträge für Verpflegungsmehraufwendungen und Übernachtungskosten im Ausland " +
+      `<table><tr><td>Ägypten</td></tr>${unit.repeat(Math.floor(MB3 / unit.length))}`;
+    const started = performance.now();
+    expect(() => validateRatePage(2027, html)).toThrow();
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});

@@ -13,7 +13,8 @@ export interface ParsedRate {
 function decode(cell: string): string {
   return cell
     .replace(/<br\s*\/?>/gi, " ")
-    .replace(/<[^>]+>/g, "")
+    // [^<>] keeps the scan linear on hostile input (with [^>] every "<" would rescan to the end).
+    .replace(/<[^<>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&rsquo;/g, "’")
@@ -23,15 +24,33 @@ function decode(cell: string): string {
     .trim();
 }
 
+// Contents of <tag ...>...</tag> in order, with indexOf instead of lazy regexes: linear even when closing tags or the
+// ">" of an opening tag are missing (a lazy [\s\S]*? pattern retries from every "<tag" and becomes quadratic).
+function elements(html: string, tag: string): string[] {
+  const open = `<${tag}`;
+  const close = `</${tag}>`;
+  const contents: string[] = [];
+  let pos = 0;
+  for (;;) {
+    const start = html.indexOf(open, pos);
+    if (start < 0) break;
+    const gt = html.indexOf(">", start + open.length);
+    if (gt < 0) break;
+    const end = html.indexOf(close, gt + 1);
+    if (end < 0) break;
+    contents.push(html.slice(gt + 1, end));
+    pos = end + close.length;
+  }
+  return contents;
+}
+
 // The table is anchored on its first country (alphabetical: "Ägypten"). A row with empty value cells opens a
 // city block for the country; the block ends with its "im Übrigen" row. Header rows have fewer than four cells.
 export function parseRatesHtml(html: string): ParsedRate[] {
   const anchor = html.indexOf("Ägypten");
   if (anchor < 0) throw new Error('Tabelle nicht gefunden: "Ägypten" fehlt im HTML.');
   const table = html.slice(html.lastIndexOf("<table", anchor), html.indexOf("</table>", anchor));
-  const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map((row) =>
-    [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cell) => decode(cell[1]))
-  );
+  const rows = elements(table, "tr").map((row) => elements(row, "td").map(decode));
   const entries: ParsedRate[] = [];
   let blockCountry: string | null = null;
   for (const cells of rows) {

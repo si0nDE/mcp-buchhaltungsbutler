@@ -54,7 +54,7 @@ const HEADING =
 
 // Throws with a short reason if the page is not the table of exactly this year.
 export function validateRatePage(year: number, html: string): ParsedRate[] {
-  const text = html.replace(/<[^>]*>/g, " ").replace(/&nbsp;|\u00a0/g, " ").replace(/\s+/g, " ");
+  const text = html.replace(/<[^<>]*>/g, " ").replace(/&nbsp;|\u00a0/g, " ").replace(/\s+/g, " ");
   const years = [...text.matchAll(HEADING)].map((m) => Number(m[1]));
   if (years.length === 0 || years.some((y) => y !== year)) throw new Error(`Überschrift nicht für ${year}`);
   const entries = parseRatesHtml(html);

@@ -35,3 +35,37 @@ describe("parseRatesHtml", () => {
     expect(() => parseRatesHtml("<html><body>nichts</body></html>")).toThrow(/Tabelle nicht gefunden/);
   });
 });
+
+describe("parseRatesHtml - hostile input stays linear", () => {
+  const MB3 = 3 * 1024 * 1024;
+  const timed = (html: string) => {
+    const started = performance.now();
+    let result: unknown;
+    try {
+      result = parseRatesHtml(html);
+    } catch (error) {
+      result = error;
+    }
+    return { ms: performance.now() - started, result };
+  };
+
+  it.each([
+    ["'<'", "<"],
+    ["'<tr'", "<tr"],
+    ["'<td'", "<td"],
+  ])("3 MB of %s after the anchor finishes well under 1 s and yields no rows", (_name, unit) => {
+    const { ms, result } = timed(`<table><tr><td>Ägypten</td></tr>${unit.repeat(Math.floor(MB3 / unit.length))}`);
+    expect(ms).toBeLessThan(1000);
+    expect(result).toEqual([]);
+  });
+
+  it("3 MB of '<' inside one cell finishes well under 1 s", () => {
+    const { ms } = timed(`<table><tr><td>Ägypten</td><td>${"<".repeat(MB3)}</td><td>1</td><td>1</td></tr></table>`);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it("parses rows split over lines and attributes like before", () => {
+    const html = `<table>\n<tr class="x"\n data-a="1">\n<td\n class="c">Ägypten</td><td>50</td><td>33</td><td>112</td>\n</tr>\n</table>`;
+    expect(parseRatesHtml(html)).toEqual([{ country: "Ägypten", place: null, full: 50, partial: 33, night: 112 }]);
+  });
+});
