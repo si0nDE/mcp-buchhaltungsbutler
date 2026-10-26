@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildBookingHint } from "./travel-expense-booking.js";
-import { assertTravelExpenseFields } from "./travel-expense.js";
+import { assertTravelExpenseFields, matchTravelExpenseAccount } from "./travel-expense.js";
 import type { CostLine, KmLine } from "./travel-expense-costs.js";
 
 const line = (overrides: Partial<CostLine>): CostLine => ({
@@ -130,7 +130,12 @@ describe("buildBookingHint", () => {
     });
     const accounts = hint.splits.map((s) => s.account as number);
     expect(accounts.length).toBeGreaterThan(0);
-    expect(() => assertTravelExpenseFields(accounts, hint.posting_fields)).not.toThrow();
+    // Every suggested account must sit in the band of the traveller's role (leaving the band must fail here).
+    for (const account of accounts) expect(matchTravelExpenseAccount(account)?.role, `account ${account}`).toBe(hint.posting_fields.traveler_role);
+    expect(assertTravelExpenseFields(accounts, hint.posting_fields)?.role).toBe(hint.posting_fields.traveler_role);
+    // The same accounts with the other role must be rejected by the posting validation.
+    const other = hint.posting_fields.traveler_role === "employee" ? "owner_manager" : "employee";
+    expect(() => assertTravelExpenseFields(accounts, { ...hint.posting_fields, traveler_role: other })).toThrow();
     expect(hint.notes.some((n) => n.includes("posting_fields"))).toBe(true);
   });
 });

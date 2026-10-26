@@ -59,7 +59,7 @@ const expenseSchema = z.object({
   date: z.string().regex(DATE_ONLY).describe("Belegdatum YYYY-MM-DD. Bei Übernachtung: der Tag, an dem die Nacht beginnt (das Frühstück ist am Folgetag)."),
   amount: z.number().positive().describe("Bruttobetrag in der Belegwährung. Ein Beleg mit zwei Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst, jede mit einem vat_rate/vat_amount."),
   vat_amount: z.number().min(0).optional().describe("Umsatzsteuerbetrag wie auf dem Beleg ausgewiesen (Belegwährung). Nicht aus dem Satz berechnen."),
-  vat_rate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional().describe("Steuersatz des Belegs; Pflicht, wenn vat_amount größer 0 ist."),
+  vat_rate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional().describe("Steuersatz des Belegs; Pflicht und nur 7 oder 19, wenn vat_amount größer 0 ist."),
   currency: z.string().length(3).optional().describe("ISO-Währung, Standard EUR."),
   fx_rate: z.number().positive().optional().describe("EUR je 1 Einheit Fremdwährung; Pflicht bei Fremdwährung."),
   fx_source: z.string().optional().describe('Quelle des Kurses, z. B. "BMF Monatskurs 03/2026"; Pflicht bei Fremdwährung.'),
@@ -279,7 +279,7 @@ export function createTravelExpenseTools(client: BBClient): [ToolDef, ToolDef] {
       "Arbeitgeber) und Selbstständige/Geschäftsführer (Betriebsausgabe, nur tatsächliche Übernachtungskosten). Ohne BuchhaltungsButler-" +
       "Zugriff; zum Hochladen generate_and_upload_travel_expense_report nutzen. Reisende Person, Reisezweck und Rechnungsempfänger der " +
       "Belege beim Nutzer erfragen, nie ableiten; erst nach Bestätigung der reisenden Person traveller_confirmed setzen. Ein Beleg mit zwei " +
-      "Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst (jede Ausgabe trägt einen vat_rate/vat_amount). In " +
+      "Steuersätzen (z. B. 7 % Übernachtung + 19 % Getränke) wird als ZWEI Ausgaben erfasst (jede Ausgabe trägt einen vat_rate/vat_amount; vat_rate ist Pflicht und nur 7 oder 19, wenn vat_amount größer 0 ist). In " +
       "totals und days zählt als gezahlte Übernachtungspauschale totals.lodgingFlat (die aus den Zeiten abgeleitete Nachtzahl ist nur " +
       "informativ; mit lodging_nights korrigierbar). Der Konnektor bucht nicht selbst. Beim Hochladen ist der Belegbetrag der Gesamtbetrag, nicht der Erstattungsbetrag nach Vorschuss. Die rechtlichen Aussagen sind vor Produktivbetrieb vom Steuerberater gegenzulesen (docs/reisekosten-faq.md).",
     annotations: { readOnlyHint: true, destructiveHint: false },

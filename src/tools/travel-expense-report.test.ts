@@ -139,6 +139,34 @@ describe("generate_travel_expense_report over the MCP client", () => {
   });
 });
 
+describe("trimmed posting fields and vat_rate rule", () => {
+  it("trims traveller_name and purpose in booking_hint.posting_fields", async () => {
+    const client = await connect(() => ({}));
+    const res = await client.callTool({
+      name: "generate_travel_expense_report",
+      arguments: { ...base, traveller_name: "  Erika Mustermann ", purpose: "  Kundentermin Einführung Backup-Konzept bei Muster AG  " },
+    });
+    expect(res.isError).toBeFalsy();
+    expect(data(res).booking_hint.posting_fields).toMatchObject({
+      traveler_name: "Erika Mustermann",
+      business_purpose: "Kundentermin Einführung Backup-Konzept bei Muster AG",
+    });
+  });
+
+  it("rejects vat_amount > 0 without vat_rate", async () => {
+    const client = await connect(() => ({}));
+    const res = await client.callTool({
+      name: "generate_travel_expense_report",
+      arguments: {
+        ...base,
+        expenses: [{ category: "fare", description: "Bahn", date: "2026-03-09", amount: 50, vat_amount: 3.27, invoice_recipient: "company" }],
+      },
+    });
+    expect(res.isError).toBe(true);
+    expect(errorText(res)).toContain("vat_rate 7 oder 19");
+  });
+});
+
 describe("lodging_nights and two-rate receipts", () => {
   it("lodging_nights caps the lodging flat rate (2 derived nights, 1 paid)", async () => {
     const client = await connect(() => ({}));
