@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { COUNTRY_ALIASES, getRateTable, lookupRate } from "./travel-rates.js";
+import {
+  COUNTRY_ALIASES,
+  PLACE_ALIASES,
+  getRateTable,
+  lookupRate,
+} from "./travel-rates.js";
 
 const rate = (country: string, place: string | undefined) => {
   const r = lookupRate(country, place, 2026);
@@ -40,11 +45,18 @@ describe("lookupRate", () => {
 
   it("falls back to the Luxemburg rates for unknown countries and marks it", () => {
     const r = lookupRate("Atlantis", undefined, 2026);
-    expect([r.full, r.partial, r.night, r.fallback]).toEqual([63, 42, 139, "luxembourg"]);
+    expect([r.full, r.partial, r.night, r.fallback]).toEqual([
+      63,
+      42,
+      139,
+      "luxembourg",
+    ]);
   });
 
   it("maps Mikronesien to the Philippinen rates (BMF note)", () => {
-    expect(rate("Mikronesien", undefined)).toEqual(rate("Philippinen", undefined));
+    expect(rate("Mikronesien", undefined)).toEqual(
+      rate("Philippinen", undefined),
+    );
   });
 
   it("is case and whitespace insensitive", () => {
@@ -52,7 +64,55 @@ describe("lookupRate", () => {
   });
 });
 
+describe("place matching", () => {
+  const hit = (country: string, place: string | undefined) => {
+    const r = lookupRate(country, place, 2026);
+    return [r.full, r.partial, r.night, r.placeMatched];
+  };
+
+  it("treats a whitespace-only place as no place", () => {
+    expect(hit("USA", " ")).toEqual([59, 40, 182, "rest"]);
+    expect(hit("USA", undefined)).toEqual([59, 40, 182, "rest"]);
+  });
+
+  it("does not match very short strings to unrelated cities", () => {
+    expect(hit("Australien", "a")).toEqual([57, 38, 173, "rest"]);
+    expect(hit("Spanien", "e")).toEqual([34, 23, 103, "rest"]);
+    expect(hit("USA", "Los")).toEqual([64, 43, 262, "city"]); // 3 chars, unique prefix
+  });
+
+  it("matches unique prefixes, aliases and exact names", () => {
+    expect(hit("Spanien", "Palma")).toEqual([44, 29, 142, "city"]);
+    expect(hit("USA", "Washington")).toEqual([66, 44, 203, "city"]);
+    expect(hit("USA", "Washington DC")).toEqual([66, 44, 203, "city"]);
+    expect(hit("Japan", "Tokyo")).toEqual([50, 33, 285, "city"]);
+    expect(hit("Spanien", "Teneriffa")).toEqual([36, 24, 103, "city"]);
+    expect(hit("Frankreich", "Roissy")).toEqual([58, 39, 159, "city"]);
+  });
+
+  it("resolves 'San' in the USA to San Francisco (the only San* row)", () => {
+    expect(hit("USA", "San")).toEqual([59, 40, 327, "city"]);
+  });
+
+  it("uses the 'im Übrigen' row with placeMatched 'rest' for an unmatched place", () => {
+    expect(hit("Frankreich", "Atlantis-Stadt")).toEqual([53, 36, 105, "rest"]);
+  });
+
+  it("reports n/a for single-row countries and domestic", () => {
+    expect(hit("Österreich", "Wien")).toEqual([50, 33, 117, "n/a"]);
+    expect(hit("Luxemburg", undefined)).toEqual([63, 42, 139, "n/a"]);
+    expect(hit("Deutschland", undefined)[3]).toBe("n/a");
+  });
+});
+
 describe("table integrity", () => {
+  it("every place alias points to an existing place in the table", () => {
+    const places = new Set(getRateTable(2026).entries.map((e) => e.place));
+    for (const [alias, target] of Object.entries(PLACE_ALIASES)) {
+      expect(places.has(target), `${alias} -> ${target}`).toBe(true);
+    }
+  });
+
   const table = getRateTable(2026);
 
   it("carries source and retrieval date", () => {
@@ -69,7 +129,11 @@ describe("table integrity", () => {
 
   it("every country with cities has an 'im Übrigen' row", () => {
     const byCountry = new Map<string, string[]>();
-    for (const e of table.entries) byCountry.set(e.country, [...(byCountry.get(e.country) ?? []), e.place ?? ""]);
+    for (const e of table.entries)
+      byCountry.set(e.country, [
+        ...(byCountry.get(e.country) ?? []),
+        e.place ?? "",
+      ]);
     for (const [country, places] of byCountry) {
       if (places.length > 1) expect(places, country).toContain("im Übrigen");
     }
@@ -77,6 +141,7 @@ describe("table integrity", () => {
 
   it("has a plausible size and monotone rates", () => {
     expect(new Set(table.entries.map((e) => e.country)).size).toBe(166);
-    for (const e of table.entries) expect(e.partial).toBeLessThanOrEqual(e.full);
+    for (const e of table.entries)
+      expect(e.partial).toBeLessThanOrEqual(e.full);
   });
 });
