@@ -5,7 +5,7 @@ import { createCommentsTools } from "./comments.js";
 import { createContactsTools } from "./contacts.js";
 import { createCostLocationsTools } from "./cost-locations.js";
 import { createEntertainmentReceiptTools } from "./entertainment-receipt.js";
-import { createTravelExpenseTools } from "./travel-expense-tools.js";
+import { createTravelExpenseTools } from "./travel-expense-report.js";
 import { createInvoicesTools } from "./invoices.js";
 import { createMonthEndTools } from "./month-end.js";
 import { createPostingAccountsTools } from "./posting-accounts.js";

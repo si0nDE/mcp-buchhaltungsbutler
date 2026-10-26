@@ -3,7 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { createServer } from "../server.js";
-import { assertPurposeIsConcrete } from "./travel-expense-tools.js";
+import { assertPurposeIsConcrete } from "./travel-expense-report.js";
 
 // All data is invented.
 async function connect(call: (key: string, params: Record<string, unknown>) => unknown) {
