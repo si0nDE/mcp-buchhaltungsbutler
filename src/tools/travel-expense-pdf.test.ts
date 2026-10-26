@@ -81,6 +81,50 @@ describe("renderTravelExpenseReport", () => {
     expect(text).toMatch(/Seite \d+ von \d+/);
   });
 
+  it("keeps the layout intact for empty purpose, route, days, costs and km lines", async () => {
+    const bytes = await renderTravelExpenseReport(data({ purpose: "", route: [], days: [], costs: [], kmLines: [] }));
+    const text = await textOf(bytes);
+    expect(text).toContain("Abwesenheit");
+    expect(text).toContain("Reiseweg");
+    expect(text).toContain("Erstattungsbetrag");
+    expect(text).not.toContain("Verpflegung");
+    expect(text).not.toContain("Datum Land / Ort");
+  });
+
+  it("keeps the sum box and the confirmation on the same page", async () => {
+    const day = (i: number) => ({
+      date: `2026-01-${String(1 + i).padStart(2, "0")}`,
+      hours: 24, country: "Deutschland", place: null, kind: "full" as const, baseAmount: 28, reduction: 0, amount: 28, meals: [], fullRate: 28,
+    });
+    for (let n = 17; n <= 23; n++) {
+      const bytes = await renderTravelExpenseReport(data({ days: Array.from({ length: n }, (_, i) => day(i)), costs: [] }));
+      const doc = await PDFDocument.load(bytes);
+      const pageTexts: string[] = [];
+      for (let i = 0; i < doc.getPageCount(); i++) {
+        const single = await PDFDocument.create();
+        const [copied] = await single.copyPages(doc, [i]);
+        single.addPage(copied);
+        pageTexts.push(await textOf(await single.save()));
+      }
+      const sumPage = pageTexts.find((t) => t.includes("Erstattungsbetrag"));
+      expect(sumPage, `n=${n}`).toBeDefined();
+      expect(sumPage, `n=${n}`).toContain("Elektronisch bestätigt");
+    }
+  });
+
+  it("puts the legal basis in the footer without the traveller name", async () => {
+    const employee = await textOf(await renderTravelExpenseReport(data()));
+    const self = await textOf(await renderTravelExpenseReport(data({ travellerType: "self_employed" })));
+    expect(employee).toContain("Rechtsgrundlagen: § 9 Abs. 4a EStG; BMF 25.11.2020 und 05.12.2025");
+    expect(self).toContain("Rechtsgrundlagen: § 4 Abs. 5 Satz 1 Nr. 5, § 9 Abs. 4a EStG; BMF 25.11.2020 und 05.12.2025");
+    expect(employee).not.toContain("Reisekostenabrechnung Erika Mustermann Seite");
+  });
+
+  it("leaves unparsable dates unchanged and handles date-only departure", async () => {
+    const text = await textOf(await renderTravelExpenseReport(data({ departure: "2026-03-09", returnTime: "morgen" })));
+    expect(text).toContain("09.03.2026 bis morgen");
+  });
+
   it("does not crash on characters outside WinAnsi", async () => {
     const bytes = await renderTravelExpenseReport(data({ travellerName: "Łukasz Çelik", purpose: "Besuch 東京 Büro, Abstimmung Rahmenvertrag" }));
     expect(await textOf(bytes)).toContain("Çelik");
@@ -91,6 +135,13 @@ describe("toWinAnsi", () => {
   it("keeps German characters and replaces unsupported ones", () => {
     expect(toWinAnsi("Größe € Çelik")).toBe("Größe € Çelik");
     expect(toWinAnsi("Łukasz")).toBe("?ukasz");
+  });
+
+  it("normalizes decomposed characters, turns control whitespace into spaces and maps an emoji to one ?", () => {
+    expect(toWinAnsi("e\u0301")).toBe("é");
+    expect(toWinAnsi("u\u0308")).toBe("ü");
+    expect(toWinAnsi("a\nb\r\tc")).toBe("a b c");
+    expect(toWinAnsi("x😀y")).toBe("x?y");
   });
 });
 

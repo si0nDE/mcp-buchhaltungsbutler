@@ -43,16 +43,25 @@ const ALLOWED = new Set<number>([
 
 // pdf-lib's standard fonts only encode WinAnsi: anything else throws while drawing. Replace instead of crashing.
 export function toWinAnsi(text: string): string {
-  return [...text].map((char) => (ALLOWED.has(char.codePointAt(0) ?? 0) ? char : "?")).join("");
+  return [...text.normalize("NFC").replace(/[\n\r\t]+/g, " ")].map((char) => (ALLOWED.has(char.codePointAt(0) ?? 0) ? char : "?")).join("");
 }
 
-const formatDate = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
-const formatDateTime = (iso: string): string => `${formatDate(iso)} ${iso.slice(11, 16)}`;
+const ISO_PATTERN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/;
+const formatDate = (iso: string): string =>
+  ISO_PATTERN.test(iso) ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : iso;
+const formatDateTime = (iso: string): string => {
+  if (!ISO_PATTERN.test(iso)) return iso;
+  return iso.length > 10 ? `${formatDate(iso)} ${iso.slice(11, 16)}` : formatDate(iso);
+};
 const euro = (value: number): string => formatEuro(value).replace(" €", "");
 
 const LEGAL_BASIS: Record<TravellerType, string> = {
   employee: "Erstattung durch den Arbeitgeber, § 3 Nr. 16 und § 9 Abs. 4a EStG, R 9.4 ff. LStR",
   self_employed: "Betriebsausgabe, § 4 Abs. 5 Satz 1 Nr. 5 EStG i. V. m. § 9 Abs. 4a EStG, R 4.12 EStR",
+};
+const FOOTER_BASIS: Record<TravellerType, string> = {
+  employee: "Rechtsgrundlagen: § 9 Abs. 4a EStG; BMF 25.11.2020 und 05.12.2025",
+  self_employed: "Rechtsgrundlagen: § 4 Abs. 5 Satz 1 Nr. 5, § 9 Abs. 4a EStG; BMF 25.11.2020 und 05.12.2025",
 };
 const TRAVELLER_LABEL: Record<TravellerType, string> = {
   employee: "Arbeitnehmer/in",
@@ -107,7 +116,9 @@ export async function renderTravelExpenseReport(
 
   // Key/value block
   const kv = (label: string, value: string) => {
-    const valueLines = lines(value, 10.5, contentWidth - 150);
+    // wrapText("") returns no lines: keep one (empty) line so the row height stays correct.
+    const wrapped = lines(value, 10.5, contentWidth - 150);
+    const valueLines = wrapped.length > 0 ? wrapped : [""];
     ensure(valueLines.length * 15 + 8);
     y -= 17;
     draw(label, MARGIN, 9.5, bold);
@@ -166,7 +177,7 @@ export async function renderTravelExpenseReport(
     }
   };
 
-  table(
+  if (data.days.length > 0) table(
     "Verpflegung",
     [
       { title: "Datum", width: 62 },
@@ -213,8 +224,8 @@ export async function renderTravelExpenseReport(
     );
   }
 
-  // Sum box
-  ensure(120);
+  // Sum box and confirmation stay together on one page
+  ensure(170);
   y -= 24;
   const boxHeight = 60;
   page.drawRectangle({ x: MARGIN, y: y - boxHeight + 14, width: contentWidth, height: boxHeight, color: PANEL });
@@ -230,7 +241,6 @@ export async function renderTravelExpenseReport(
   y -= 14;
 
   // Confirmation
-  ensure(60);
   y -= 8;
   draw("Bestätigung", MARGIN, 10, bold);
   y -= 15;
@@ -279,7 +289,7 @@ export async function renderTravelExpenseReport(
   pages.forEach((p, i) => {
     const label = `Seite ${i + 1} von ${pages.length}`;
     p.drawText(label, { x: rightX - font.widthOfTextAtSize(label, 8.5), y: MARGIN - 24, size: 8.5, font, color: GRAY });
-    p.drawText(toWinAnsi(`Reisekostenabrechnung ${data.travellerName}`), { x: MARGIN, y: MARGIN - 24, size: 8.5, font, color: GRAY });
+    p.drawText(FOOTER_BASIS[data.travellerType], { x: MARGIN, y: MARGIN - 24, size: 8, font, color: GRAY });
   });
 
   return doc.save();
