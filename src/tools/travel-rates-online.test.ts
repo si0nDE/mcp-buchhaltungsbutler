@@ -37,6 +37,16 @@ describe("fetchRateTable", () => {
     expect(errorLog).not.toHaveBeenCalled();
   });
 
+  it("accepts the heading split by markup and non-breaking spaces (as on the LStH 2025 page)", async () => {
+    const split = fixtureHtml(2027).replace(
+      "Übersicht über die ab 1. Januar 2027 geltenden Pauschbeträge für Verpflegungsmehraufwendungen",
+      '<span class="richtext-changed-text">Übersicht über die ab 1.\u00a0Januar 2027 geltenden Pauschbeträge für</span><br/>\n<span class="richtext-changed-text">Verpflegungsmehraufwendungen'
+    );
+    expect(split).toContain("<br/>");
+    const table = await run(mockFetch((url) => respond(split, { url })));
+    expect(table?.year).toBe(2027);
+  });
+
   it("falls back to the ksth host after an lsth failure", async () => {
     const fetchImpl = mockFetch((url) => (url.includes("lsth.") ? respond("nicht gefunden", { status: 404, url }) : respond(fixtureHtml(2027), { url })));
     const table = await run(fetchImpl);

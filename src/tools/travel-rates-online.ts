@@ -48,11 +48,13 @@ async function readLimited(res: Response): Promise<string> {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-const HEADING = /Übersicht über die ab 1\.\s*Januar\s+(\d{4})\s+geltenden Pauschbeträge für Verpflegungsmehraufwendungen und Übernachtungskosten im Ausland/g;
+// Matched on the text without tags: the LStH 2025 page splits the sentence with </span><br/><span>.
+const HEADING =
+  /Übersicht über die ab 1\.\s*Januar\s+(\d{4})\s+geltenden Pauschbeträge für\s+Verpflegungsmehraufwendungen und Übernachtungskosten im Ausland/g;
 
 // Throws with a short reason if the page is not the table of exactly this year.
 export function validateRatePage(year: number, html: string): ParsedRate[] {
-  const text = html.replace(/&nbsp;| /g, " ");
+  const text = html.replace(/<[^>]*>/g, " ").replace(/&nbsp;|\u00a0/g, " ").replace(/\s+/g, " ");
   const years = [...text.matchAll(HEADING)].map((m) => Number(m[1]));
   if (years.length === 0 || years.some((y) => y !== year)) throw new Error(`Überschrift nicht für ${year}`);
   const entries = parseRatesHtml(html);
