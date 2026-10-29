@@ -231,7 +231,10 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "original, negated item prices and item names prefixed \"Gutschrift\"; invoice number from the customer's " +
       "number settings, date = today, correspondence text references the original. Find the original's " +
       "id_by_customer with list_receipts (list_direction outbound). Not idempotent - calling twice creates two " +
-      "corrections. For a partial credit or other terms use create_invoice with type credit instead.",
+      "corrections. For a partial credit or other terms use create_invoice with type credit instead. The correction is an " +
+      "additional document with its own number that stays active. To cancel an outbound invoice without a counter-document " +
+      "(like \"Stornieren\" in the BHB UI) use set_receipt_deleted. When the user says \"stornieren\", ask which one they want " +
+      "(get_booking_guide rechnungen_erstellen).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: { receipt_id_by_customer: z.number().int() },

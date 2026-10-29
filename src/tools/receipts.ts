@@ -430,8 +430,10 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "Mark a receipt as deleted (deleted: true) or restore it (deleted: false). Nothing is deleted physically (GoBD): a deleted " +
       "receipt stays in the archive, is listed with list_receipts deleted: true and can be restored. The upload quota used " +
       "(500 receipts per month, 1000 for E-Commerce Premium) is NOT given back by deleting. A receipt with a fixed " +
-      "Debitor/Kreditor booking or a booked assigned payment cannot be deleted before that booking is undone " +
-      "(get_booking_guide festgeschriebene_loeschen).",
+"Debitor/Kreditor booking or a booked assigned payment cannot be deleted before that booking is undone " +
+      "(get_booking_guide festgeschriebene_loeschen). For an outbound invoice this is the direct \"Stornieren\" of the BHB UI (checked " +
+      "2026-10-29: the invoice then shows deleted: 1, no counter-document); its invoice number stays used. The alternative with a " +
+      "counter-document is create_invoice_correction; ask the user which one they want.",
     annotations: { readOnlyHint: false, destructiveHint: true },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: setDeletedShape,
