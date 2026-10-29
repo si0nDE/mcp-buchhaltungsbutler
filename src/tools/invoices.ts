@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { supplyDateWarnings, unbookableRateWarnings, withWarnings } from "./bhb-systematik.js";
+import { assertRecurringConfirmed, RECURRING_DESCRIPTION, recurringDryRun, recurringGuardShape } from "./recurring.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const invoiceItemShape = z.object({
@@ -93,6 +94,14 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       .describe("Only Amazon order id, PayPal transaction id and Stripe transaction id are supported; then the receipt matches that payment."),
     draft: z.boolean().default(false),
     items: z.array(invoiceItemShape).min(1),
+    ...recurringGuardShape,
+    dry_run: z
+      .boolean()
+      .optional()
+      .describe(
+        "Legt nichts an und ruft BHB nicht auf: zeigt die Termine (bei Wiederholung die nächsten 12), die Summe je Rechnung und " +
+          "Hinweise. Die Rechnungsnummern nennt die API vorab nicht."
+      ),
   };
 
   const createInvoice = defineTool({
@@ -103,14 +112,25 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "invoicenumber, due_days, or payment_reference (a draft has no date and number until it is finalised; the number is then the " +
       "next one of the account's numbering, which must contain at least one digit). A NEGATIVE total makes BuchhaltungsButler " +
       "label the document a Rechnungskorrektur: then say \"Rechnungskorrektur zur Rechnung Nr. ... vom ...\" in correspondence " +
-      "(create_invoice_correction does this for you for a full correction). recurring_interval creates the first invoice at once " +
-      "and the next ones from recurring_date_next; stopping a plan is only possible in the UI. Rates 5.5% and 10.7% cannot be " +
+      "(create_invoice_correction does this for you for a full correction). " + RECURRING_DESCRIPTION + " Rates 5.5% and 10.7% cannot be " +
       "booked afterwards. For a structured e-invoice (XRechnung/ZUGFeRD), use create_einvoice instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createInvoiceShape,
     async handler(args) {
-      const { draft, items, invoicenumber, due_days, payment_reference, ...fields } = args;
+      const {
+        draft,
+        items,
+        invoicenumber,
+        due_days,
+        payment_reference,
+        dry_run,
+        confirm_creates_first_invoice,
+        allow_open_ended,
+        ...fields
+      } = args;
+      if (dry_run) return ok(recurringDryRun({ ...fields, items }));
+      assertRecurringConfirmed({ ...fields, confirm_creates_first_invoice, allow_open_ended });
       const flattened = flattenItems(items, [{ key: "item_vat", get: (i) => i.vat }]);
 
       if (draft) {
@@ -143,6 +163,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     payment_reference: z.string().optional(),
     e_invoice_id: z.string(),
     items: z.array(eInvoiceItemShape).min(1),
+    ...recurringGuardShape,
   };
 
   const createEInvoice = defineTool({
@@ -152,13 +173,14 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "Requires the full postal address and email in addition to the base invoice fields, and the company master data " +
       "(address, tax number or USt-ID) must be complete in the account. e_invoice_id is the buyer reference (\"0\" if there is none); " +
       "for public contracting authorities it must be the Leitweg-ID the recipient provides. A period of service must be given as its " +
-      "last day. For a normal " +
+      "last day. " + RECURRING_DESCRIPTION + " For a normal " +
       "PDF invoice, credit note, or offer, use create_invoice instead.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createEInvoiceShape,
     async handler(args) {
-      const { items, ...fields } = args;
+      const { items, confirm_creates_first_invoice, allow_open_ended, ...fields } = args;
+      assertRecurringConfirmed({ ...fields, confirm_creates_first_invoice, allow_open_ended });
       const payload = {
         ...fields,
         ...flattenItems(items, [
