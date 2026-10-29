@@ -255,6 +255,10 @@ export const SERVER_INSTRUCTIONS = [
   "- Anlagenverwaltung exists only in the BHB UI (no API): bookings on Anlagenkonten create no asset and no automatic " +
     "monthly depreciation, so never book Abschreibung manually for such assets. Capturing assets works in the browser " +
     "(get_booking_guide anlagen_browser has the full procedure).",
+  "- Recurring invoices (recurring_interval): the BHB API has NO end date, NO stop and NO list for plans. A plan runs until " +
+    "the user stops it in the BHB UI (Wiederkehrende Rechnungen); no tool can list, stop or end one, and a plan's id is not " +
+    "returned. Do not try to stop or look up plans via browser/computer use: tell the user and let them do it. create_invoice " +
+    "needs confirm_creates_first_invoice and allow_open_ended; dry_run previews without creating (get_booking_guide wiederkehrende_rechnungen).",
   "- Bilanzierer book the receipt (add_receipt_postings on a Debitor/Kreditor) and then the settlement; EÜR users book only " +
     "payments (add_transaction_postings). A receipt counts as booked when its payment is booked, except a payment booked " +
     "only against a Debitor/Kreditor. check_month_end runs the monthly-close checks the API allows; fixing/UStVA are UI only.",

@@ -69,6 +69,31 @@ describe("Wiederholungsrechnungen", () => {
     expect(payload).not.toHaveProperty("dry_run");
   });
 
+  it("echter Aufruf mit Wiederholung warnt vor offenem Plan, ohne Wiederholung nicht", async () => {
+    const { client } = await connect();
+    const withPlan = await client.callTool({
+      name: "create_invoice",
+      arguments: base("1.00", {
+        recurring_interval: "monthly",
+        recurring_date_next: "2027-01-01",
+        confirm_creates_first_invoice: true,
+        allow_open_ended: true,
+      }),
+    });
+    expect(text(withPlan)).toContain("Wiederkehrende Rechnungen");
+    expect(text(withPlan)).toContain("nicht selbst per Browser");
+    const single = await client.callTool({ name: "create_invoice", arguments: base("1.00", {}) });
+    expect(text(single)).not.toContain("Wiederholungsplan");
+  });
+
+  it("Server-Instruktionen und Guide nennen die Grenze", async () => {
+    const { SERVER_INSTRUCTIONS } = await import("./bhb-systematik.js");
+    const { BOOKING_GUIDE } = await import("./booking-guide.js");
+    expect(SERVER_INSTRUCTIONS).toMatch(/NO end date, NO stop and NO list/);
+    const entry = BOOKING_GUIDE.find((e) => e.id === "wiederkehrende_rechnungen");
+    expect(entry?.regeln.join(" ")).toMatch(/kein Enddatum/);
+  });
+
   it("Rechnung ohne Wiederholung braucht keine Bestätigung", async () => {
     const { client, call } = await connect();
     const res = await client.callTool({ name: "create_invoice", arguments: base("40.00", {}) });

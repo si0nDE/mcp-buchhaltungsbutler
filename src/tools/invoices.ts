@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { supplyDateWarnings, unbookableRateWarnings, withWarnings } from "./bhb-systematik.js";
-import { assertRecurringConfirmed, RECURRING_DESCRIPTION, recurringDryRun, recurringGuardShape } from "./recurring.js";
+import { assertRecurringConfirmed, RECURRING_CREATED_WARNING, RECURRING_DESCRIPTION, recurringDryRun, recurringGuardShape } from "./recurring.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const invoiceItemShape = z.object({
@@ -147,7 +147,13 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         ...flattened,
       };
       const result = await client.call("invoicesCreate", payload);
-      return ok(withWarnings(result, [...supplyDateWarnings(fields), ...unbookableRateWarnings(items)]));
+      return ok(
+        withWarnings(result, [
+          ...supplyDateWarnings(fields),
+          ...unbookableRateWarnings(items),
+          ...(fields.recurring_interval !== undefined ? [RECURRING_CREATED_WARNING] : []),
+        ])
+      );
     },
   });
 
@@ -189,7 +195,12 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         ]),
       };
       const result = await client.call("invoicesCreateEInvoice", payload);
-      return ok(withWarnings(result, supplyDateWarnings(fields)));
+      return ok(
+        withWarnings(result, [
+          ...supplyDateWarnings(fields),
+          ...(fields.recurring_interval !== undefined ? [RECURRING_CREATED_WARNING] : []),
+        ])
+      );
     },
   });
 

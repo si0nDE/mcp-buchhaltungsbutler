@@ -58,7 +58,9 @@ describe("booking guide data", () => {
     const toolLike = [...mentioned].filter((m) =>
       /^(add|create|list|manage|get|confirm|cancel|upload|assign|unassign|delete|update|set|generate|check|resize|read|form|triple)_/.test(m)
     );
-    for (const t of toolLike) expect(connector.has(t) || browser.has(t), `${t} is not a known tool`).toBe(true);
+    // Parameter, keine Tools (Namen beginnen wie ein Tool)
+    const parameters = new Set(["confirm_creates_first_invoice"]);
+    for (const t of toolLike.filter((m) => !parameters.has(m))) expect(connector.has(t) || browser.has(t), `${t} is not a known tool`).toBe(true);
     expect(toolLike).toContain("cancel_posting");
   });
 });

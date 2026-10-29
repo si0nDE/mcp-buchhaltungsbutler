@@ -28,6 +28,12 @@ export const RECURRING_DESCRIPTION =
   "die nächste zum recurring_date_next. Es gibt kein Enddatum und keinen Stopp per API; ein Plan läuft weiter, bis er in der BHB-Oberfläche " +
   "gestoppt wird. Deshalb verlangt der Konnektor confirm_creates_first_invoice: true und allow_open_ended: true; ohne beide bricht er ab.";
 
+// Steht in der Antwort eines echten Aufrufs, damit das Modell die Grenze genau dann liest, wenn es sonst nach dem Stopp fragt.
+export const RECURRING_CREATED_WARNING =
+  "Wiederholungsplan angelegt: die erste Rechnung ist endgültig, der Plan läuft offen weiter. BuchhaltungsButler hat kein Enddatum, " +
+  "und per API lässt sich der Plan weder auflisten noch stoppen (seine ID wird nicht geliefert). Den Nutzer bitten, ihn rechtzeitig in der " +
+  "BHB-Oberfläche unter \"Wiederkehrende Rechnungen\" zu stoppen; nicht selbst per Browser danach suchen. Eine Korrektur storniert nur die erzeugte Rechnung, nicht den Plan.";
+
 export function assertRecurringConfirmed(args: {
   recurring_interval?: string;
   recurring_date_next?: string;

@@ -886,6 +886,27 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
   },
   {
+    id: "wiederkehrende_rechnungen",
+    titel: "Wiederkehrende Rechnungen (Serienrechnungen): was die API kann und was nicht",
+    quelle: "Übergabe des Teams (Konnektor-Beobachtung am Livekonto, kein BHB-Artikel) und API-Spezifikation 1.9.1",
+    regeln: [
+      "Die API kennt nur recurring_interval (weekly, monthly, quarterly, yearly) und recurring_date_next. Es gibt kein Enddatum, keine Anzahl der Läufe, keinen Stopp, keine Pause und keine Liste der Pläne; die ID eines Plans liefert die API nicht.",
+      "Die erste Rechnung entsteht sofort und endgültig (Nummer aus dem Nummernkreis), die nächste zum recurring_date_next. Ein Entwurf (draft) unterstützt keine Wiederholung.",
+      "Ein Plan läuft offen weiter, bis ihn der Nutzer in der BHB-Oberfläche unter 'Wiederkehrende Rechnungen' stoppt. Kein Tool kann das; Plan nicht selbst per Browser suchen oder stoppen, sondern den Nutzer bitten.",
+      "Eine Korrektur (create_invoice_correction) storniert nur die bereits erzeugte Rechnung, nicht den Plan, und verbraucht eine weitere Nummer.",
+      "Kein Versand: email leer lassen, solange der Nutzer nichts anderes verlangt.",
+    ],
+    ablauf: [
+      "1. create_invoice mit dry_run: true: zeigt die Termine (erste Rechnung plus die nächsten 12) und die Summe, legt nichts an. Der Nutzer legt das Ende selbst fest, die Termine bis dahin entscheiden, wann er stoppen muss.",
+      "2. Plan dem Nutzer zeigen und ausdrücklich freigeben lassen, auch dass er ihn selbst stoppen muss.",
+      "3. Erst dann create_invoice mit confirm_creates_first_invoice: true und allow_open_ended: true.",
+      "4. Dem Nutzer Rechnungsnummer, Intervall, nächsten Termin und den Stopp-Termin nennen, damit er den Plan rechtzeitig in der Oberfläche beendet.",
+    ],
+    konnektor: [
+      "create_invoice und create_einvoice brechen mit recurring_interval ohne confirm_creates_first_invoice und allow_open_ended ab, ohne BHB aufzurufen. dry_run gibt es nur bei create_invoice; die Rechnungsnummern nennt die API vorab nicht.",
+    ],
+  },
+  {
     id: "kostenstellen",
     titel: "Kostenstellen und Projektverwaltung",
     quelle: "Projektverwaltung und Kostenstellen (11445076569885)",
@@ -954,7 +975,7 @@ export function createBookingGuideTools(): [ToolDef] {
       "Privateinlagen, Ist-Versteuerer mit Debitoren, Differenzbesteuerung, Amazon, 5,5 %/10,7 %, Gutschrift verrechnen, " +
       "Skonto, Dreiecksgeschäft, EU-Neufahrzeug, Geldtransit (Kasse/Bank/PayPal/Kreditkarte), Prepaid-Guthaben, Lohn, " +
       "Mehrwertsteuersenkung 2020, Storno/Rücklastschrift, Trinkgeld, Split/Saldierung, OSS, Umsatzsteuer in anderem Land, " +
-      "Fremdwährung, Investitionsabzugsbetrag, PayPal-Cashback (paypal_cashback). Die Steuerschlüssel (vat: 19_pre, 19_vat, 0_none, ...) sind kein Thema, sondern stehen am Parameter vat der add_*_postings-Tools. Außerdem Verfahren und Best Practices: erste_schritte (Bilanzierer vs. EÜR), wechsel_zu_bhb (Typen A-E, Anfangsbestände, Lexware-Export), monatsabschluss (siehe check_month_end), automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse. Weitere Verfahren und Regeln: festgeschriebene_loeschen, belege_upload_matching, eigenbeleg, debitoren_kreditoren_logik, ust_va_zm, auswertungen, konten_einrichtung, einstellungen_aendern, rechnungen_erstellen, kostenstellen, paket_und_limits, bilanz_integritaet, zahlungen_probleme. Anlagevermögen erfassen: anlagen_browser (Ablauf in der Weboberfläche, kein API-Weg). Belege prüfen und Belegdaten korrigieren: belegpruefung (nur Weboberfläche, kein API-Weg). Jeder Eintrag ist vor dem Buchen mit dem Steuerberater abzustimmen, wenn der " +
+      "Fremdwährung, Investitionsabzugsbetrag, PayPal-Cashback (paypal_cashback). Die Steuerschlüssel (vat: 19_pre, 19_vat, 0_none, ...) sind kein Thema, sondern stehen am Parameter vat der add_*_postings-Tools. Außerdem Verfahren und Best Practices: erste_schritte (Bilanzierer vs. EÜR), wechsel_zu_bhb (Typen A-E, Anfangsbestände, Lexware-Export), monatsabschluss (siehe check_month_end), automatisierungsregeln, bedienung_shortcuts, buchungsvormerkung_eur, ausgangsrechnung_kasse. Weitere Verfahren und Regeln: festgeschriebene_loeschen, belege_upload_matching, eigenbeleg, debitoren_kreditoren_logik, ust_va_zm, auswertungen, konten_einrichtung, einstellungen_aendern, rechnungen_erstellen, wiederkehrende_rechnungen, kostenstellen, paket_und_limits, bilanz_integritaet, zahlungen_probleme. Anlagevermögen erfassen: anlagen_browser (Ablauf in der Weboberfläche, kein API-Weg). Belege prüfen und Belegdaten korrigieren: belegpruefung (nur Weboberfläche, kein API-Weg). Jeder Eintrag ist vor dem Buchen mit dem Steuerberater abzustimmen, wenn der " +
       "Fall nicht eindeutig ist; Kontonummern ohne SKR04-Angabe per list_posting_accounts nachschlagen.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
