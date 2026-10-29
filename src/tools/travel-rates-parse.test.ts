@@ -69,3 +69,16 @@ describe("parseRatesHtml - hostile input stays linear", () => {
     expect(parseRatesHtml(html)).toEqual([{ country: "Ägypten", place: null, full: 50, partial: 33, night: 112 }]);
   });
 });
+
+describe("decode (über parseRatesHtml, HTML bleibt Daten)", () => {
+  const table = (country: string) =>
+    `<table><tr><td>Ägypten</td><td>50</td><td>33</td><td>112</td></tr><tr><td>${country}</td><td>40</td><td>27</td><td>150</td></tr></table>`;
+
+  it("entfernt verschachtelte Tags vollständig", () => {
+    expect(parseRatesHtml(table("Test<scr<b>ipt>land")).at(-1)?.country).toBe("Testland");
+  });
+
+  it("dekodiert &amp; nicht doppelt", () => {
+    expect(parseRatesHtml(table("Test &amp;#65; land")).at(-1)?.country).toBe("Test &#65; land");
+  });
+});

@@ -11,17 +11,24 @@ export interface ParsedRate {
 }
 
 function decode(cell: string): string {
-  return cell
-    .replace(/<br\s*\/?>/gi, " ")
-    // [^<>] keeps the scan linear on hostile input (with [^>] every "<" would rescan to the end).
-    .replace(/<[^<>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&rsquo;/g, "’")
-    .replace(/&ndash;/g, "–")
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
-    .replace(/\s+/g, " ")
-    .trim();
+  // Tags until nothing changes: a single pass leaves "<script>" behind in "<scr<b>ipt>".
+  // [^<>] keeps the scan linear on hostile input (with [^>] every "<" would rescan to the end).
+  let text = cell.replace(/<br\s*\/?>/gi, " ");
+  for (let prev = ""; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<[^<>]+>/g, "");
+  }
+  return (
+    text
+      .replace(/&nbsp;/g, " ")
+      .replace(/&rsquo;/g, "’")
+      .replace(/&ndash;/g, "–")
+      .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+      // Last, so that "&amp;#65;" stays the literal text "&#65;" instead of being decoded twice.
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 // Contents of <tag ...>...</tag> in order, with indexOf instead of lazy regexes: linear even when closing tags or the
