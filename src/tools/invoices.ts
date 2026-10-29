@@ -1,7 +1,14 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { supplyDateWarnings, unbookableRateWarnings, withWarnings } from "./bhb-systematik.js";
-import { assertRecurringConfirmed, RECURRING_CREATED_WARNING, RECURRING_DESCRIPTION, recurringDryRun, recurringGuardShape } from "./recurring.js";
+import {
+  assertRecurring,
+  RECURRING_DESCRIPTION,
+  recurringCreatedWarning,
+  recurringDryRun,
+  recurringEndShape,
+  recurringGuardShape,
+} from "./recurring.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 const invoiceItemShape = z.object({
@@ -95,11 +102,12 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     draft: z.boolean().default(false),
     items: z.array(invoiceItemShape).min(1),
     ...recurringGuardShape,
+    ...recurringEndShape,
     dry_run: z
       .boolean()
       .optional()
       .describe(
-        "Legt nichts an und ruft BHB nicht auf: zeigt die Termine (bei Wiederholung die nächsten 12), die Summe je Rechnung und " +
+        "Legt nichts an und ruft BHB nicht auf: zeigt die Termine (bei Wiederholung alle bis recurring_date_end, ohne Enddatum die nächsten 12), die Summe je Rechnung und " +
           "Hinweise. Die Rechnungsnummern nennt die API vorab nicht."
       ),
   };
@@ -129,8 +137,8 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         allow_open_ended,
         ...fields
       } = args;
-      if (dry_run) return ok(recurringDryRun({ ...fields, items }));
-      assertRecurringConfirmed({ ...fields, confirm_creates_first_invoice, allow_open_ended });
+      if (dry_run) return ok(recurringDryRun({ ...fields, items, draft }));
+      assertRecurring({ ...fields, draft, confirm_creates_first_invoice, allow_open_ended });
       const flattened = flattenItems(items, [{ key: "item_vat", get: (i) => i.vat }]);
 
       if (draft) {
@@ -146,12 +154,24 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         ...(payment_reference !== undefined ? { payment_reference } : {}),
         ...flattened,
       };
-      const result = await client.call("invoicesCreate", payload);
+      let result: unknown;
+      try {
+        result = await client.call("invoicesCreate", payload);
+      } catch (err) {
+        if (fields.recurring_interval === undefined) throw err;
+        // Am 29.10.2026 endete ein Aufruf mit HTTP 500 und hatte die Rechnung trotzdem angelegt (ohne Plan).
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `${msg} Bei einer Wiederholungsrechnung kann die erste Rechnung trotz Fehler entstanden sein, der Plan kann fehlen: ` +
+            "mit list_receipts (outbound, Gegenpartei, heutiges Datum) prüfen, den Aufruf nicht wiederholen, bevor das geklärt ist, " +
+            "und den Nutzer den Plan in der Oberfläche prüfen lassen."
+        );
+      }
       return ok(
         withWarnings(result, [
           ...supplyDateWarnings(fields),
           ...unbookableRateWarnings(items),
-          ...(fields.recurring_interval !== undefined ? [RECURRING_CREATED_WARNING] : []),
+          ...(fields.recurring_interval !== undefined ? [recurringCreatedWarning(fields.recurring_date_end)] : []),
         ])
       );
     },
@@ -186,7 +206,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     inputSchema: createEInvoiceShape,
     async handler(args) {
       const { items, confirm_creates_first_invoice, allow_open_ended, ...fields } = args;
-      assertRecurringConfirmed({ ...fields, confirm_creates_first_invoice, allow_open_ended });
+      assertRecurring({ ...fields, confirm_creates_first_invoice, allow_open_ended });
       const payload = {
         ...fields,
         ...flattenItems(items, [
@@ -198,7 +218,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       return ok(
         withWarnings(result, [
           ...supplyDateWarnings(fields),
-          ...(fields.recurring_interval !== undefined ? [RECURRING_CREATED_WARNING] : []),
+          ...(fields.recurring_interval !== undefined ? [recurringCreatedWarning()] : []),
         ])
       );
     },

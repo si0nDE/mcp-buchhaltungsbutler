@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-// BuchhaltungsButler kennt für Wiederholungsrechnungen weder Enddatum noch Stopp noch Liste
-// (spec/buchhaltungsbutler-v1.json, API 1.9.1). Ein Plan läuft also offen weiter und lässt sich
-// nur in der Oberfläche stoppen. Die Felder hier schützen davor, das versehentlich auszulösen.
+// BuchhaltungsButler kennt für Wiederholungsrechnungen weder Stopp noch Liste (spec/buchhaltungsbutler-v1.json, API 1.9.1).
+// Ein Enddatum steht nicht in der Spec, die Oberfläche hat es aber ("Letzte Rechnung"), und die API nimmt es als
+// `recurring_date_end` an: belegt am 29.10.2026 mit einem Testplan im Konto Fieber IT (der Plan zeigte "Letzte Rechnung").
+// Ein ungültiges Datum ergab dort HTTP 500 NACH dem Anlegen der Rechnung (ohne Plan); deshalb wird alles vorab geprüft.
 export const recurringGuardShape = {
   confirm_creates_first_invoice: z
     .boolean()
@@ -14,8 +15,18 @@ export const recurringGuardShape = {
     .boolean()
     .optional()
     .describe(
-      "Pflicht bei recurring_interval. BuchhaltungsButler kennt kein Enddatum: der Plan läuft, bis er in der Oberfläche " +
-        "unter \"Wiederkehrende Rechnungen\" gestoppt wird; per Konnektor ist das nicht möglich."
+      "Nur nötig bei recurring_interval ohne recurring_date_end: der Plan läuft dann, bis er in der Oberfläche unter " +
+        "\"Wiederkehrende Rechnungen\" gestoppt wird; per Konnektor ist das nicht möglich."
+    ),
+};
+
+export const recurringEndShape = {
+  recurring_date_end: z
+    .string()
+    .optional()
+    .describe(
+      "YYYY-MM-DD, \"Letzte Rechnung\" des Plans. Nicht in der API-Spezifikation, aber mit dem Konto belegt (29.10.2026). " +
+        "Ohne dieses Feld bricht der Konnektor ab, außer allow_open_ended: true."
     ),
 };
 
@@ -25,31 +36,53 @@ type Interval = (typeof INTERVAL_VALUES)[number];
 // Beschreibung für die Tool-Doku, an beiden Create-Tools gleich.
 export const RECURRING_DESCRIPTION =
   "recurring_interval (weekly, monthly, quarterly, yearly) legt einen Wiederholungsplan an: die erste Rechnung entsteht sofort und endgültig, " +
-  "die nächste zum recurring_date_next. Es gibt kein Enddatum und keinen Stopp per API; ein Plan läuft weiter, bis er in der BHB-Oberfläche " +
-  "gestoppt wird. Deshalb verlangt der Konnektor confirm_creates_first_invoice: true und allow_open_ended: true; ohne beide bricht er ab.";
+  "die nächste zum recurring_date_next. Per API gibt es keinen Stopp und keine Liste der Pläne. create_invoice kennt recurring_date_end " +
+  "(\"Letzte Rechnung\", nicht in der Spec, aber belegt); ohne Enddatum läuft der Plan weiter, bis der Nutzer ihn in der BHB-Oberfläche stoppt. " +
+  "Der Konnektor verlangt confirm_creates_first_invoice: true und ein Enddatum oder allow_open_ended: true; sonst bricht er ab.";
 
 // Steht in der Antwort eines echten Aufrufs, damit das Modell die Grenze genau dann liest, wenn es sonst nach dem Stopp fragt.
-export const RECURRING_CREATED_WARNING =
-  "Wiederholungsplan angelegt: die erste Rechnung ist endgültig, der Plan läuft offen weiter. BuchhaltungsButler hat kein Enddatum, " +
-  "und per API lässt sich der Plan weder auflisten noch stoppen (seine ID wird nicht geliefert). Den Nutzer bitten, ihn rechtzeitig in der " +
-  "BHB-Oberfläche unter \"Wiederkehrende Rechnungen\" zu stoppen; nicht selbst per Browser danach suchen. Eine Korrektur storniert nur die erzeugte Rechnung, nicht den Plan.";
+export function recurringCreatedWarning(endDate?: string): string {
+  const stop =
+    "Stoppen und Auflisten gibt es per API nicht (die ID des Plans wird nicht geliefert): den Nutzer bitten, in der BHB-Oberfläche unter " +
+    "\"Wiederkehrende Rechnungen\" zu prüfen oder zu stoppen; nicht selbst per Browser danach suchen. Eine Korrektur storniert nur die erzeugte Rechnung, nicht den Plan.";
+  return endDate === undefined
+    ? `Wiederholungsplan angelegt: die erste Rechnung ist endgültig, der Plan läuft ohne Enddatum weiter. ${stop}`
+    : `Wiederholungsplan angelegt, Letzte Rechnung ${endDate} (recurring_date_end). Ob BHB den Plan so übernommen hat, lässt sich per API nicht prüfen: den Nutzer bitten, "Nächste Rechnung" und "Letzte Rechnung" in der Oberfläche zu kontrollieren. ${stop}`;
+}
 
-export function assertRecurringConfirmed(args: {
+export function assertRecurring(args: {
   recurring_interval?: string;
   recurring_date_next?: string;
+  recurring_date_end?: string;
   confirm_creates_first_invoice?: boolean;
   allow_open_ended?: boolean;
+  draft?: boolean;
 }): void {
-  if (args.recurring_interval === undefined) return;
+  if (args.recurring_interval === undefined) {
+    if (args.recurring_date_end !== undefined) throw new Error("recurring_date_end braucht recurring_interval.");
+    return;
+  }
+  if (!(INTERVAL_VALUES as readonly string[]).includes(args.recurring_interval)) {
+    throw new Error(`recurring_interval muss weekly, monthly, quarterly oder yearly sein, bekommen: "${args.recurring_interval}".`);
+  }
+  if (args.recurring_date_next === undefined) {
+    throw new Error("recurring_date_next ist Pflicht, sobald recurring_interval gesetzt ist.");
+  }
+  const next = parseDate(args.recurring_date_next, "recurring_date_next");
+  if (args.recurring_date_end !== undefined) {
+    if (args.draft) throw new Error("recurring_date_end ist für Entwürfe (draft) nicht geprüft; nur bei einer echten Rechnung verwenden.");
+    const end = parseDate(args.recurring_date_end, "recurring_date_end");
+    if (end < next) throw new Error(`recurring_date_end (${args.recurring_date_end}) liegt vor recurring_date_next (${args.recurring_date_next}).`);
+  }
   const missing: string[] = [];
   if (args.confirm_creates_first_invoice !== true) {
     missing.push(
       "confirm_creates_first_invoice: true (die erste Rechnung entsteht sofort und endgültig, mit Nummer aus dem Nummernkreis; eine Korrektur verbraucht eine weitere Nummer)"
     );
   }
-  if (args.allow_open_ended !== true) {
+  if (args.recurring_date_end === undefined && args.allow_open_ended !== true) {
     missing.push(
-      "allow_open_ended: true (BuchhaltungsButler kennt kein Enddatum: der Plan läuft weiter, bis er in der BHB-Oberfläche unter \"Wiederkehrende Rechnungen\" gestoppt wird)"
+      "ein Enddatum (recurring_date_end, bei create_invoice) oder allow_open_ended: true (ohne Enddatum läuft der Plan weiter, bis er in der BHB-Oberfläche unter \"Wiederkehrende Rechnungen\" gestoppt wird)"
     );
   }
   if (missing.length > 0) {
@@ -98,9 +131,13 @@ interface PreviewArgs {
   items: Array<{ amount: string; vat: string; single_price: string }>;
   recurring_interval?: string;
   recurring_date_next?: string;
+  recurring_date_end?: string;
+  draft?: boolean;
 }
 
-// Vorschau ohne Aufruf an BHB. Weil es kein Enddatum gibt, werden nur die nächsten `runs` Termine gezeigt.
+const MAX_SHOWN = 120;
+
+// Vorschau ohne Aufruf an BHB. Mit Enddatum alle Termine bis dahin (höchstens MAX_SHOWN), sonst nur die nächsten `runs`.
 export function recurringDryRun(args: PreviewArgs, runs = 12): Record<string, unknown> {
   parseDate(args.date, "date");
   let net = 0;
@@ -126,20 +163,32 @@ export function recurringDryRun(args: PreviewArgs, runs = 12): Record<string, un
       "nicht ermittelbar: die API nennt die nächste Nummer nicht. Sie kommt aus dem Nummernkreis des Kontos und zählt fortlaufend weiter.",
   };
   if (args.recurring_interval === undefined) {
+    assertRecurring(args);
     return { ...result, invoices: [{ date: args.date, note: "einzelne Rechnung" }] };
   }
-  if (!(INTERVAL_VALUES as readonly string[]).includes(args.recurring_interval)) {
-    throw new Error(`recurring_interval muss weekly, monthly, quarterly oder yearly sein, bekommen: "${args.recurring_interval}".`);
-  }
-  if (args.recurring_date_next === undefined) {
-    throw new Error("recurring_date_next ist Pflicht, sobald recurring_interval gesetzt ist.");
-  }
+  // Nur die Eingaben prüfen; die Bestätigungen gehören zum echten Aufruf.
+  assertRecurring({ ...args, confirm_creates_first_invoice: true, allow_open_ended: true });
   const interval = args.recurring_interval as Interval;
-  const next = parseDate(args.recurring_date_next, "recurring_date_next");
-  const dates = Array.from({ length: runs }, (_, n) => iso(addInterval(next, interval, n)));
-  const warnings = [
-    "BuchhaltungsButler kennt kein Enddatum: nach den gezeigten Terminen läuft der Plan weiter, bis er in der Oberfläche gestoppt wird.",
-  ];
+  const next = parseDate(args.recurring_date_next!, "recurring_date_next");
+  const end = args.recurring_date_end === undefined ? undefined : parseDate(args.recurring_date_end, "recurring_date_end");
+  const dates: string[] = [];
+  const warnings: string[] = [];
+  if (end === undefined) {
+    for (let n = 0; n < runs; n++) dates.push(iso(addInterval(next, interval, n)));
+    warnings.push("Kein Enddatum: nach den gezeigten Terminen läuft der Plan weiter, bis er in der Oberfläche gestoppt wird.");
+  } else {
+    for (let n = 0; n < MAX_SHOWN; n++) {
+      const d = addInterval(next, interval, n);
+      if (d > end) break;
+      dates.push(iso(d));
+    }
+    if (dates.length === MAX_SHOWN && addInterval(next, interval, MAX_SHOWN) <= end) {
+      warnings.push(`Mehr als ${MAX_SHOWN} Termine bis zum Enddatum; gezeigt sind die ersten ${MAX_SHOWN}.`);
+    }
+    warnings.push(
+      "Annahme: eine Rechnung, die genau auf das Enddatum fällt, entsteht noch (Feld \"Letzte Rechnung\"); ob BHB den Endtag einschließt, ist nicht belegt."
+    );
+  }
   if (interval !== "weekly" && next.getUTCDate() > 28) {
     warnings.push(
       `Starttag ${next.getUTCDate()}: in kürzeren Monaten rechnet die Vorschau auf den letzten Tag des Monats; ob BHB das ebenso tut, ist nicht belegt.`
@@ -151,7 +200,7 @@ export function recurringDryRun(args: PreviewArgs, runs = 12): Record<string, un
       { date: args.date, note: "entsteht sofort und endgültig beim echten Aufruf" },
       ...dates.map((d) => ({ date: d, note: "Wiederholung" })),
     ],
-    shown_repeats: runs,
+    shown_repeats: dates.length,
     warnings,
   };
 }
