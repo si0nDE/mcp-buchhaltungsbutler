@@ -117,6 +117,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
       rechtsform: z.string().optional().describe("Unternehmensform wie in BHB unter Unternehmensdaten, z. B. Einzelunternehmen, GbR, GmbH, UG. Ohne Angabe keine Steuerschätzung."),
       hebesatz_pct: z.number().min(200).max(900).optional().describe("Gewerbesteuer-Hebesatz der Gemeinde in Prozent (gesetzlicher Mindestsatz 200). Ohne Angabe keine Steuerschätzung."),
       ausschuettung: z.number().min(0).optional().describe("Nur Kapitalgesellschaft: geplante Ausschüttung im Jahr, für die Kapitalertragsteuer."),
+      kirchensteuer_pct: z.number().min(0).max(9).optional().describe("Nur Einzelunternehmen: Kirchensteuersatz in Prozent der Einkommensteuer (Bayern und Baden-Württemberg 8, sonst 9). Ohne Angabe keine Kirchensteuer."),
       save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
     },
     async handler(args) {
@@ -133,7 +134,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
       }
       const lines = taxLines(report);
       const rechtsform = args.rechtsform !== undefined ? normalizeRechtsform(args.rechtsform) : null;
-      const perioden = buildPeriods(monthly, { rechtsform, hebesatzPct: args.hebesatz_pct ?? null, ausschuettung: args.ausschuettung ?? 0 });
+      const perioden = buildPeriods(monthly, { rechtsform, hebesatzPct: args.hebesatz_pct ?? null, ausschuettung: args.ausschuettung ?? 0, kirchensteuerPct: args.kirchensteuer_pct ?? 0 });
 
       const sumOf = (area: TaxArea) => r2(lines.filter((l) => l.bereich === area).reduce((t, l) => t + l.saldo, 0));
       // Soll-Salden vermindern die Zahllast, Haben-Salden erhöhen sie: Zahllast = -Summe der Salden.
@@ -175,6 +176,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
           rechtsform,
           hebesatz_pct: args.hebesatz_pct ?? null,
           ausschuettung: args.ausschuettung ?? 0,
+          kirchensteuer_pct: args.kirchensteuer_pct ?? null,
           gewinn: "Haben minus Soll der Konten der Klassen Einnahmen, Betriebsausgabe und Abschreibungen je Monat (Privatkonten zählen nicht)",
           schaetzung: "Veränderung der kumulierten Schätzung seit Jahresbeginn je Zeitraum: Quartal = Stand Quartalsende minus Stand Vorquartalsende",
         },
@@ -182,7 +184,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
         hinweise: [
           "Umsatzsteuer-Zahllast = Summe der Haben-Salden der Konten Umsatzsteuer abzüglich der Soll-Salden von Vorsteuer, Vorauszahlungen/Erstattungen und 'Umsatzsteuer frühere Jahre'. Positiv: noch zu zahlen, negativ: Guthaben. Maßgeblich ist die Umsatzsteuer-Voranmeldung; die Zahl hier ist der gebuchte Stand und hängt davon ab, dass Zahlungen ans Finanzamt gebucht sind.",
           "Ist-/Soll-Versteuerung wird erst bei der Auswertung berechnet, nicht gebucht: der Stand gilt für die Besteuerungsart, die zum Stichtag eingestellt ist.",
-          "Die weiteren Steuerkonten stehen so da, wie sie gebucht sind (Salden, Soll positiv). Daneben steht, wenn rechtsform und hebesatz_pct angegeben sind, in perioden eine überschlägige Schätzung (~): Gewinn laut Buchungen, ohne Hinzurechnungen und Kürzungen zur Gewerbesteuer, ohne Verlustvortrag, Vorauszahlungen und persönliche Verhältnisse. Einzelunternehmen: Gewerbesteuer (Freibetrag 24.500 €, Messzahl 3,5 %) und Einkommensteuer auf den Gewinn allein nach § 32a EStG 2026 abzüglich Anrechnung der Gewerbesteuer; Soli auf die Einkommensteuer und Kirchensteuer werden nicht berechnet. Kapitalgesellschaft: Gewerbesteuer ohne Freibetrag, Körperschaftsteuer 15 %, Soli 5,5 % darauf, Kapitalertragsteuer 25 % plus Soli auf eine angegebene Ausschüttung. Die Schätzung ersetzt keine Steuererklärung.",
+          "Die weiteren Steuerkonten stehen so da, wie sie gebucht sind (Salden, Soll positiv). Daneben steht, wenn rechtsform und hebesatz_pct angegeben sind, in perioden eine überschlägige Schätzung (~): Gewinn laut Buchungen, ohne Hinzurechnungen und Kürzungen zur Gewerbesteuer, ohne Verlustvortrag, Vorauszahlungen und persönliche Verhältnisse. Einzelunternehmen: Gewerbesteuer (Freibetrag 24.500 €, Messzahl 3,5 %) und Einkommensteuer auf den Gewinn allein nach § 32a EStG 2026 abzüglich Anrechnung der Gewerbesteuer; Soli darauf ab der Freigrenze von 20.350 € Einkommensteuer (Milderungszone 11,9 %), Kirchensteuer nur mit angegebenem Satz. Kapitalgesellschaft: Gewerbesteuer ohne Freibetrag, Körperschaftsteuer 15 %, Soli 5,5 % darauf, Kapitalertragsteuer 25 % plus Soli auf eine angegebene Ausschüttung. Die Schätzung ersetzt keine Steuererklärung.",
           "Ein Verlustmonat senkt die kumulierte Schätzung, deshalb kann der Wert eines Monats oder Quartals negativ sein: er ist die Veränderung der Schätzung, keine Erstattung.",
           "Offene Belege von Finanzamt und anderen Steuerbehörden: nach dem Namen der Gegenpartei erkannt (Finanzamt, Finanzkasse, Hauptzollamt, Gemeinde-/Stadtkasse). Negative Beträge sind Erstattungen.",
         ],

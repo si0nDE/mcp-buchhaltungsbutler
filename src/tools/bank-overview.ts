@@ -39,15 +39,36 @@ async function allTransactions(client: BBClient, account: number, dateTo: string
   return { rows, truncated: true };
 }
 
-// Durchlaufende Posten und Geldtransit müssen sich ausgleichen: eine Buchung im Soll hat eine Gegenbuchung gleichen Betrags im Haben
-// (zurückgebuchte Lastschrift, Umbuchung zwischen Konten). Gepaart wird nach Betrag, Soll gegen Haben, die älteste zuerst. Was
-// übrig bleibt, ist nicht ausgeglichen. Beträge im Soll positiv, im Haben negativ.
-export function pairOff(rows: Buchung[]): { paare: number; offen: Buchung[] } {
+// Durchlaufende Posten und Geldtransit müssen sich ausgleichen. Zwei Stufen, beide ohne Betragsgrenze:
+//  1. Paare: eine Buchung im Soll hat eine Gegenbuchung gleichen Betrags im Haben (zurückgebuchte Lastschrift, Umbuchung). Gepaart
+//     wird nach Betrag, die älteste zuerst.
+//  2. Gruppen: was danach am selben Tag übrig ist und zusammen null ergibt (ein Einkauf, der auf mehrere Buchungen verteilt und
+//     wieder ausgeglichen wurde), gleicht sich ebenfalls aus. Je Tag wird die größte Teilmenge mit Summe null gesucht, bis keine
+//     mehr da ist (bis 16 Buchungen je Tag, darüber bleibt der Tag unverändert).
+// Was übrig bleibt, hat keine Gegenbuchung. Beträge im Soll positiv, im Haben negativ.
+const cents = (b: Buchung) => Math.round(b.betrag * 100);
+
+function zeroSumSubset(rows: Buchung[]): Buchung[] | null {
+  const n = rows.length;
+  if (n < 2 || n > 16) return null;
+  const c = rows.map(cents);
+  let best = 0;
+  let bestMask = 0;
+  for (let mask = 1; mask < 1 << n; mask++) {
+    let sum = 0;
+    let size = 0;
+    for (let i = 0; i < n; i++) if (mask & (1 << i)) { sum += c[i]; size++; }
+    if (sum === 0 && size > best) { best = size; bestMask = mask; }
+  }
+  return best === 0 ? null : rows.filter((_, i) => bestMask & (1 << i));
+}
+
+export function pairOff(rows: Buchung[]): { paare: number; gruppen: number; offen: Buchung[] } {
   const sorted = [...rows].filter((r) => r.betrag !== 0).sort((a, b) => a.datum.localeCompare(b.datum) || a.id - b.id);
   const open = new Map<number, Buchung[]>();
   let paare = 0;
   for (const r of sorted) {
-    const key = Math.round(Math.abs(r.betrag) * 100);
+    const key = Math.abs(cents(r));
     const list = open.get(key) ?? [];
     const i = list.findIndex((x) => Math.sign(x.betrag) !== Math.sign(r.betrag));
     if (i >= 0) {
@@ -56,8 +77,20 @@ export function pairOff(rows: Buchung[]): { paare: number; offen: Buchung[] } {
     } else list.push(r);
     open.set(key, list);
   }
-  const offen = [...open.values()].flat().sort((a, b) => a.datum.localeCompare(b.datum) || a.id - b.id);
-  return { paare, offen };
+  const byDay = new Map<string, Buchung[]>();
+  for (const r of [...open.values()].flat()) byDay.set(r.datum, [...(byDay.get(r.datum) ?? []), r]);
+  let gruppen = 0;
+  const offen: Buchung[] = [];
+  for (const day of byDay.values()) {
+    let rest = day;
+    for (let sub = zeroSumSubset(rest); sub !== null; sub = zeroSumSubset(rest)) {
+      gruppen++;
+      rest = rest.filter((x) => !sub.includes(x));
+    }
+    offen.push(...rest);
+  }
+  offen.sort((a, b) => a.datum.localeCompare(b.datum) || a.id - b.id);
+  return { paare, gruppen, offen };
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -142,13 +175,13 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
         .sort((a, b) => b.datum.localeCompare(a.datum) || a.konto - b.konto);
 
       // Durchlaufende Posten und Geldtransit: alle Interimskonten mit Bewegung oder Saldo, mit dem, was sich nicht ausgleicht
-      const durchlaufend: Array<{ konto: number; name: string; art: string; saldo: number; ausgeglichen: boolean; buchungen_anzahl: number; paare: number; offen: Buchung[] }> = [];
+      const durchlaufend: Array<{ konto: number; name: string; art: string; saldo: number; ausgeglichen: boolean; buchungen_anzahl: number; paare: number; gruppen: number; offen: Buchung[] }> = [];
       for (const [nr, e] of Object.entries(entries)) {
         if (e.postingaccount?.class !== "Interimskonto") continue;
         const buchungen = await fetchLedger(client, Number(nr), "debit", { from, to: asOf });
         const saldo = r2(signed(e));
         if (buchungen.length === 0 && saldo === 0) continue;
-        const { paare, offen } = pairOff(buchungen);
+        const { paare, gruppen, offen } = pairOff(buchungen);
         durchlaufend.push({
           konto: Number(nr),
           name: e.postingaccount?.name ?? "",
@@ -157,6 +190,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
           ausgeglichen: saldo === 0,
           buchungen_anzahl: buchungen.length,
           paare,
+          gruppen,
           offen,
         });
       }
@@ -181,7 +215,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
           "Buchsaldo = Saldo in der Summen- und Saldenliste (nur gebuchte Zahlungen). Zahlungssaldo = Summe aller Zahlungen bis zum Stichtag, auch ungebuchter; ohne eingetragenen Anfangsbestand stimmt nur die Veränderung. Die Differenz sind Zahlungen, die noch nicht gebucht sind.",
           "Darlehens- und Verrechnungskonten stehen als Konten der Klasse Finanzkonto mit in der Liste (art: sonstiges); ihr Saldo zählt in BHB zum Cash-Bestand.",
           "Bei angebundenen Bank- und Kreditkartenkonten zeigt die BHB-Oberfläche den von der Bank gemeldeten Stand, nicht den hier berechneten.",
-          "Durchlaufende Posten und Geldtransit (Interimskonten): der Saldo muss 0 sein. paare sind Buchungen mit gleich hoher Gegenbuchung (zurückgebuchte Lastschrift, Umbuchung), offen sind Buchungen ohne Gegenbuchung im Zeitraum. Der Saldo gilt zum Stichtag, die Buchungen für den Zeitraum ab date_from. Beträge zur Sollseite (Haben negativ). Ein Posten mit Kennzeichen 'kein Beleg' ist gewollt gebucht und kein offener Fall.",
+          "Durchlaufende Posten und Geldtransit (Interimskonten): der Saldo muss 0 sein. paare sind Buchungen mit gleich hoher Gegenbuchung (zurückgebuchte Lastschrift, Umbuchung), gruppen sind Buchungen eines Tages, die zusammen null ergeben (ein auf mehrere Buchungen verteilter Einkauf), offen sind Buchungen ohne Ausgleich im Zeitraum. Der Saldo gilt zum Stichtag, die Buchungen für den Zeitraum ab date_from. Beträge zur Sollseite (Haben negativ). Ein Posten mit Kennzeichen 'kein Beleg' ist gewollt gebucht und kein offener Fall.",
         ],
         warnings,
       });

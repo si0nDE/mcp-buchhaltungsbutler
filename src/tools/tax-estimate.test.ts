@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPeriods, estimateTaxes, gewerbesteuer, incomeTax2026, normalizeRechtsform } from "./tax-estimate.js";
+import { buildPeriods, estimateTaxes, gewerbesteuer, incomeTax2026, normalizeRechtsform, soliOnIncomeTax } from "./tax-estimate.js";
 
 describe("normalizeRechtsform", () => {
   it("ordnet die Unternehmensformen aus BHB den drei Gruppen zu", () => {
@@ -48,10 +48,26 @@ describe("gewerbesteuer", () => {
   });
 });
 
+describe("soliOnIncomeTax (SolZG § 3 Abs. 3, § 4)", () => {
+  it("bis zur Freigrenze 20.350 € nichts, danach höchstens 11,9 % des Betrags darüber, ab dort 5,5 %", () => {
+    expect(soliOnIncomeTax(20350)).toBe(0);
+    expect(soliOnIncomeTax(20351)).toBe(0.12);
+    expect(soliOnIncomeTax(30000)).toBe(1148.35); // 11,9 % von 9.650 liegt unter 5,5 % von 30.000
+    expect(soliOnIncomeTax(50000)).toBe(2750); // 5,5 % von 50.000 liegt unter 11,9 % von 29.650
+  });
+});
+
 describe("estimateTaxes", () => {
-  it("Einzelunternehmen: Einkommensteuer nach Anrechnung der Gewerbesteuer, keine KSt, kein Soli, keine KapESt", () => {
+  it("Einzelunternehmen: Einkommensteuer nach Anrechnung der Gewerbesteuer, Soli 0 unter der Freigrenze, keine KSt, keine KapESt", () => {
     const e = estimateTaxes(50000, "einzelunternehmen", 380);
-    expect(e).toEqual({ gewerbesteuer: 3389.6, einkommensteuer: 7158.4, koerperschaftsteuer: null, soli: null, kapitalertragsteuer: null });
+    expect(e).toEqual({ gewerbesteuer: 3389.6, einkommensteuer: 7158.4, koerperschaftsteuer: null, soli: 0, kirchensteuer: null, kapitalertragsteuer: null });
+  });
+  it("Einzelunternehmen mit hohem Gewinn: Soli ab Freigrenze, Kirchensteuer nur mit angegebenem Satz", () => {
+    const ohne = estimateTaxes(120000, "einzelunternehmen", 380);
+    expect(ohne.soli).toBeGreaterThan(0);
+    expect(ohne.kirchensteuer).toBeNull();
+    const mit = estimateTaxes(120000, "einzelunternehmen", 380, 0, 8);
+    expect(mit.kirchensteuer).toBe(Math.round((mit.einkommensteuer as number) * 8) / 100);
   });
   it("Kapitalgesellschaft: KSt 15 %, Soli 5,5 % auf die KSt, KapESt 25 % plus Soli auf eine Ausschüttung", () => {
     const e = estimateTaxes(10000, "kapitalgesellschaft", 380, 10000);

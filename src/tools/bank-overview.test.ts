@@ -83,7 +83,7 @@ describe("get_bank_overview", () => {
     const res = parse(await tool.handler({ as_of: "2026-03-31" }));
     expect(res.durchlaufende_posten).toHaveLength(1);
     const d = res.durchlaufende_posten[0];
-    expect(d).toMatchObject({ konto: 1590, art: "durchlaufende_posten", saldo: 30, ausgeglichen: false, buchungen_anzahl: 3, paare: 1 });
+    expect(d).toMatchObject({ konto: 1590, art: "durchlaufende_posten", saldo: 30, ausgeglichen: false, buchungen_anzahl: 3, paare: 1, gruppen: 0 });
     expect(d.offen).toEqual([expect.objectContaining({ id: 23, betrag: 20, datum: "2026-03-20" })]);
     expect(res.durchlaufende_ausgeglichen).toBe(false);
     // Geldtransit 1360 hat weder Saldo noch Buchungen und taucht nicht auf, wurde aber abgefragt
@@ -119,9 +119,24 @@ describe("pairOff", () => {
     expect(r.offen.map((x) => x.id)).toEqual([4]);
   });
   it("nichts offen, wenn alles Gegenbuchungen hat; Nullbuchungen werden ignoriert", () => {
-    expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -10), b(3, "2026-01-04", 0)])).toEqual({ paare: 1, offen: [] });
+    expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -10), b(3, "2026-01-04", 0)])).toEqual({ paare: 1, gruppen: 0, offen: [] });
   });
-  it("verschiedene Beträge bleiben offen, auch wenn die Summe passt", () => {
+  it("verschiedene Beträge an verschiedenen Tagen bleiben offen, auch wenn die Summe passt", () => {
     expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -4), b(3, "2026-01-04", -6)]).offen).toHaveLength(3);
+  });
+  it("Buchungen eines Tages, die zusammen null ergeben, gleichen sich als Gruppe aus (ein verteilter Einkauf)", () => {
+    const r = pairOff([b(1, "2026-06-03", -4), b(2, "2026-06-03", 7), b(3, "2026-06-03", -3)]);
+    expect(r).toEqual({ paare: 0, gruppen: 1, offen: [] });
+  });
+  it("von einem Tag bleibt nur der Teil offen, der nicht null ergibt; Gleitkommarauschen stört nicht", () => {
+    // 0,1 + 0,2 - 0,3 ergibt in Gleitkomma nicht null, in Cent schon
+    const r = pairOff([b(1, "2026-06-03", 0.1), b(2, "2026-06-03", 0.2), b(3, "2026-06-03", -0.3), b(4, "2026-06-03", 71.3)]);
+    expect(r.gruppen).toBe(1);
+    expect(r.offen.map((x) => x.id)).toEqual([4]);
+  });
+  it("die Teilmenge muss am selben Tag liegen: gleiche Summe über zwei Tage zählt nicht", () => {
+    const r = pairOff([b(1, "2026-05-08", 71.3), b(2, "2026-05-09", -21.1)]);
+    expect(r.gruppen).toBe(0);
+    expect(r.offen).toHaveLength(2);
   });
 });
