@@ -261,6 +261,16 @@ describe("get_controlling", () => {
     expect(sonstige.konten).toHaveLength(2);
   });
 
+  it("Prozentpunkte-Differenz aus ungerundeten Werten (wie das Dashboard), nicht aus gerundeten Margen", async () => {
+    // 1/3 und 2/3: gerundet 33,33 und 66,67 (Differenz 33,34), ungerundet 33,33.
+    const { client } = fakeClient((from) => (from === "2026-04-01" ? bwa({ umsatz: 300, sonstige: 200 }) : bwa({ umsatz: 300, sonstige: 100 })), 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false }));
+    expect(res.kpis.zeitraum.ebit_marge_pct).toBe(33.33);
+    expect(res.kpis.vergleichszeitraum.ebit_marge_pct).toBe(66.67);
+    expect(res.kpis.differenz.ebit_marge_pp).toBe(-33.33);
+  });
+
   it("Kostenart ohne Vergleichswert hat keine Veränderung in Prozent", async () => {
     const { client } = fakeClient((from) => (from === "2026-04-01" ? bwa({ umsatz: 100, personal: 10 }) : bwa({ umsatz: 100 })), 0);
     const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
@@ -279,6 +289,28 @@ describe("get_controlling", () => {
     const { client } = fakeClient(byRange, 1_000_000);
     const [tool] = createControllingTools(client, { sleep, pollMs: 10, maxWaitMs: 30 });
     await expect(tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30" })).rejects.toThrow(/nicht fertig/);
+  });
+
+  it("wartet, wenn BHB schon eine andere BWA rechnet (z. B. die der Oberfläche), und legt dann an", async () => {
+    let busy = 2;
+    const inner = fakeClient(byRange, 0);
+    const call = vi.fn(async (op: string, params: Record<string, unknown>) => {
+      if (op === "reportsCreateBwa" && busy-- > 0) {
+        throw new BuchhaltungsButlerApiError("HTTP 400 — report generation already in progress", 400, "reportsCreateBwa", {});
+      }
+      return inner.client.call(op as never, params);
+    });
+    const [tool] = createControllingTools({ call } as unknown as BBClient, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false }));
+    expect(res.kpis.zeitraum.ebit).toBe(6000);
+  });
+
+  it("gibt auf, wenn die fremde BWA nicht endet", async () => {
+    const call = vi.fn(async () => {
+      throw new BuchhaltungsButlerApiError("HTTP 400 — report generation already in progress", 400, "reportsCreateBwa", {});
+    });
+    const [tool] = createControllingTools({ call } as unknown as BBClient, { sleep, pollMs: 10, maxWaitMs: 30 });
+    await expect(tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30" })).rejects.toThrow(/andere BWA/);
   });
 
   it("andere BHB-Fehler werden nicht als 'noch nicht fertig' verschluckt", async () => {

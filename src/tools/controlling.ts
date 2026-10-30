@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
-import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
+import { createReportRunner, type Range, type RunnerOptions } from "./report-runner.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 // Nachbau des Dashboards "Controlling (Beta)" > "Profitabilität" der BHB-Oberfläche. BHB liefert dafür keine API; alle
@@ -38,7 +38,8 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (num: number, den: number): number | null => (den === 0 ? null : r2((num / den) * 100));
 // Änderung in Prozent gegenüber dem Vergleichswert; ohne Vergleichswert gibt es keine sinnvolle Zahl.
 const change = (cur: number, prev: number): number | null => (prev === 0 ? null : r2(((cur - prev) / Math.abs(prev)) * 100));
-const diff = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : r2(a - b));
+const ppDiff = (n1: number, d1: number, n2: number, d2: number): number | null =>
+  d1 === 0 || d2 === 0 ? null : r2((n1 / d1 - n2 / d2) * 100);
 
 const groupSum = (bwa: Bwa, g: string) => bwa.groups?.[g]?.amountsSum ?? 0;
 const classSum = (bwa: Bwa, g: string, c: string) => bwa.groups?.[g]?.classes?.[c]?.amountsSum ?? 0;
@@ -141,10 +142,7 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 const monthStart = (y: number, m0: number) => iso(new Date(Date.UTC(y, m0, 1)));
 const monthEnd = (y: number, m0: number) => iso(new Date(Date.UTC(y, m0 + 1, 0)));
 
-export interface Range {
-  from: string;
-  to: string;
-}
+export type { Range };
 
 // Zeitraum direkt davor: bei ganzen Monaten gleich viele Monate davor, sonst gleich viele Tage.
 export function previousRange(r: Range): Range {
@@ -175,39 +173,11 @@ export function seriesMonths(to: string, count = 6): Range[] {
 const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 const monthLabel = (r: Range) => `${MONTHS[Number(r.from.slice(5, 7)) - 1]} ${r.from.slice(0, 4)}`;
 
-export interface ControllingOptions {
-  sleep?: (ms: number) => Promise<void>;
-  pollMs?: number;
-  maxWaitMs?: number;
-}
-
-const NOT_READY = /not been finished/i;
+export type ControllingOptions = RunnerOptions;
 
 export function createControllingTools(client: BBClient, opts: ControllingOptions = {}): [ToolDef] {
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const pollMs = opts.pollMs ?? 3000;
-  const maxWaitMs = opts.maxWaitMs ?? 120_000;
-
-  async function fetchBwa(range: Range): Promise<Bwa> {
-    const created = await client.call<{ id_by_customer?: string | number }>("reportsCreateBwa", {
-      date_from: range.from,
-      date_to: range.to,
-    });
-    const id = Number(created.id_by_customer);
-    if (!Number.isInteger(id)) throw new Error(`BHB hat für ${range.from} bis ${range.to} keine Report-ID geliefert.`);
-    for (let waited = 0; ; waited += pollMs) {
-      try {
-        const res = await client.call<{ report?: Bwa }>("reportsGetBwa", { report_id_by_customer: id });
-        if (!res.report) throw new Error(`BWA ${id} (${range.from} bis ${range.to}) kam ohne Inhalt zurück.`);
-        return res.report;
-      } catch (e) {
-        const pending = e instanceof BuchhaltungsButlerApiError && e.statusCode === 400 && NOT_READY.test(e.message);
-        if (!pending) throw e;
-        if (waited >= maxWaitMs) throw new Error(`BWA ${id} (${range.from} bis ${range.to}) war nach ${maxWaitMs / 1000} s nicht fertig.`);
-        await sleep(pollMs);
-      }
-    }
-  }
+  const runReport = createReportRunner(client, opts);
+  const fetchBwa = (range: Range) => runReport<Bwa>("bwa", range);
 
   const getControlling = defineTool({
     name: "get_controlling",
@@ -305,11 +275,12 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
           differenz: {
             ebit: r2(k.ebit - p.ebit),
             ebitda: r2(k.ebitda - p.ebitda),
-            ebit_marge_pp: diff(k.ebit_marge_pct, p.ebit_marge_pct),
-            ebitda_marge_pp: diff(k.ebitda_marge_pct, p.ebitda_marge_pct),
-            umsatzrentabilitaet_pp: diff(k.umsatzrentabilitaet_pct, p.umsatzrentabilitaet_pct),
-            cogs_marge_pp: diff(k.cogs_marge_pct, p.cogs_marge_pct),
-            personalaufwandsquote_pp: diff(k.personalaufwandsquote_pct, p.personalaufwandsquote_pct),
+            // Aus den ungerundeten Verhältnissen: die Differenz der gerundeten Prozentwerte weicht sonst um 0,01 vom Dashboard ab.
+            ebit_marge_pp: ppDiff(k.ebit, k.gesamtleistung, p.ebit, p.gesamtleistung),
+            ebitda_marge_pp: ppDiff(k.ebitda, k.gesamtleistung, p.ebitda, p.gesamtleistung),
+            umsatzrentabilitaet_pp: ppDiff(k.ebit, k.umsatzerloese, p.ebit, p.umsatzerloese),
+            cogs_marge_pp: ppDiff(k.cogs, k.gesamtleistung, p.cogs, p.gesamtleistung),
+            personalaufwandsquote_pp: ppDiff(k.personalkosten, k.gesamtleistung, p.personalkosten, p.gesamtleistung),
             umsatzerloese_pct: umsatzwachstum,
             kosten_pct: change(k.kosten, p.kosten),
             personalkosten_pct: change(k.personalkosten, p.personalkosten),
