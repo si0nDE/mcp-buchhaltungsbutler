@@ -31,7 +31,10 @@ function bwa(o: {
     groups: {
       Gesamtleistung: {
         amountsSum: leistung,
-        classes: { Umsatzerlöse: { amountsSum: o.umsatz }, "Sonstige betriebliche Erträge": { amountsSum: sonstErtrag } },
+        classes: {
+          Umsatzerlöse: { amountsSum: o.umsatz, postingaccounts: o.umsatz ? { "8400": { amountsSum: o.umsatz, name: "Erlöse" } } : [] },
+          "Sonstige betriebliche Erträge": { amountsSum: sonstErtrag },
+        },
       },
       "Waren/Material/Leistungen": { amountsSum: waren, classes: { Wareneinkauf: { amountsSum: waren } } },
       Gesamtkosten: {
@@ -171,6 +174,18 @@ function fakeClient(byRange: (from: string, to: string) => ReturnType<typeof bwa
       order.push(`get ${from}`);
       return { success: true, report: byRange(from, to) };
     }
+    if (op === "reportsGetSumsLedger") {
+      // Zwei Zeilen je Konto: 100 auf der normalen Seite eines Aufwandskontos (Soll), 40 auf der anderen (Storno, Gegenkonto Interim).
+      const nr = Number(params.postingaccount_number);
+      return {
+        report_sums_postingaccount_ledger: {
+          postingaccountLedger: [
+            { id_by_customer: nr * 10 + 1, date: "2026-05-02 00:00:00", record_side: "debit", record_amount: "100.00", counterRecordPostingaccountNumber: 1200, postingTextFull: "Buchung A", receipts_id_by_customer: 5 },
+            { id_by_customer: nr * 10 + 2, date: "2026-05-03 00:00:00", record_side: "credit", record_amount: "40.00", counterRecordPostingaccountNumber: 1590, postingTextFull: "Buchung B", receipts_id_by_customer: null },
+          ],
+        },
+      };
+    }
     throw new Error(`unexpected ${op}`);
   });
   return { client: { call } as unknown as BBClient, call, order };
@@ -247,7 +262,7 @@ describe("get_controlling", () => {
   it("drilldown: Konten je Kostenart mit Anteil, Vergleich und Veränderung; Konto nur im Vergleich bleibt sichtbar", async () => {
     const { client } = fakeClient(byRange, 0);
     const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
-    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false }));
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, split_threshold_pct: 0 }));
     const sonstige = res.kostenarten.find((c: { name: string }) => c.name === "Sonstige Kosten");
     // Q2 3300 gegen Q1 3000: Beratung 2475 (Anteil 75 %) gegen 2250.
     expect(sonstige.konten[0]).toEqual({
@@ -259,6 +274,54 @@ describe("get_controlling", () => {
       veraenderung_pct: 10,
     });
     expect(sonstige.konten).toHaveLength(2);
+  });
+
+  it("ein Konto mit großem Anteil wird eigene Kostenart, 'Sonstige Kosten' steht am Ende", async () => {
+    const { client } = fakeClient(byRange, 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, split_threshold_pct: 30 }));
+    const names = res.kostenarten.map((c: { name: string }) => c.name);
+    // Beratung (2475 von 4050 Kosten = 61 %) wird herausgelöst, Software (825 = 20 %) bleibt im Sammelposten
+    expect(names).toContain("Beratung");
+    expect(names[names.length - 1]).toBe("Sonstige Kosten");
+    const beratung = res.kostenarten.find((c: { name: string }) => c.name === "Beratung");
+    expect(beratung).toMatchObject({ amount: 2475, aufgeteilt_aus: "Sonstige Kosten", vergleich: 2250 });
+    expect(res.kostenarten.find((c: { name: string }) => c.name === "Sonstige Kosten").amount).toBe(825);
+    // Die Summe bleibt die der BWA
+    expect(res.kostenarten.reduce((t: number, c: { amount: number }) => t + c.amount, 0)).toBe(res.kpis.zeitraum.kosten);
+  });
+
+  it("split_threshold_pct 0 lässt die BWA-Klassen unverändert", async () => {
+    const { client } = fakeClient(byRange, 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, split_threshold_pct: 0 }));
+    expect(res.kostenarten.map((c: { name: string }) => c.name)).not.toContain("Beratung");
+    expect(res.kostenarten.find((c: { name: string }) => c.name === "Sonstige Kosten").amount).toBe(3300);
+  });
+
+  it("Buchungen je Konto aus dem Kontenblatt: normale Seite positiv, Storno negativ, Erträge im Haben", async () => {
+    const { client, call } = fakeClient(byRange, 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false }));
+    const of = (nr: number) => res.buchungen.filter((b: { konto: number }) => b.konto === nr);
+    // Aufwandskonto 4950: Soll 100 -> +100, Haben 40 -> -40
+    expect(of(4950).map((b: { betrag: number }) => b.betrag)).toEqual([100, -40]);
+    // Ertragskonto 8400 (Gesamtleistung): Soll 100 -> -100, Haben 40 -> +40
+    expect(of(8400).map((b: { betrag: number }) => b.betrag)).toEqual([-100, 40]);
+    expect(of(4950)[0]).toMatchObject({ datum: "2026-05-02", text: "Buchung A", gegenkonto: 1200, beleg: true });
+    expect(of(4950)[1]).toMatchObject({ gegenkonto: 1590, beleg: false });
+    // Je Konto des Zeitraums ein Aufruf, nur für den Zeitraum (nicht den Vergleich)
+    const ledgerCalls = call.mock.calls.filter(([op]) => op === "reportsGetSumsLedger");
+    expect(ledgerCalls.length).toBeGreaterThan(0);
+    for (const [, params] of ledgerCalls) expect(params).toMatchObject({ date_from: "2026-04-01", date_to: "2026-06-30" });
+  });
+
+  it("with_postings: false ruft keine Kontenblätter ab", async () => {
+    const { client, call } = fakeClient(byRange, 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, with_postings: false }));
+    expect(res.buchungen).toEqual([]);
+    expect(call.mock.calls.filter(([op]) => op === "reportsGetSumsLedger")).toHaveLength(0);
   });
 
   it("Prozentpunkte-Differenz aus ungerundeten Werten (wie das Dashboard), nicht aus gerundeten Margen", async () => {

@@ -3,6 +3,7 @@ import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { createReportRunner, type Range, type RunnerOptions } from "./report-runner.js";
 import { seriesMonths } from "./controlling.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+import { finishWithExport } from "./export-file.js";
 
 // Nachbau des Dashboards "Controlling (Beta) > Liquidität" der BHB-Oberfläche. Stand 30.10.2026 gegen ein Livekonto
 // (SKR03, EÜR, ohne Debitoren/Kreditoren) nachgerechnet; was auf den Cent stimmt und was nicht, steht in `hinweise`.
@@ -132,6 +133,61 @@ export function openReceiptKpis(rows: Row[], asOf: string, topN = 3): OpenKpis {
   };
 }
 
+export interface OpenReceipt {
+  id: number;
+  datum: string;
+  faellig: string | null;
+  nummer: string;
+  gegenpartei: string;
+  betrag: number;
+  // Tage seit der Fälligkeit (ohne Fälligkeit seit dem Belegdatum); negativ = noch nicht fällig.
+  tage_ueberfaellig: number | null;
+}
+
+export function openReceiptRows(rows: Row[], asOf: string): OpenReceipt[] {
+  const now = day(asOf);
+  return rows
+    .map((r) => {
+      const ref = day(String(r.due_date ?? r.date ?? ""));
+      return {
+        id: Number(r.id_by_customer),
+        datum: String(r.date ?? "").slice(0, 10),
+        faellig: r.due_date ? String(r.due_date).slice(0, 10) : null,
+        nummer: String(r.invoicenumber ?? ""),
+        gegenpartei: String(r.counterparty ?? ""),
+        betrag: r2(Number(r.amount)),
+        tage_ueberfaellig: Number.isFinite(ref) ? Math.floor((now - ref) / DAY) : null,
+      };
+    })
+    .filter((r) => Number.isFinite(r.betrag))
+    .sort((a, b) => a.gegenpartei.localeCompare(b.gegenpartei, "de") || a.datum.localeCompare(b.datum));
+}
+
+export interface OpenParty {
+  name: string;
+  offen: number;
+  anzahl: number;
+  ueberfaellig_90: number;
+  aelteste_faelligkeit: string | null;
+}
+
+// Offene Belege je Gegenpartei, größte offene Summe zuerst.
+export function openByParty(rows: OpenReceipt[]): OpenParty[] {
+  const by = new Map<string, OpenParty>();
+  for (const r of rows) {
+    const p = by.get(r.gegenpartei) ?? { name: r.gegenpartei, offen: 0, anzahl: 0, ueberfaellig_90: 0, aelteste_faelligkeit: null };
+    p.offen += r.betrag;
+    p.anzahl += 1;
+    if (r.tage_ueberfaellig !== null && r.tage_ueberfaellig >= 90) p.ueberfaellig_90 += r.betrag;
+    const ref = r.faellig ?? r.datum;
+    if (ref && (p.aelteste_faelligkeit === null || ref < p.aelteste_faelligkeit)) p.aelteste_faelligkeit = ref;
+    by.set(r.gegenpartei, p);
+  }
+  return [...by.values()]
+    .map((p) => ({ ...p, offen: r2(p.offen), ueberfaellig_90: r2(p.ueberfaellig_90) }))
+    .sort((a, b) => b.offen - a.offen || a.name.localeCompare(b.name, "de"));
+}
+
 // Durchschnittliche Tage vom Belegdatum bis zur Zahlungsbuchung, über Zahlungen der letzten zwölf Monate auf Belege der
 // letzten zwölf Monate; Sammelzahlungen auf mehrere Belege zählen nicht. NÄHERUNG: im Livekonto (30.10.2026) lag sie um einige
 // Tage über BHBs Werten, mit Sammelzahlungen noch weiter darüber. BHBs genaue Definition ist unbekannt.
@@ -178,7 +234,8 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       "Liquiditäts-Auswertung wie das Dashboard 'Controlling > Liquidität' von BuchhaltungsButler (Beta, kostenpflichtiges Add-on; " +
       "die API hat dafür keinen Endpunkt): Cash-Bestand, Working Capital und Cashflow (Ein-/Auszahlungen) über 12 Monate, " +
       "Burn Rate und Cash Runway, offene Forderungen und Verbindlichkeiten mit den drei größten Kunden/Lieferanten, Anteil " +
-      "zweifelhafter Forderungen (mindestens 90 Tage überfällig), Debitoren-/Kreditorenlaufzeit, Quick Ratio, Future Cash-Inflow. " +
+      "zweifelhafter Forderungen (mindestens 90 Tage überfällig), Debitoren-/Kreditorenlaufzeit, Quick Ratio, Future Cash-Inflow, " +
+      "dazu alle offenen Belege je Firma (parteien) und einzeln (belege) zum Anklicken. " +
       "Fragt der Nutzer nach Liquidität, Cash, Working Capital, Burn Rate oder offenen Posten, dieses Tool aufrufen und als " +
       "Artefakt darstellen (Skill dataviz laden). Es erzeugt je Monat eine Summen- und Saldenliste (bis 12, je einige Sekunden; " +
       "months senkt die Zahl) und ERSETZT damit die zuletzt in BHB erzeugte SuSa. Nur bestätigte Buchungen zählen. Cash-Bestand, " +
@@ -190,6 +247,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
     inputSchema: {
       as_of: z.string().optional().describe("YYYY-MM-DD, Stichtag. Standard: heute."),
       months: z.number().int().min(1).max(12).optional().describe("Monate der Zeitreihe, Standard 12. Weniger spart Summen- und Saldenlisten."),
+      save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
     },
     async handler(args) {
       const asOf = args.as_of ?? new Date().toISOString().slice(0, 10);
@@ -218,6 +276,8 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       ]);
       const forderungen = openReceiptKpis(outbound.rows, asOf);
       const verbindlichkeiten = openReceiptKpis(inbound.rows, asOf);
+      const outRows = openReceiptRows(outbound.rows, asOf);
+      const inRows = openReceiptRows(inbound.rows, asOf);
       const flow = cashflowByMonth(postings.rows, fin, excluded, keys);
       const ein = keys.map((k) => r2(flow.get(k)!.ein));
       const aus = keys.map((k) => r2(flow.get(k)!.aus));
@@ -234,7 +294,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
         if (r.truncated) warnings.push(`${label}: Abfrage nach 20 Seiten abgebrochen, Summen unvollständig.`);
       }
 
-      return ok({
+      return finishWithExport(args.save_as, {
         as_of: asOf,
         cash: {
           bestand: last.cash,
@@ -248,8 +308,8 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
             verbindlichkeiten_konten: last.verbindlichkeiten,
           },
         },
-        forderungen: { ...forderungen, debitorenlaufzeit_tage: dso.tage, debitorenlaufzeit_belege: dso.anzahl },
-        verbindlichkeiten: { ...verbindlichkeiten, kreditorenlaufzeit_tage: dpo.tage, kreditorenlaufzeit_belege: dpo.anzahl },
+        forderungen: { ...forderungen, debitorenlaufzeit_tage: dso.tage, debitorenlaufzeit_belege: dso.anzahl, parteien: openByParty(outRows), belege: outRows },
+        verbindlichkeiten: { ...verbindlichkeiten, kreditorenlaufzeit_tage: dpo.tage, kreditorenlaufzeit_belege: dpo.anzahl, parteien: openByParty(inRows), belege: inRows },
         kennzahlen: {
           quick_ratio: verbindlichkeiten.summe === 0 ? null : r2((last.cash + forderungen.summe) / verbindlichkeiten.summe),
           future_cash_inflow: r2(forderungen.summe - verbindlichkeiten.summe),

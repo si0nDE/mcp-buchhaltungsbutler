@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { createReportRunner, type Range, type RunnerOptions } from "./report-runner.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
+import { finishWithExport } from "./export-file.js";
 
 // Nachbau des Dashboards "Controlling (Beta)" > "Profitabilität" der BHB-Oberfläche. BHB liefert dafür keine API; alle
 // Zahlen des Dashboards lassen sich aber aus der BWA ableiten (Stand 30.10.2026 gegen ein Livekonto, SKR03, ohne Waren-
@@ -54,6 +55,8 @@ export interface CostLine {
   name: string;
   amount: number;
   konten: AccountLine[];
+  // Gesetzt, wenn die Zeile aus einem Sammelposten herausgelöst wurde (siehe promoteAccounts).
+  aufgeteilt_aus?: string;
 }
 
 export interface Kpis {
@@ -74,6 +77,7 @@ export interface Kpis {
   cogs_marge_pct: number | null;
   personalaufwandsquote_pct: number | null;
   kostenarten: CostLine[];
+  ertragsarten: CostLine[];
 }
 
 // Alle Beträge positiv: BHB führt Kosten in der BWA negativ.
@@ -94,21 +98,26 @@ export function kpisFromBwa(bwa: Bwa): Kpis {
   const kosten = -groupSum(bwa, GROUP.costs) + waren - groupSum(bwa, GROUP.neutralCost);
   const cogs = warenabgabe + waren;
 
-  const kostenarten: CostLine[] = [];
-  for (const g of [GROUP.goods, GROUP.costs, GROUP.neutralCost]) {
-    for (const [name, c] of Object.entries(bwa.groups?.[g]?.classes ?? {})) {
-      const amount = -(c.amountsSum ?? 0);
-      if (amount === 0) continue;
-      const pa = c.postingaccounts;
-      const konten = !pa || Array.isArray(pa)
-        ? []
-        : Object.entries(pa as Record<string, { amountsSum?: number; name?: string }>)
-            .map(([nr, a]) => ({ nummer: Number(nr), name: a.name ?? "", amount: r2(-(a.amountsSum ?? 0)) }))
-            .filter((a) => a.amount !== 0)
-            .sort((a, b) => b.amount - a.amount);
-      kostenarten.push({ name, amount: r2(amount), konten });
+  const lines = (groups: string[], sign: 1 | -1): CostLine[] => {
+    const out: CostLine[] = [];
+    for (const g of groups) {
+      for (const [name, c] of Object.entries(bwa.groups?.[g]?.classes ?? {})) {
+        const amount = sign * (c.amountsSum ?? 0);
+        if (amount === 0) continue;
+        const pa = c.postingaccounts;
+        const konten = !pa || Array.isArray(pa)
+          ? []
+          : Object.entries(pa as Record<string, { amountsSum?: number; name?: string }>)
+              .map(([nr, a]) => ({ nummer: Number(nr), name: a.name ?? "", amount: r2(sign * (a.amountsSum ?? 0)) }))
+              .filter((a) => a.amount !== 0)
+              .sort((a, b) => b.amount - a.amount);
+        out.push({ name, amount: r2(amount), konten });
+      }
     }
-  }
+    return out;
+  };
+  const kostenarten = lines([GROUP.goods, GROUP.costs, GROUP.neutralCost], -1);
+  const ertragsarten = lines([GROUP.output, GROUP.neutralIncome], 1);
   return {
     gesamtleistung: r2(gesamtleistung),
     umsatzerloese: r2(umsatz),
@@ -127,7 +136,68 @@ export function kpisFromBwa(bwa: Bwa): Kpis {
     cogs_marge_pct: pct(cogs, gesamtleistung),
     personalaufwandsquote_pct: pct(personal, gesamtleistung),
     kostenarten,
+    ertragsarten,
   };
+}
+
+// Sammelposten: "Sonstige Kosten" nimmt in der BWA alles auf, was keine eigene Klasse hat. Wenn ein einzelnes Konto darin
+// einen großen Teil der Kosten ausmacht, ist "Sonstige" irreführend: das Konto wird
+// dann eine eigene Kostenart, in beiden Zeiträumen gleich, und "Sonstige Kosten" steht am Ende der Liste.
+export const CATCH_ALL = "Sonstige Kosten";
+
+export function promotedAccounts(k: Kpis, thresholdPct: number): Set<number> {
+  const out = new Set<number>();
+  if (thresholdPct <= 0 || k.kosten === 0) return out;
+  const line = k.kostenarten.find((l) => l.name === CATCH_ALL);
+  for (const a of line?.konten ?? []) if ((a.amount / k.kosten) * 100 >= thresholdPct) out.add(a.nummer);
+  return out;
+}
+
+export function promoteAccounts(k: Kpis, numbers: Set<number>): Kpis {
+  if (numbers.size === 0) return k;
+  const kostenarten: CostLine[] = [];
+  for (const l of k.kostenarten) {
+    if (l.name !== CATCH_ALL) {
+      kostenarten.push(l);
+      continue;
+    }
+    const moved = l.konten.filter((a) => numbers.has(a.nummer));
+    const rest = l.konten.filter((a) => !numbers.has(a.nummer));
+    for (const a of moved) kostenarten.push({ name: a.name, amount: a.amount, konten: [a], aufgeteilt_aus: CATCH_ALL });
+    if (rest.length > 0) kostenarten.push({ name: l.name, amount: r2(rest.reduce((t, a) => t + a.amount, 0)), konten: rest });
+  }
+  return { ...k, kostenarten };
+}
+
+// Beide Zeiträume zu einer Liste zusammenführen (Betrag, Anteil, Vergleich, Veränderung, Konten); größte zuerst, der Sammelposten zuletzt.
+export function mergeArten(cur: CostLine[], prev: CostLine[], total: number) {
+  const curBy = new Map(cur.map((c) => [c.name, c]));
+  const prevBy = new Map(prev.map((c) => [c.name, c]));
+  const names = new Set([...curBy.keys(), ...prevBy.keys()]);
+  return [...names]
+    .map((name) => {
+      const amount = curBy.get(name)?.amount ?? 0;
+      const before = prevBy.get(name)?.amount ?? 0;
+      // Konten beider Zeiträume, damit auch ein Konto sichtbar ist, das nur im Vergleich Umsatz hatte.
+      const nrs = new Set([...(curBy.get(name)?.konten ?? []), ...(prevBy.get(name)?.konten ?? [])].map((a) => a.nummer));
+      const konten = [...nrs]
+        .map((nummer) => {
+          const c = curBy.get(name)?.konten.find((a) => a.nummer === nummer);
+          const v = prevBy.get(name)?.konten.find((a) => a.nummer === nummer);
+          return {
+            nummer,
+            name: c?.name ?? v?.name ?? "",
+            amount: c?.amount ?? 0,
+            anteil_an_kostenart_pct: pct(c?.amount ?? 0, amount),
+            vergleich: v?.amount ?? 0,
+            veraenderung_pct: change(c?.amount ?? 0, v?.amount ?? 0),
+          };
+        })
+        .sort((a, b) => b.amount - a.amount || b.vergleich - a.vergleich);
+      const aufgeteilt_aus = curBy.get(name)?.aufgeteilt_aus ?? prevBy.get(name)?.aufgeteilt_aus;
+      return { name, amount, anteil_pct: pct(amount, total), vergleich: before, veraenderung_pct: change(amount, before), konten, ...(aufgeteilt_aus ? { aufgeteilt_aus } : {}) };
+    })
+    .sort((a, b) => Number(a.name === CATCH_ALL) - Number(b.name === CATCH_ALL) || b.amount - a.amount);
 }
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -173,6 +243,54 @@ export function seriesMonths(to: string, count = 6): Range[] {
 const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 const monthLabel = (r: Range) => `${MONTHS[Number(r.from.slice(5, 7)) - 1]} ${r.from.slice(0, 4)}`;
 
+export interface Buchung {
+  konto: number;
+  id: number;
+  datum: string;
+  text: string;
+  betrag: number;
+  gegenkonto: number | null;
+  beleg: boolean;
+}
+
+// Normale Seite jedes Kontos der BWA: Erträge im Haben, alles andere im Soll.
+export function accountSides(bwa: Bwa): Map<number, "debit" | "credit"> {
+  const out = new Map<number, "debit" | "credit">();
+  for (const [g, group] of Object.entries(bwa.groups ?? {})) {
+    const side = g === GROUP.output || g === GROUP.neutralIncome ? "credit" : "debit";
+    for (const c of Object.values(group.classes ?? {})) {
+      const pa = c.postingaccounts;
+      if (!pa || Array.isArray(pa)) continue;
+      for (const nr of Object.keys(pa)) out.set(Number(nr), side);
+    }
+  }
+  return out;
+}
+
+type LedgerRow = Record<string, unknown>;
+
+export async function fetchLedger(client: BBClient, konto: number, side: "debit" | "credit", range: Range): Promise<Buchung[]> {
+  const res = await client.call<{ report_sums_postingaccount_ledger?: { postingaccountLedger?: LedgerRow[] } }>("reportsGetSumsLedger", {
+    postingaccount_number: konto,
+    date_from: range.from,
+    date_to: range.to,
+  });
+  const rows = res.report_sums_postingaccount_ledger?.postingaccountLedger ?? [];
+  return rows.map((r) => {
+    const amount = Number(r.record_amount);
+    const counter = Number(r.counterRecordPostingaccountNumber);
+    return {
+      konto,
+      id: Number(r.id_by_customer),
+      datum: String(r.date ?? "").slice(0, 10),
+      text: String(r.postingTextFull ?? ""),
+      betrag: r2((r.record_side === side ? 1 : -1) * (Number.isFinite(amount) ? amount : 0)),
+      gegenkonto: Number.isFinite(counter) && counter !== 0 ? counter : null,
+      beleg: Boolean(r.receipts_id_by_customer) || Boolean(r.receiptsAssignedFilenamesServerPlain),
+    };
+  });
+}
+
 export type ControllingOptions = RunnerOptions;
 
 export function createControllingTools(client: BBClient, opts: ControllingOptions = {}): [ToolDef] {
@@ -199,6 +317,9 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       comparison_from: z.string().optional().describe("YYYY-MM-DD. Ohne Angabe: der Zeitraum direkt davor, gleich lang."),
       comparison_to: z.string().optional().describe("YYYY-MM-DD, nur zusammen mit comparison_from."),
       series: z.boolean().optional().describe("Zeitreihe über sechs Monate bis zum Ende des Zeitraums (Standard true). false spart sechs Reports."),
+      with_postings: z.boolean().optional().describe("Je Konto die Buchungen des Zeitraums (Kontenblatt) mitliefern, Standard true. false spart einen Aufruf je Konto."),
+      split_threshold_pct: z.number().min(0).max(100).optional().describe("Konten in 'Sonstige Kosten' ab diesem Anteil an den Kosten werden eine eigene Kostenart, Standard 10, 0 schaltet es ab."),
+      save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
     },
     async handler(args) {
       const period: Range = { from: args.period_from, to: args.period_to };
@@ -229,32 +350,26 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       const k = kpisFromBwa(cur);
       const p = kpisFromBwa(prev);
 
-      const prevByName = new Map(p.kostenarten.map((c) => [c.name, c]));
-      const curByName = new Map(k.kostenarten.map((c) => [c.name, c]));
-      const names = new Set([...curByName.keys(), ...prevByName.keys()]);
-      const kostenarten = [...names]
-        .map((name) => {
-          const amount = curByName.get(name)?.amount ?? 0;
-          const before = prevByName.get(name)?.amount ?? 0;
-          // Konten beider Zeiträume, damit auch ein Konto sichtbar ist, das nur im Vergleich Umsatz hatte.
-          const nrs = new Set([...(curByName.get(name)?.konten ?? []), ...(prevByName.get(name)?.konten ?? [])].map((a) => a.nummer));
-          const konten = [...nrs]
-            .map((nummer) => {
-              const c = curByName.get(name)?.konten.find((a) => a.nummer === nummer);
-              const v = prevByName.get(name)?.konten.find((a) => a.nummer === nummer);
-              return {
-                nummer,
-                name: c?.name ?? v?.name ?? "",
-                amount: c?.amount ?? 0,
-                anteil_an_kostenart_pct: pct(c?.amount ?? 0, amount),
-                vergleich: v?.amount ?? 0,
-                veraenderung_pct: change(c?.amount ?? 0, v?.amount ?? 0),
-              };
-            })
-            .sort((a, b) => b.amount - a.amount || b.vergleich - a.vergleich);
-          return { name, amount, anteil_pct: pct(amount, k.kosten), vergleich: before, veraenderung_pct: change(amount, before), konten };
-        })
-        .sort((a, b) => b.amount - a.amount);
+      const promote = promotedAccounts(k, args.split_threshold_pct ?? 10);
+      const kostenarten = mergeArten(promoteAccounts(k, promote).kostenarten, promoteAccounts(p, promote).kostenarten, k.kosten);
+      const ertragsarten = mergeArten(k.ertragsarten, p.ertragsarten, k.ertraege);
+
+      // Kontenblatt je Konto: die Summe der Zeilen eines Kontos ist genau der Betrag der BWA (Livekonto geprüft). Beträge
+      // zur normalen Seite des Kontos: Aufwand im Soll, Ertrag im Haben, die Gegenbuchung (Storno) ist negativ.
+      const buchungen: Buchung[] = [];
+      if (args.with_postings !== false) {
+        const sides = accountSides(cur);
+        const todo = [...sides.entries()].filter(([nr]) => [...k.kostenarten, ...k.ertragsarten].some((l) => l.konten.some((a) => a.nummer === nr)));
+        let next = 0;
+        const worker = async () => {
+          while (next < todo.length) {
+            const [nr, side] = todo[next++];
+            buchungen.push(...(await fetchLedger(client, nr, side, period)));
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, todo.length) }, worker));
+        buchungen.sort((a, b) => a.konto - b.konto || a.datum.localeCompare(b.datum) || a.id - b.id);
+      }
 
       const umsatzwachstum = change(k.umsatzerloese, p.umsatzerloese);
       const warnings: string[] = [];
@@ -266,7 +381,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       }
       if (k.gesamtleistung === 0) warnings.push("Gesamtleistung im Zeitraum ist 0: Margen und Quoten sind nicht berechenbar (null).");
 
-      return ok({
+      return finishWithExport(args.save_as, {
         period,
         comparison,
         kpis: {
@@ -291,6 +406,8 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
           rule_of_bhb: umsatzwachstum === null || k.umsatzrentabilitaet_pct === null ? null : r2(umsatzwachstum + k.umsatzrentabilitaet_pct),
         },
         kostenarten,
+        ertragsarten,
+        buchungen,
         zeitreihe: {
           monate: months.map(monthLabel),
           ertraege: monthly.map((m) => m.ertraege),

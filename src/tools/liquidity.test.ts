@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { averagePaymentDays, balancesFromSums, cashflowByMonth, createLiquidityTools, openReceiptKpis } from "./liquidity.js";
+import { averagePaymentDays, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows } from "./liquidity.js";
 
 // Erfundene Zahlen. Aufbau wie die Summen- und Saldenliste von reportsGetSums.
 const entry = (cls: string, nr: number, abs: number, side: "debit" | "credit") => ({
@@ -94,6 +94,29 @@ describe("openReceiptKpis", () => {
   });
   it("ohne offene Belege kein Anteil statt Division durch 0", () => {
     expect(openReceiptKpis([], "2026-10-30").zweifelhaft.anteil_pct).toBeNull();
+  });
+});
+
+describe("offene Belege einzeln und je Firma", () => {
+  const rows = [
+    { id_by_customer: "7", amount: "300.00", counterparty: "Kunde B", date: "2026-02-01", due_date: "2026-02-15", invoicenumber: "B-1" },
+    { id_by_customer: "5", amount: "1000.00", counterparty: "Kunde A", date: "2026-09-01", due_date: "2026-09-15", invoicenumber: "A-2" },
+    { id_by_customer: "4", amount: "-50.00", counterparty: "Kunde A", date: "2026-09-10", due_date: null, invoicenumber: "A-G" },
+    { id_by_customer: "9", amount: "20.00", counterparty: "Kunde A", date: "2026-02-03", due_date: "2026-02-20", invoicenumber: "A-1" },
+  ];
+  const list = openReceiptRows(rows, "2026-10-30");
+  it("Zeilen mit Tagen seit Fälligkeit (ohne Fälligkeit seit Belegdatum), nach Firma und Datum sortiert", () => {
+    expect(list.map((r) => r.nummer)).toEqual(["A-1", "A-2", "A-G", "B-1"]);
+    expect(list.find((r) => r.nummer === "A-2")).toMatchObject({ id: 5, betrag: 1000, faellig: "2026-09-15", tage_ueberfaellig: 45 });
+    expect(list.find((r) => r.nummer === "A-G")).toMatchObject({ faellig: null, tage_ueberfaellig: 50 });
+  });
+  it("je Firma: offene Summe, Anzahl, überfälliger Teil und älteste Fälligkeit; größte Summe zuerst", () => {
+    const p = openByParty(list);
+    expect(p[0]).toEqual({ name: "Kunde A", offen: 970, anzahl: 3, ueberfaellig_90: 20, aelteste_faelligkeit: "2026-02-20" });
+    expect(p[1]).toEqual({ name: "Kunde B", offen: 300, anzahl: 1, ueberfaellig_90: 300, aelteste_faelligkeit: "2026-02-15" });
+  });
+  it("die Summe der Zeilen ist die Summe der offenen Belege", () => {
+    expect(list.reduce((t, r) => t + r.betrag, 0)).toBe(openReceiptKpis(rows, "2026-10-30").summe);
   });
 });
 
@@ -218,6 +241,9 @@ describe("get_liquidity", () => {
     // (1000 + 1000) / 250
     expect(res.kennzahlen.quick_ratio).toBe(8);
     expect(res.forderungen.top[0]).toEqual({ name: "Kunde A", betrag: 900 });
+    expect(res.forderungen.parteien.map((p: { name: string }) => p.name)).toEqual(["Kunde A", "Kunde B"]);
+    expect(res.forderungen.belege).toHaveLength(2);
+    expect(res.verbindlichkeiten.belege[0]).toMatchObject({ gegenpartei: "Lieferant X", betrag: 250 });
   });
 
   it("Cashflow aus Buchungen, Burn Rate als Mittel (Auszahlungen - Einzahlungen), Runway = Cash durch Burn Rate", async () => {

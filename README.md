@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **55 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **57 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.
@@ -141,7 +141,7 @@ tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundla
 | Month-end | `check_month_end` (read-only closing checks), `calculate_account_balance` |
 | USt-VA | `get_ustva_position` (which VAT-return field an account lands in), `preview_vat_impact` (sums of the tax accounts for a period plus `elster_estimate` with the Bemessungsgrundlagen floored to full euros like ELSTER; still not the ELSTER figure) |
 | Booking guide | `get_booking_guide` (documented BHB special cases: Skonto, Geldtransit, Auslagen, RAP, OSS, foreign currency, ...) |
-| Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger`, `get_controlling` (Controlling dashboard figures from the BWA: EBIT/EBITDA, margins, cost structure, 6-month series), `get_liquidity` (liquidity dashboard: cash, working capital, cash flow, open receivables/payables) |
+| Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger`, `get_controlling` (Controlling dashboard figures from the BWA: EBIT/EBITDA, margins, cost structure, 6-month series), `get_liquidity` (liquidity dashboard: cash, working capital, cash flow, open receivables/payables per company), `get_bank_overview` (balance per payment account, turnover, unbooked payments), `get_tax_position` (VAT position, booked taxes, open items with tax authorities) |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
 | Reisekostenabrechnung | `generate_travel_expense_report`, `generate_and_upload_travel_expense_report` |
 
