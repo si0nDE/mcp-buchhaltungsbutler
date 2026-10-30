@@ -151,7 +151,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       "booked afterwards. e_invoice: true creates a structured e-invoice (ZUGFeRD/XRechnung) via the e-invoice endpoint: use it for business customers (B2B), " +
       "a plain PDF is fine for consumers (B2C); it needs street, zip, city, country and email, no draft, and items with vat 0 need a tax_type; the company master data " +
       "(address, tax number or USt-ID) must be complete in the account. A period of service must be given as its last day. It sends nothing. " +
-      "Not verified: whether later runs of an e-invoice plan are e-invoices again.",
+      "Verified 2026-10-30: an e-invoice plan with recurring_date_end works, the first invoice is ZUGFeRD and a recurring invoice; a later run was not observed.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createInvoiceShape,
