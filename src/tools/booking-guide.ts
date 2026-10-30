@@ -897,7 +897,9 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "Ein ungültiges recurring_date_end ergab HTTP 500, nachdem BHB die Rechnung schon angelegt hatte (ohne Plan). Der Konnektor prüft das Datum deshalb vorab. Nach einem Fehler bei einer Wiederholungsrechnung mit list_receipts prüfen, ob die Rechnung entstanden ist, und nicht blind wiederholen.",
       "Ohne Enddatum läuft der Plan, bis ihn der Nutzer in der BHB-Oberfläche unter 'Wiederkehrende Rechnungen' stoppt. Kein Tool kann das; Plan nicht selbst per Browser suchen oder stoppen, sondern den Nutzer bitten.",
       "Eine Korrektur (create_invoice_correction) storniert nur die bereits erzeugte Rechnung, nicht den Plan, und verbraucht eine weitere Nummer.",
-      "Kein Versand: email leer lassen, solange der Nutzer nichts anderes verlangt.",
+      "Je Lauf neu gesetzt: Rechnungsdatum und Fälligkeit (due_days ab dem neuen Rechnungsdatum). Nicht fortgeschrieben: date_of_supply bleibt der Wert der ersten Rechnung, und correspondence, payment_conditions, final_provisions und item_description werden wörtlich wiederholt (Test am 29./30.10.2026 mit einem Plan: Lauf am 30.10. trug Rechnungsdatum 30.10., Leistungsdatum weiter 29.10.). Platzhalter ([Monat], %MONAT%, {{monat}}, {Monat}, $monat$, #monat#) wurden nicht ersetzt; ob BHB andere Schreibweisen kennt, ist nicht belegt.",
+      "Folge: Bei wechselndem Leistungszeitraum oder Einzugsdatum je Rechnung keinen Plan nehmen, sondern jede Rechnung einzeln mit create_invoice anlegen. date_of_supply bei einem Plan nur setzen, wenn der Wert für alle Läufe stimmt.",
+      "Kein Versand: email wird gespeichert, aber weder die erste Rechnung noch ein Plan-Lauf wurde versendet (Test 29./30.10.2026, Mail kam nicht an, die Oberfläche zeigte keinen Versand; die Spec hat keinen Versand-Endpunkt). Die Wiki-Seite von BHB nennt automatischen Versand, bestätigt hat es sich nicht. Versand nur in der Oberfläche; email leer lassen, solange der Nutzer nichts anderes verlangt.",
     ],
     ablauf: [
       "1. create_invoice mit dry_run: true und recurring_date_end: zeigt alle Termine bis zum Enddatum und die Summe, legt nichts an.",

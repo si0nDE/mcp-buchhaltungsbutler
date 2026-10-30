@@ -92,7 +92,13 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     zip: z.string().optional(),
     city: z.string().optional(),
     country: z.string().optional(),
-    email: z.string().optional(),
+    email: z
+      .string()
+      .optional()
+      .describe(
+        "Adresse des Empfängers. BHB speichert und prüft sie, versendet aber nichts: weder die Rechnung noch die Läufe eines Plans " +
+          "(beobachtet am 29./30.10.2026, die Spec hat keinen Versand-Endpunkt). Versand nur in der BHB-Oberfläche. Leer lassen, solange der Nutzer nichts anderes verlangt."
+      ),
     invoicenumber: z.string().optional(),
     due_days: z.string().optional(),
     payment_reference: z

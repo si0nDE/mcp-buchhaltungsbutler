@@ -38,13 +38,16 @@ export const RECURRING_DESCRIPTION =
   "recurring_interval (weekly, monthly, quarterly, yearly) legt einen Wiederholungsplan an: die erste Rechnung entsteht sofort und endgültig, " +
   "die nächste zum recurring_date_next. Per API gibt es keinen Stopp und keine Liste der Pläne. create_invoice kennt recurring_date_end " +
   "(\"Letzte Rechnung\", nicht in der Spec, aber belegt); ohne Enddatum läuft der Plan weiter, bis der Nutzer ihn in der BHB-Oberfläche stoppt. " +
-  "Der Konnektor verlangt confirm_creates_first_invoice: true und ein Enddatum oder allow_open_ended: true; sonst bricht er ab.";
+  "Der Konnektor verlangt confirm_creates_first_invoice: true und ein Enddatum oder allow_open_ended: true; sonst bricht er ab. " +
+  "Je Lauf neu gesetzt werden Rechnungsdatum und Fälligkeit; date_of_supply und alle Texte bleiben wie bei der ersten Rechnung " +
+  "(Platzhalter für Monat oder Leistungszeitraum sind nicht belegt): bei wechselndem Leistungszeitraum kein Plan, sondern einzelne Rechnungen.";
 
 // Steht in der Antwort eines echten Aufrufs, damit das Modell die Grenze genau dann liest, wenn es sonst nach dem Stopp fragt.
 export function recurringCreatedWarning(endDate?: string): string {
   const stop =
     "Stoppen und Auflisten gibt es per API nicht (die ID des Plans wird nicht geliefert): den Nutzer bitten, in der BHB-Oberfläche unter " +
-    "\"Wiederkehrende Rechnungen\" zu prüfen oder zu stoppen; nicht selbst per Browser danach suchen. Eine Korrektur storniert nur die erzeugte Rechnung, nicht den Plan.";
+    "\"Wiederkehrende Rechnungen\" zu prüfen oder zu stoppen; nicht selbst per Browser danach suchen. Eine Korrektur storniert nur die erzeugte Rechnung, nicht den Plan. " +
+    "Jeder Lauf trägt dasselbe date_of_supply und dieselben Texte wie die erste Rechnung; versendet wird nichts.";
   return endDate === undefined
     ? `Wiederholungsplan angelegt: die erste Rechnung ist endgültig, der Plan läuft ohne Enddatum weiter. ${stop}`
     : `Wiederholungsplan angelegt, Letzte Rechnung ${endDate} (recurring_date_end). Ob BHB den Plan so übernommen hat, lässt sich per API nicht prüfen: den Nutzer bitten, "Nächste Rechnung" und "Letzte Rechnung" in der Oberfläche zu kontrollieren. ${stop}`;
