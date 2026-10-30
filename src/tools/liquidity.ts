@@ -188,27 +188,17 @@ export function openByParty(rows: OpenReceipt[]): OpenParty[] {
     .sort((a, b) => b.offen - a.offen || a.name.localeCompare(b.name, "de"));
 }
 
-// Durchschnittliche Tage vom Belegdatum bis zur Zahlungsbuchung, über Zahlungen der letzten zwölf Monate auf Belege der
-// letzten zwölf Monate; Sammelzahlungen auf mehrere Belege zählen nicht. NÄHERUNG: im Livekonto (30.10.2026) lag sie um einige
-// Tage über BHBs Werten, mit Sammelzahlungen noch weiter darüber. BHBs genaue Definition ist unbekannt.
-export function averagePaymentDays(postings: Row[], type: "invoice outbound" | "invoice inbound", finanzkonten: Set<string>, asOf: string) {
-  const since = day(minusYear(asOf));
+// Debitoren-/Kreditorenlaufzeit: einfaches Mittel aus Zahlungsdatum minus Belegdatum über alle bezahlten Belege der letzten zwölf
+// Monate (payment_date des Belegs). Gegen BHBs Dashboard auf die zweite Nachkommastelle bestätigt (Ausgangs- und Eingangsrechnungen).
+export function averageDaysToPay(rows: Row[]): { tage: number | null; anzahl: number } {
   let sum = 0;
   let n = 0;
-  for (const p of postings) {
-    const types = String(p.receipts_assigned_types ?? "").split(/,\s*/).filter(Boolean);
-    const dates = String(p.receipts_assigned_dates ?? "").split(/,\s*/).filter(Boolean);
-    if (types.length !== 1 || dates.length !== 1) continue;
-    const db = String(p.debit_postingaccount_number ?? "");
-    const cr = String(p.credit_postingaccount_number ?? "");
-    if (!finanzkonten.has(db) && !finanzkonten.has(cr)) continue;
-    const paid = day(String(p.date ?? ""));
-    types.forEach((t, i) => {
-      const rd = day(dates[i]);
-      if (t !== type || !(rd >= since) || !Number.isFinite(paid)) return;
-      sum += Math.round((paid - rd) / DAY);
-      n++;
-    });
+  for (const r of rows) {
+    const paid = day(String(r.payment_date ?? ""));
+    const dated = day(String(r.date ?? ""));
+    if (!Number.isFinite(paid) || !Number.isFinite(dated)) continue;
+    sum += Math.round((paid - dated) / DAY);
+    n++;
   }
   return { tage: n === 0 ? null : r2(sum / n), anzahl: n };
 }
@@ -240,7 +230,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       "Artefakt darstellen (Skill dataviz laden). Es erzeugt je Monat eine Summen- und Saldenliste (bis 12, je einige Sekunden; " +
       "months senkt die Zahl) und ERSETZT damit die zuletzt in BHB erzeugte SuSa. Nur bestätigte Buchungen zählen. Cash-Bestand, " +
       "Working Capital, Forderungen, Verbindlichkeiten, Top-Kunden/-Lieferanten, Zweifelhaftes, Quick Ratio und Future Cash-Inflow " +
-      "sind gegen BHBs Dashboard auf den Cent belegt; Cashflow, Burn Rate, Runway und die Laufzeiten weichen ab (siehe hinweise). " +
+      "und die Laufzeiten sind gegen BHBs Dashboard belegt; Cashflow, Burn Rate und Runway weichen ab (siehe hinweise). " +
       "as_of als YYYY-MM-DD, Standard heute.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
@@ -269,9 +259,12 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       const fin = new Set(last.finanzkonten);
       const excluded = new Set(last.interimskonten);
 
-      const [outbound, inbound, postings] = await Promise.all([
+      const since = minusYear(asOf);
+      const [outbound, inbound, paidOut, paidIn, postings] = await Promise.all([
         readAll(client, "receiptsGet", { list_direction: "outbound", payment_status: "unpaid", deleted: false }, 500),
         readAll(client, "receiptsGet", { list_direction: "inbound", payment_status: "unpaid", deleted: false }, 500),
+        readAll(client, "receiptsGet", { list_direction: "outbound", payment_status: "paid", deleted: false, date_from: since }, 500),
+        readAll(client, "receiptsGet", { list_direction: "inbound", payment_status: "paid", deleted: false, date_from: since }, 500),
         readAll(client, "postingsGet", { date_from: monthRanges[0].from, date_to: asOf, posting_status: "all" }, 1000),
       ]);
       const forderungen = openReceiptKpis(outbound.rows, asOf);
@@ -284,13 +277,13 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       const cashflow = ein.map((e, i) => r2(e - aus[i]));
       // BHB: Burn Rate = Mittel von (Auszahlungen - Einzahlungen) über die Monate; Runway = Cash-Bestand durch Burn Rate.
       const burn = r2(aus.reduce((a, b) => a + b, 0) / count - ein.reduce((a, b) => a + b, 0) / count);
-      const dso = averagePaymentDays(postings.rows, "invoice outbound", fin, asOf);
-      const dpo = averagePaymentDays(postings.rows, "invoice inbound", fin, asOf);
+      const dso = averageDaysToPay(paidOut.rows);
+      const dpo = averageDaysToPay(paidIn.rows);
 
       const warnings: string[] = [];
       if (integrity) warnings.push("BHB meldet einen Integritätsfehler in einer Summen- und Saldenliste; Zahlen nicht verwenden, bis er geklärt ist.");
       if (fin.size === 0) warnings.push("Kein Konto der Klasse Finanzkonto gefunden: Cash-Bestand und Working Capital sind 0.");
-      for (const [label, r] of [["Belege (offene Ausgangsrechnungen)", outbound], ["Belege (offene Eingangsrechnungen)", inbound], ["Buchungen", postings]] as const) {
+      for (const [label, r] of [["Belege (offene Ausgangsrechnungen)", outbound], ["Belege (offene Eingangsrechnungen)", inbound], ["Belege (bezahlte Ausgangsrechnungen)", paidOut], ["Belege (bezahlte Eingangsrechnungen)", paidIn], ["Buchungen", postings]] as const) {
         if (r.truncated) warnings.push(`${label}: Abfrage nach 20 Seiten abgebrochen, Summen unvollständig.`);
       }
 
@@ -328,7 +321,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
           "Forderungen und Verbindlichkeiten = Summe der offenen Belege (Gutschriften mindern). Top-Kunden und -Lieferanten: offene Belege der letzten zwölf Monate je Gegenpartei. Zweifelhaft: Fälligkeit (ohne Fälligkeit Belegdatum) mindestens 90 Tage her.",
           "Cashflow aus den Buchungen auf Finanzkonten nach Buchungsdatum, ohne Interims-/Geldtransitkonten und ohne Anfangssalden (Saldenvortrag). Stimmt mit BHB bis auf wenige Euro je Monat; in einem Monat wich BHB im Livekonto bei den Auszahlungen deutlich ab (Ursache nicht geklärt), dadurch weichen Burn Rate und Cash Runway ab.",
           "Cash Runway = Cash-Bestand durch Burn Rate (BHB beschriftet das mit Tagen, rechnerisch sind es Monate). Bei negativem Cash-Bestand und negativer Burn Rate ist die Zahl nicht aussagekräftig.",
-          "Debitoren-/Kreditorenlaufzeit sind Näherungen (Zahlungsbuchung minus Belegdatum, Zahlungen auf genau einen Beleg, Belege der letzten zwölf Monate): BHB zeigte im Livekonto niedrigere Werte als diese Näherung. BHBs Definition ist unbekannt.",
+          "Debitoren-/Kreditorenlaufzeit = einfaches Mittel aus Zahlungsdatum minus Belegdatum über alle bezahlten Belege der letzten zwölf Monate (payment_date des Belegs); gegen BHBs Dashboard auf die zweite Nachkommastelle bestätigt.",
         ],
         warnings,
       });

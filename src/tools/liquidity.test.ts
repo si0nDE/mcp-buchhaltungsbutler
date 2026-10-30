@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { averagePaymentDays, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows } from "./liquidity.js";
+import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows } from "./liquidity.js";
 
 // Erfundene Zahlen. Aufbau wie die Summen- und Saldenliste von reportsGetSums.
 const entry = (cls: string, nr: number, abs: number, side: "debit" | "credit") => ({
@@ -120,41 +120,18 @@ describe("offene Belege einzeln und je Firma", () => {
   });
 });
 
-describe("averagePaymentDays", () => {
-  const fin = new Set(["1200"]);
-  const p = (date: string, types: string, dates: string, db = "1200", cr = "1400") => ({
-    date: `${date} 00:00:00`,
-    receipts_assigned_types: types,
-    receipts_assigned_dates: dates,
-    debit_postingaccount_number: db,
-    credit_postingaccount_number: cr,
+describe("averageDaysToPay", () => {
+  it("einfaches Mittel aus Zahlungsdatum minus Belegdatum, negative Tage (Vorauszahlung) zählen mit", () => {
+    const r = averageDaysToPay([
+      { date: "2026-05-01", payment_date: "2026-05-11" }, // 10
+      { date: "2026-06-01", payment_date: "2026-06-21" }, // 20
+      { date: "2026-07-10", payment_date: "2026-07-08" }, // -2
+    ]);
+    expect(r).toEqual({ tage: 9.33, anzahl: 3 });
   });
-  it("mittelt Tage vom Belegdatum bis zur Zahlung, nur Belege der letzten zwölf Monate, nur Zahlungen auf Finanzkonten", () => {
-    const r = averagePaymentDays(
-      [
-        p("2026-05-11", "invoice outbound", "2026-05-01 00:00:00"), // 10
-        p("2026-06-21", "invoice outbound", "2026-06-01 00:00:00"), // 20
-        p("2026-06-21", "invoice outbound", "2024-06-01 00:00:00"), // zu alt
-        p("2026-06-21", "invoice inbound", "2026-06-01 00:00:00"), // andere Richtung
-        p("2026-06-21", "invoice outbound", "2026-06-01 00:00:00", "4950", "8400"), // kein Finanzkonto
-      ],
-      "invoice outbound",
-      fin,
-      "2026-10-30"
-    );
-    expect(r).toEqual({ tage: 15, anzahl: 2 });
-  });
-  it("Sammelzahlung auf mehrere Belege zählt nicht", () => {
-    const r = averagePaymentDays(
-      [p("2026-06-11", "invoice inbound, invoice inbound", "2026-06-01 00:00:00, 2026-05-22 00:00:00")],
-      "invoice inbound",
-      fin,
-      "2026-10-30"
-    );
-    expect(r).toEqual({ tage: null, anzahl: 0 });
-  });
-  it("ohne Zahlungen gibt es keine Laufzeit", () => {
-    expect(averagePaymentDays([], "invoice outbound", fin, "2026-10-30")).toEqual({ tage: null, anzahl: 0 });
+  it("Belege ohne Zahlungsdatum zählen nicht, ohne Belege gibt es keine Laufzeit", () => {
+    expect(averageDaysToPay([{ date: "2026-05-01", payment_date: null }, { date: "2026-05-01" }])).toEqual({ tage: null, anzahl: 0 });
+    expect(averageDaysToPay([])).toEqual({ tage: null, anzahl: 0 });
   });
 });
 
@@ -188,6 +165,11 @@ function fakeClient() {
           ["Interimskonto", 1590, 0, "debit"],
         ]),
       };
+    }
+    if (op === "receiptsGet" && params.payment_status === "paid") {
+      return params.list_direction === "outbound"
+        ? { data: [{ date: "2026-05-01", payment_date: "2026-05-11" }, { date: "2026-06-01", payment_date: "2026-06-21" }] }
+        : { data: [{ date: "2026-05-01", payment_date: "2026-05-05" }] };
     }
     if (op === "receiptsGet") {
       const out = params.list_direction === "outbound";
@@ -241,6 +223,8 @@ describe("get_liquidity", () => {
     // (1000 + 1000) / 250
     expect(res.kennzahlen.quick_ratio).toBe(8);
     expect(res.forderungen.top[0]).toEqual({ name: "Kunde A", betrag: 900 });
+    expect(res.forderungen.debitorenlaufzeit_tage).toBe(15);
+    expect(res.verbindlichkeiten.kreditorenlaufzeit_tage).toBe(4);
     expect(res.forderungen.parteien.map((p: { name: string }) => p.name)).toEqual(["Kunde A", "Kunde B"]);
     expect(res.forderungen.belege).toHaveLength(2);
     expect(res.verbindlichkeiten.belege[0]).toMatchObject({ gegenpartei: "Lieferant X", betrag: 250 });

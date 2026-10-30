@@ -39,6 +39,27 @@ async function allTransactions(client: BBClient, account: number, dateTo: string
   return { rows, truncated: true };
 }
 
+// Durchlaufende Posten und Geldtransit müssen sich ausgleichen: eine Buchung im Soll hat eine Gegenbuchung gleichen Betrags im Haben
+// (zurückgebuchte Lastschrift, Umbuchung zwischen Konten). Gepaart wird nach Betrag, Soll gegen Haben, die älteste zuerst. Was
+// übrig bleibt, ist nicht ausgeglichen. Beträge im Soll positiv, im Haben negativ.
+export function pairOff(rows: Buchung[]): { paare: number; offen: Buchung[] } {
+  const sorted = [...rows].filter((r) => r.betrag !== 0).sort((a, b) => a.datum.localeCompare(b.datum) || a.id - b.id);
+  const open = new Map<number, Buchung[]>();
+  let paare = 0;
+  for (const r of sorted) {
+    const key = Math.round(Math.abs(r.betrag) * 100);
+    const list = open.get(key) ?? [];
+    const i = list.findIndex((x) => Math.sign(x.betrag) !== Math.sign(r.betrag));
+    if (i >= 0) {
+      list.splice(i, 1);
+      paare++;
+    } else list.push(r);
+    open.set(key, list);
+  }
+  const offen = [...open.values()].flat().sort((a, b) => a.datum.localeCompare(b.datum) || a.id - b.id);
+  return { paare, offen };
+}
+
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
 export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = {}): [ToolDef] {
@@ -49,7 +70,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
     description:
       "Banken-Übersicht fürs Controlling: je Zahlungskonto (Bank, Kasse, Darlehens- und Verrechnungskonten) der gebuchte Stand (Summen- und " +
       "Saldenliste), der Zahlungsstand (alle Zahlungen, ob gebucht oder nicht), die Differenz, die Umsätze im Zeitraum (Ein- und " +
-      "Auszahlungen), die noch nicht gebuchten Zahlungen einzeln und die Buchungen auf dem Interimskonto 'Kontierung nicht bekannt'. " +
+      "Auszahlungen), die noch nicht gebuchten Zahlungen einzeln und die Prüfung, ob durchlaufende Posten und Geldtransit ausgeglichen sind (Saldo, gepaarte und offene Buchungen). " +
       "Fragt der Nutzer, was auf welchem Konto liegt, ob Zahlungen offen oder unerklärt sind, dieses Tool aufrufen und als Artefakt " +
       "darstellen. Es erzeugt eine Summen- und Saldenliste und ERSETZT damit die zuletzt in BHB erzeugte. Bei angebundenen Bankkonten " +
       "zeigt die Oberfläche den von der Bank gemeldeten Stand, der kann vom Zahlungsstand abweichen. as_of und date_from als YYYY-MM-DD.",
@@ -120,13 +141,24 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
         }))
         .sort((a, b) => b.datum.localeCompare(a.datum) || a.konto - b.konto);
 
-      // Gebucht, aber noch nicht zugeordnet: Interimskonto "Kontierung nicht bekannt"
-      const unklar: Array<{ konto: number; name: string; saldo: number; buchungen: Buchung[] }> = [];
+      // Durchlaufende Posten und Geldtransit: alle Interimskonten mit Bewegung oder Saldo, mit dem, was sich nicht ausgleicht
+      const durchlaufend: Array<{ konto: number; name: string; art: string; saldo: number; ausgeglichen: boolean; buchungen_anzahl: number; paare: number; offen: Buchung[] }> = [];
       for (const [nr, e] of Object.entries(entries)) {
-        if (e.postingaccount?.class === "Interimskonto" && /nicht bekannt/i.test(e.postingaccount.name ?? "")) {
-          const buchungen = await fetchLedger(client, Number(nr), "debit", { from, to: asOf });
-          unklar.push({ konto: Number(nr), name: e.postingaccount.name ?? "", saldo: r2(signed(e)), buchungen });
-        }
+        if (e.postingaccount?.class !== "Interimskonto") continue;
+        const buchungen = await fetchLedger(client, Number(nr), "debit", { from, to: asOf });
+        const saldo = r2(signed(e));
+        if (buchungen.length === 0 && saldo === 0) continue;
+        const { paare, offen } = pairOff(buchungen);
+        durchlaufend.push({
+          konto: Number(nr),
+          name: e.postingaccount?.name ?? "",
+          art: /geldtransit/i.test(e.postingaccount?.name ?? "") ? "geldtransit" : "durchlaufende_posten",
+          saldo,
+          ausgeglichen: saldo === 0,
+          buchungen_anzahl: buchungen.length,
+          paare,
+          offen,
+        });
       }
 
       const sum = (f: (k: (typeof konten)[number]) => number) => r2(konten.reduce((t, k) => t + f(k), 0));
@@ -143,12 +175,13 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
           nicht_gebucht_anzahl: nichtGebucht.length,
         },
         nicht_gebuchte_zahlungen: nichtGebucht,
-        unklare_buchungen: unklar,
+        durchlaufende_posten: durchlaufend,
+        durchlaufende_ausgeglichen: durchlaufend.every((d) => d.ausgeglichen),
         hinweise: [
           "Buchsaldo = Saldo in der Summen- und Saldenliste (nur gebuchte Zahlungen). Zahlungssaldo = Summe aller Zahlungen bis zum Stichtag, auch ungebuchter; ohne eingetragenen Anfangsbestand stimmt nur die Veränderung. Die Differenz sind Zahlungen, die noch nicht gebucht sind.",
           "Darlehens- und Verrechnungskonten stehen als Konten der Klasse Finanzkonto mit in der Liste (art: sonstiges); ihr Saldo zählt in BHB zum Cash-Bestand.",
           "Bei angebundenen Bank- und Kreditkartenkonten zeigt die BHB-Oberfläche den von der Bank gemeldeten Stand, nicht den hier berechneten.",
-          "Unklare Buchungen: Buchungen auf dem Interimskonto 'Kontierung nicht bekannt'. Sie sind gebucht, aber keinem Sachkonto zugeordnet; Gegenbuchungen heben sich dort auf. Beträge zur Sollseite des Kontos (Haben negativ).",
+          "Durchlaufende Posten und Geldtransit (Interimskonten): der Saldo muss 0 sein. paare sind Buchungen mit gleich hoher Gegenbuchung (zurückgebuchte Lastschrift, Umbuchung), offen sind Buchungen ohne Gegenbuchung im Zeitraum. Der Saldo gilt zum Stichtag, die Buchungen für den Zeitraum ab date_from. Beträge zur Sollseite (Haben negativ). Ein Posten mit Kennzeichen 'kein Beleg' ist gewollt gebucht und kein offener Fall.",
         ],
         warnings,
       });

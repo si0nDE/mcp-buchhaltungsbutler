@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
-import { createTaxPositionTools, taxArea, taxLines } from "./tax-position.js";
+import { createTaxPositionTools, monthInput, taxArea, taxLines } from "./tax-position.js";
 
 // Erfundene Zahlen. Saldo Soll positiv.
 const e = (cls: string, nr: number, name: string, abs: number, side: "debit" | "credit") => ({
@@ -88,14 +88,14 @@ describe("get_tax_position", () => {
     expect(res.umsatzsteuer.konten.map((k: { nummer: number }) => k.nummer).sort()).toEqual([1576, 1776, 1780, 1791]);
   });
 
-  it("weitere Steuern nur wie gebucht, ohne Schätzung", async () => {
+  it("weitere Steuern wie gebucht, die Schätzung ersetzt keine Steuererklärung", async () => {
     const { client } = fakeClient();
     const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
     const res = parse(await tool.handler({ as_of: "2026-10-30" }));
     expect(res.weitere_steuern.lohnsteuer).toBe(-80);
     // Rückstellung -600 (Haben) + Aufwand +600 (Soll)
     expect(res.weitere_steuern.ertragsteuern_gebucht).toBe(0);
-    expect(res.hinweise.join(" ")).toMatch(/nicht geschätzt/);
+    expect(res.hinweise.join(" ")).toMatch(/ersetzt keine Steuererklärung/);
   });
 
   it("offene Belege nur von Steuerbehörden, mit Richtung", async () => {
@@ -111,5 +111,95 @@ describe("get_tax_position", () => {
     const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
     await expect(tool.handler({ as_of: "30.10.2026" })).rejects.toThrow(/YYYY-MM-DD/);
     expect(call).not.toHaveBeenCalled();
+  });
+});
+
+// Periodensummen je Konto: [Klasse, Nummer, Name, Soll der Periode, Haben der Periode]
+const period = (rows: Array<[string, number, string, number, number]>) => ({
+  integrityError: false,
+  sums: Object.fromEntries(
+    rows.map(([cls, nr, name, soll, haben]) => [String(nr), { postingaccount: { class: cls, name, postingaccount_number: nr }, balanceAfterAbsolute: 0, balanceAfterSide: "debit", sumPeriodDebit: soll, sumPeriodCredit: haben }])
+  ),
+});
+
+describe("monthInput", () => {
+  const r = monthInput(
+    "2026-03",
+    period([
+      ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", 10, 210], // +200
+      ["Umsatzsteuer", 1787, "Umsatzsteuer nach § 13b UStG", 0, 30], // +30, hebt sich mit der Vorsteuer 13b auf
+      ["Umsatzsteuer", 1780, "Umsatzsteuer - Vorauszahlungen / Erstattungen", 500, 0], // Zahlung ans Finanzamt: zählt nicht
+      ["Verbindlichkeiten", 1791, "Umsatzsteuer frühere Jahre", 80, 0], // zählt nicht
+      ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 120, 20], // 100
+      ["Vorsteuer", 1577, "Abziehbare Vorsteuer § 13b UStG", 30, 0], // 30
+      ["Einnahmen", 8400, "Erlöse", 5, 1005], // +1000
+      ["Betriebsausgabe", 4950, "Beratung", 400, 0], // -400
+      ["Abschreibungen", 4832, "Abschreibung Kfz", 100, 0], // -100
+      ["Privat", 1800, "Privatentnahmen", 900, 0], // zählt nicht
+    ])
+  );
+  it("Umsatzsteuer der Periode ohne Vorauszahlungen und Altjahre, Vorsteuer, Gewinn aus den Ergebniskonten ohne Privat", () => {
+    expect(r).toEqual({ schluessel: "2026-03", ust: 230, vst: 130, gewinn: 500 });
+  });
+});
+
+describe("get_tax_position: Perioden und Schätzung", () => {
+  function monthsClient() {
+    let next = 1;
+    const ranges = new Map<number, string>();
+    const call = vi.fn(async (op: string, params: Record<string, unknown>) => {
+      if (op === "reportsCreateSums") {
+        const id = next++;
+        ranges.set(id, String(params.date_from));
+        return { id_by_customer: String(id) };
+      }
+      if (op === "reportsGetSums") {
+        const from = ranges.get(Number(params.report_id_by_customer))!;
+        // Januar: Gewinn 30.000, Februar: Verlust 10.000
+        return { report: from.startsWith("2026-01") ? period([["Einnahmen", 8400, "Erlöse", 0, 40000], ["Betriebsausgabe", 4950, "Beratung", 10000, 0], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", 0, 700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200, 0]]) : period([["Einnahmen", 8400, "Erlöse", 0, 5000], ["Betriebsausgabe", 4950, "Beratung", 15000, 0]]) };
+      }
+      if (op === "receiptsGet") return { data: [] };
+      throw new Error(`unexpected ${op}`);
+    });
+    return { client: { call } as unknown as BBClient, call };
+  }
+
+  it("je Monat eine Summen- und Saldenliste ab Januar und Zeilen für Monate, Quartal und Jahr", async () => {
+    const { client, call } = monthsClient();
+    const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 380 }));
+    expect(call.mock.calls.filter(([op]) => op === "reportsCreateSums").map(([, p]) => (p as { date_from: string; date_to: string }).date_from + ".." + (p as { date_to: string }).date_to)).toEqual(["2026-01-01..2026-01-31", "2026-02-01..2026-02-15"]);
+    expect(res.perioden.map((p: { schluessel: string }) => p.schluessel)).toEqual(["2026-01", "2026-02", "2026-Q1", "2026"]);
+    expect(res.perioden[0]).toMatchObject({ umsatzsteuer: 700, vorsteuer: 200, zahllast: 500, gewinn: 30000, gewinn_kum: 30000 });
+    expect(res.annahmen).toMatchObject({ rechtsform: "einzelunternehmen", hebesatz_pct: 380 });
+  });
+
+  it("Schätzung als Zuwachs der kumulierten Schätzung: Verlustmonat senkt sie, das angefangene Quartal ist teilweise", async () => {
+    const { client } = monthsClient();
+    const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 380 }));
+    const by = (k: string) => res.perioden.find((p: { schluessel: string }) => p.schluessel === k);
+    // kumuliert 30.000 -> Gewerbesteuer 729,60; kumuliert 20.000 (30.000 - 10.000) unter dem Freibetrag -> 0
+    expect(by("2026-01").gewerbesteuer).toBe(729.6);
+    expect(by("2026-02").gewerbesteuer).toBe(-729.6);
+    expect(by("2026-Q1")).toMatchObject({ teilweise: true, gewerbesteuer: 0, gewinn: 20000 });
+    expect(by("2026")).toMatchObject({ teilweise: true });
+  });
+
+  it("ohne Rechtsform und Hebesatz keine Schätzung, aber Umsatzsteuer und Gewinn", async () => {
+    const { client } = monthsClient();
+    const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-02-15" }));
+    expect(res.perioden[0].gewerbesteuer).toBeNull();
+    expect(res.perioden[0].zahllast).toBe(500);
+    expect(res.warnings.join(" ")).toMatch(/Keine Steuerschätzung/);
+  });
+
+  it("unbekannte Unternehmensform wird gemeldet statt geraten", async () => {
+    const { client } = monthsClient();
+    const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "Verein", hebesatz_pct: 380 }));
+    expect(res.warnings.join(" ")).toMatch(/nicht erkannt/);
+    expect(res.perioden[0].gewerbesteuer).toBeNull();
   });
 });

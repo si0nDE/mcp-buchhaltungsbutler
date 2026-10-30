@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { createBankOverviewTools } from "./bank-overview.js";
+import { createBankOverviewTools, pairOff } from "./bank-overview.js";
 
 // Erfundene Zahlen. Zwei Konten: Giro (bank) mit einer ungebuchten Zahlung, Kasse (cash). Zahlungen: id, Datum, Betrag.
 const TX: Record<number, Array<{ id_by_customer: string; booking_date: string; amount: string; to_from: string; purpose: string | null }>> = {
@@ -40,9 +40,11 @@ function fakeClient() {
       };
     }
     if (op === "reportsGetSumsLedger") {
+      // Interimskonto 1590: Rücklastschrift 30 im Soll und im Haben (gepaart), dazu 20 im Soll ohne Gegenbuchung. Geldtransit 1360: leer.
+      const row = (id: number, side: string, amount: string, datum: string) => ({ id_by_customer: id, date: `${datum} 00:00:00`, record_side: side, record_amount: amount, counterRecordPostingaccountNumber: 1200, postingTextFull: `Buchung ${id}`, receipts_id_by_customer: null });
       return {
         report_sums_postingaccount_ledger: {
-          postingaccountLedger: [{ id_by_customer: 21, date: "2026-03-11 00:00:00", record_side: "debit", record_amount: "30.00", counterRecordPostingaccountNumber: 4950, postingTextFull: "unklar", receipts_id_by_customer: null }],
+          postingaccountLedger: Number(params.postingaccount_number) === 1590 ? [row(21, "debit", "30.00", "2026-03-11"), row(22, "credit", "30.00", "2026-03-13"), row(23, "debit", "20.00", "2026-03-20")] : [],
         },
       };
     }
@@ -75,14 +77,17 @@ describe("get_bank_overview", () => {
     expect(res.summe.nicht_gebucht_anzahl).toBe(1);
   });
 
-  it("Buchungen auf dem Interimskonto 'Kontierung nicht bekannt', nicht auf Geldtransit", async () => {
+  it("Durchlaufende Posten: gepaarte Buchungen gleichen sich aus, übrig bleibt die offene; leere Interimskonten fehlen", async () => {
     const { client, call } = fakeClient();
     const [tool] = createBankOverviewTools(client, { sleep, pollMs: 1 });
     const res = parse(await tool.handler({ as_of: "2026-03-31" }));
-    expect(res.unklare_buchungen).toHaveLength(1);
-    expect(res.unklare_buchungen[0]).toMatchObject({ konto: 1590, saldo: 30 });
-    expect(res.unklare_buchungen[0].buchungen[0]).toMatchObject({ datum: "2026-03-11", betrag: 30, gegenkonto: 4950 });
-    expect(call.mock.calls.filter(([op]) => op === "reportsGetSumsLedger")).toHaveLength(1);
+    expect(res.durchlaufende_posten).toHaveLength(1);
+    const d = res.durchlaufende_posten[0];
+    expect(d).toMatchObject({ konto: 1590, art: "durchlaufende_posten", saldo: 30, ausgeglichen: false, buchungen_anzahl: 3, paare: 1 });
+    expect(d.offen).toEqual([expect.objectContaining({ id: 23, betrag: 20, datum: "2026-03-20" })]);
+    expect(res.durchlaufende_ausgeglichen).toBe(false);
+    // Geldtransit 1360 hat weder Saldo noch Buchungen und taucht nicht auf, wurde aber abgefragt
+    expect(call.mock.calls.filter(([op]) => op === "reportsGetSumsLedger")).toHaveLength(2);
   });
 
   it("wartet auf eine gerade laufende Summen- und Saldenliste", async () => {
@@ -103,5 +108,20 @@ describe("get_bank_overview", () => {
     await expect(tool.handler({ as_of: "31.03.2026" })).rejects.toThrow(/YYYY-MM-DD/);
     await expect(tool.handler({ as_of: "2026-03-31", date_from: "2026-04-01" })).rejects.toThrow(/nach as_of/);
     expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("pairOff", () => {
+  const b = (id: number, datum: string, betrag: number) => ({ konto: 1590, id, datum, text: "", betrag, gegenkonto: null, beleg: false });
+  it("paart Soll und Haben gleichen Betrags, die älteste zuerst; Gleiches im Soll paart sich nicht", () => {
+    const r = pairOff([b(1, "2026-01-02", 100), b(2, "2026-01-09", -100), b(3, "2026-02-01", 50), b(4, "2026-02-02", 50), b(5, "2026-02-03", -50)]);
+    expect(r.paare).toBe(2);
+    expect(r.offen.map((x) => x.id)).toEqual([4]);
+  });
+  it("nichts offen, wenn alles Gegenbuchungen hat; Nullbuchungen werden ignoriert", () => {
+    expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -10), b(3, "2026-01-04", 0)])).toEqual({ paare: 1, offen: [] });
+  });
+  it("verschiedene Beträge bleiben offen, auch wenn die Summe passt", () => {
+    expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -4), b(3, "2026-01-04", -6)]).offen).toHaveLength(3);
   });
 });

@@ -318,7 +318,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       comparison_to: z.string().optional().describe("YYYY-MM-DD, nur zusammen mit comparison_from."),
       series: z.boolean().optional().describe("Zeitreihe über sechs Monate bis zum Ende des Zeitraums (Standard true). false spart sechs Reports."),
       with_postings: z.boolean().optional().describe("Je Konto die Buchungen des Zeitraums (Kontenblatt) mitliefern, Standard true. false spart einen Aufruf je Konto."),
-      split_threshold_pct: z.number().min(0).max(100).optional().describe("Konten in 'Sonstige Kosten' ab diesem Anteil an den Kosten werden eine eigene Kostenart, Standard 10, 0 schaltet es ab."),
+      split_threshold_pct: z.number().min(0).max(100).optional().describe("Konten in 'Sonstige Kosten' ab diesem Anteil an den Kosten werden eine eigene Kostenart. Standard 0 = aus: die Kostenarten bleiben die der BWA, 'Sonstige Kosten' steht am Ende."),
       save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
     },
     async handler(args) {
@@ -350,7 +350,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       const k = kpisFromBwa(cur);
       const p = kpisFromBwa(prev);
 
-      const promote = promotedAccounts(k, args.split_threshold_pct ?? 10);
+      const promote = promotedAccounts(k, args.split_threshold_pct ?? 0);
       const kostenarten = mergeArten(promoteAccounts(k, promote).kostenarten, promoteAccounts(p, promote).kostenarten, k.kosten);
       const ertragsarten = mergeArten(k.ertragsarten, p.ertragsarten, k.ertraege);
 
