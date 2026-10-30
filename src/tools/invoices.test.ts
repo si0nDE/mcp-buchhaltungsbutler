@@ -94,22 +94,27 @@ describe("invoices tools", () => {
     expect(payload).not.toHaveProperty("payment_reference");
   });
 
-  it("create_einvoice calls invoicesCreateEInvoice with tax fields flattened", async () => {
-    const client = mockClient({ success: true });
-    const [, createEInvoice] = createInvoicesTools(client);
+  const einvoiceBase = {
+    type: "invoice" as const,
+    show_prices_type: "net" as const,
+    company_name: "ACME GmbH",
+    date: "2026-01-01",
+    e_invoice: true,
+    street: "Hauptstr. 1",
+    zip: "10115",
+    city: "Berlin",
+    country: "Deutschland",
+    email: "buchhaltung@acme.example",
+    draft: false,
+  };
 
-    await createEInvoice.handler({
-      type: "invoice",
-      show_prices_type: "net",
-      company_name: "ACME GmbH",
-      date: "2026-01-01",
-      e_invoice_id: "XR-1",
-      street: "Hauptstr. 1",
-      zip: "10115",
-      city: "Berlin",
-      country: "Deutschland",
-      email: "buchhaltung@acme.example",
-      items: [{ name: "Beratung", amount: "1", unit: "Std.", tax_type: "19", tax_amount: "19.00", single_price: "100.00" }],
+  it("create_invoice with e_invoice calls invoicesCreateEInvoice, vat becomes tax type S and default reference 0", async () => {
+    const client = mockClient({ success: true });
+    const [createInvoice] = createInvoicesTools(client);
+
+    await createInvoice.handler({
+      ...einvoiceBase,
+      items: [{ name: "Beratung", amount: "1", unit: "Std.", vat: "19", single_price: "100.00" }],
     });
 
     expect(client.call).toHaveBeenCalledWith("invoicesCreateEInvoice", {
@@ -117,18 +122,47 @@ describe("invoices tools", () => {
       show_prices_type: "net",
       company_name: "ACME GmbH",
       date: "2026-01-01",
-      e_invoice_id: "XR-1",
       street: "Hauptstr. 1",
       zip: "10115",
       city: "Berlin",
       country: "Deutschland",
       email: "buchhaltung@acme.example",
+      e_invoice_id: "0",
       item_name: ["Beratung"],
       item_amount: ["1"],
       item_unit: ["Std."],
-      item_tax_type: ["19"],
-      item_tax_amount: ["19.00"],
       item_single_price: ["100.00"],
+      item_tax_type: ["S"],
+      item_tax_amount: ["19"],
     });
+  });
+
+  it("e_invoice takes an explicit tax_type for vat 0 and a given reference", async () => {
+    const client = mockClient({ success: true });
+    const [createInvoice] = createInvoicesTools(client);
+    await createInvoice.handler({
+      ...einvoiceBase,
+      e_invoice_id: "04011000-12345-34",
+      items: [
+        { name: "A", amount: "1", unit: "Std.", vat: "19", single_price: "10" },
+        { name: "B", amount: "1", unit: "Std.", vat: "0", tax_type: "AE", single_price: "10" },
+      ],
+    });
+    expect(client.call).toHaveBeenCalledWith(
+      "invoicesCreateEInvoice",
+      expect.objectContaining({ e_invoice_id: "04011000-12345-34", item_tax_type: ["S", "AE"], item_tax_amount: ["19", "0"] })
+    );
+  });
+
+  it("e_invoice rejects vat 0 without tax_type, missing address fields, drafts and stray fields; BHB is not called", async () => {
+    const client = mockClient({ success: true });
+    const [createInvoice] = createInvoicesTools(client);
+    const item = { name: "A", amount: "1", unit: "Std.", vat: "19", single_price: "10" };
+    await expect(createInvoice.handler({ ...einvoiceBase, items: [{ ...item, vat: "0" }] })).rejects.toThrow(/tax_type/);
+    await expect(createInvoice.handler({ ...einvoiceBase, street: " ", items: [item] })).rejects.toThrow(/street/);
+    await expect(createInvoice.handler({ ...einvoiceBase, draft: true, items: [item] })).rejects.toThrow(/Entwurf/);
+    await expect(createInvoice.handler({ ...einvoiceBase, e_invoice: undefined, items: [{ ...item, tax_type: "S" }] })).rejects.toThrow(/e_invoice/);
+    await expect(createInvoice.handler({ ...einvoiceBase, e_invoice: undefined, e_invoice_id: "0", items: [item] })).rejects.toThrow(/e_invoice/);
+    expect(client.call).not.toHaveBeenCalled();
   });
 });

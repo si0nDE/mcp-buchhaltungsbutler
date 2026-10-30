@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **54 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **53 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.
@@ -137,7 +137,7 @@ tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundla
 | Receipts | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions`, `pair_receipt_family` |
 | Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts`, `delete_transaction` |
 | Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
-| Invoices | `create_invoice`, `create_einvoice`, `create_invoice_correction` |
+| Invoices | `create_invoice`, `create_invoice_correction` |
 | Month-end | `check_month_end` (read-only closing checks), `calculate_account_balance` |
 | USt-VA | `get_ustva_position` (which VAT-return field an account lands in), `preview_vat_impact` (sums of the tax accounts for a period plus `elster_estimate` with the Bemessungsgrundlagen floored to full euros like ELSTER; still not the ELSTER figure) |
 | Booking guide | `get_booking_guide` (documented BHB special cases: Skonto, Geldtransit, Auslagen, RAP, OSS, foreign currency, ...) |

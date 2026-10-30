@@ -18,21 +18,31 @@ const invoiceItemShape = z.object({
   vat: z.string(),
   single_price: z.string(),
   description: z.string().optional(),
+  tax_type: z
+    .enum(["S", "Z", "AE", "K", "G", "E"])
+    .optional()
+    .describe(
+      "Nur bei e_invoice: Steuerart. S = Umsatzsteuer (Satz aus vat, Standard bei vat > 0), Z = 0 %, AE = Reverse Charge (§ 13b), " +
+        "K = EU-Lieferung, G = Drittlandslieferung (Export), E = steuerfrei. Bei vat 0 Pflicht, sonst bricht der Konnektor ab."
+    ),
 });
 
-const eInvoiceItemShape = z.object({
-  name: z.string(),
-  amount: z.string(),
-  unit: z.string(),
-  tax_type: z.string(),
-  tax_amount: z.string(),
-  single_price: z.string(),
-  description: z.string().optional(),
-});
+// E-Rechnung: vat bleibt der Satz, der Konnektor macht daraus tax_type/tax_amount (S mit Satz, sonst die gewählte Art mit 0).
+function eInvoiceTax(item: { vat: string; tax_type?: string }, index: number): { type: string; amount: string } {
+  const rate = Number(item.vat.replace(",", "."));
+  if (!Number.isFinite(rate)) throw new Error(`items[${index}].vat ist keine Zahl: "${item.vat}".`);
+  const type = item.tax_type ?? (rate > 0 ? "S" : undefined);
+  if (type === undefined) {
+    throw new Error(
+      `items[${index}]: bei vat 0 braucht eine E-Rechnung tax_type (Z = 0 %, AE = Reverse Charge, K = EU-Lieferung, G = Export, E = steuerfrei).`
+    );
+  }
+  return type === "S" ? { type, amount: item.vat } : { type, amount: "0" };
+}
 
 function flattenItems<
   T extends { name: string; amount: string; unit: string; single_price: string; description?: string },
->(items: T[], extra: Array<{ key: string; get: (item: T) => string }>): Record<string, string[]> {
+>(items: T[], extra: Array<{ key: string; get: (item: T, index: number) => string }>): Record<string, string[]> {
   const base: Record<string, string[]> = {
     item_name: items.map((i) => i.name),
     item_amount: items.map((i) => i.amount),
@@ -40,7 +50,7 @@ function flattenItems<
     item_single_price: items.map((i) => i.single_price),
   };
   for (const { key, get } of extra) {
-    base[key] = items.map(get);
+    base[key] = items.map((item, n) => get(item, n));
   }
   if (items.some((i) => i.description !== undefined)) {
     base.item_description = items.map((i) => i.description ?? "");
@@ -83,7 +93,7 @@ const sharedInvoiceFields = {
   language: z.enum(["de_DE", "en_US"]).optional(),
 };
 
-export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDef] {
+export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
   // invoicenumber/due_days/payment_reference are accepted by invoicesCreate and
   // invoicesCreateEInvoice, but NOT by invoicesCreateDraft - stripped below when draft.
   const createInvoiceShape = {
@@ -106,6 +116,17 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       .optional()
       .describe("Only Amazon order id, PayPal transaction id and Stripe transaction id are supported; then the receipt matches that payment."),
     draft: z.boolean().default(false),
+    e_invoice: z
+      .boolean()
+      .optional()
+      .describe(
+        "true = E-Rechnung (ZUGFeRD/XRechnung statt reinem PDF; Schalter \"E-Rechnung\" der Oberfläche). Bei Geschäftskunden (B2B) die Regel, bei Privatkunden reicht PDF. " +
+          "Pflicht dann: street, zip, city, country, email; kein draft. Versendet wird auch dann nichts."
+      ),
+    e_invoice_id: z
+      .string()
+      .optional()
+      .describe("Nur bei e_invoice: Referenz beim Käufer / Leitweg-ID (öffentliche Auftraggeber: die Leitweg-ID des Empfängers). Standard \"0\"."),
     items: z.array(invoiceItemShape).min(1),
     ...recurringGuardShape,
     ...recurringEndShape,
@@ -127,7 +148,10 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       "next one of the account's numbering, which must contain at least one digit). A NEGATIVE total makes BuchhaltungsButler " +
       "label the document a Rechnungskorrektur: then say \"Rechnungskorrektur zur Rechnung Nr. ... vom ...\" in correspondence " +
       "(create_invoice_correction does this for you for a full correction). " + RECURRING_DESCRIPTION + " Rates 5.5% and 10.7% cannot be " +
-      "booked afterwards. For a structured e-invoice (XRechnung/ZUGFeRD), use create_einvoice instead.",
+      "booked afterwards. e_invoice: true creates a structured e-invoice (ZUGFeRD/XRechnung) via the e-invoice endpoint: use it for business customers (B2B), " +
+      "a plain PDF is fine for consumers (B2C); it needs street, zip, city, country and email, no draft, and items with vat 0 need a tax_type; the company master data " +
+      "(address, tax number or USt-ID) must be complete in the account. A period of service must be given as its last day. It sends nothing. " +
+      "Not verified: whether later runs of an e-invoice plan are e-invoices again.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createInvoiceShape,
@@ -141,11 +165,27 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
         dry_run,
         confirm_creates_first_invoice,
         allow_open_ended,
+        e_invoice,
+        e_invoice_id,
         ...fields
       } = args;
+      if (e_invoice) {
+        if (draft) throw new Error("e_invoice kennt keinen Entwurf (draft).");
+        const missing = (["street", "zip", "city", "country", "email"] as const).filter((k) => !fields[k]?.trim());
+        if (missing.length > 0) throw new Error(`E-Rechnung: ${missing.join(", ")} fehlt (Pflicht in der Oberfläche und in der API).`);
+      } else {
+        if (e_invoice_id !== undefined) throw new Error("e_invoice_id gehört nur zu e_invoice: true.");
+        if (items.some((i) => i.tax_type !== undefined)) throw new Error("tax_type gehört nur zu e_invoice: true.");
+      }
+      const taxes = e_invoice ? items.map((i, n) => eInvoiceTax(i, n)) : [];
       if (dry_run) return ok(recurringDryRun({ ...fields, items, draft }));
       assertRecurring({ ...fields, draft, confirm_creates_first_invoice, allow_open_ended });
-      const flattened = flattenItems(items, [{ key: "item_vat", get: (i) => i.vat }]);
+      const flattened = e_invoice
+        ? flattenItems(items, [
+            { key: "item_tax_type", get: (_i, n) => taxes[n].type },
+            { key: "item_tax_amount", get: (_i, n) => taxes[n].amount },
+          ])
+        : flattenItems(items, [{ key: "item_vat", get: (i) => i.vat }]);
 
       if (draft) {
         const payload = { ...fields, ...flattened };
@@ -155,6 +195,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
 
       const payload = {
         ...fields,
+        ...(e_invoice ? { e_invoice_id: e_invoice_id ?? "0" } : {}),
         ...(invoicenumber !== undefined ? { invoicenumber } : {}),
         ...(due_days !== undefined ? { due_days } : {}),
         ...(payment_reference !== undefined ? { payment_reference } : {}),
@@ -162,7 +203,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
       };
       let result: unknown;
       try {
-        result = await client.call("invoicesCreate", payload);
+        result = await client.call(e_invoice ? "invoicesCreateEInvoice" : "invoicesCreate", payload);
       } catch (err) {
         if (fields.recurring_interval === undefined) throw err;
         // Am 29.10.2026 endete ein Aufruf mit HTTP 500 und hatte die Rechnung trotzdem angelegt (ohne Plan).
@@ -178,53 +219,6 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
           ...supplyDateWarnings(fields),
           ...unbookableRateWarnings(items),
           ...(fields.recurring_interval !== undefined ? [recurringCreatedWarning(fields.recurring_date_end)] : []),
-        ])
-      );
-    },
-  });
-
-  const createEInvoiceShape = {
-    ...sharedInvoiceFields,
-    street: z.string(),
-    zip: z.string(),
-    city: z.string(),
-    country: z.string(),
-    email: z.string(),
-    invoicenumber: z.string().optional(),
-    due_days: z.string().optional(),
-    payment_reference: z.string().optional(),
-    e_invoice_id: z.string(),
-    items: z.array(eInvoiceItemShape).min(1),
-    ...recurringGuardShape,
-  };
-
-  const createEInvoice = defineTool({
-    name: "create_einvoice",
-    description:
-      "Create a structured e-invoice (e.g. XRechnung/ZUGFeRD) with tax-type/tax-amount line items. " +
-      "Requires the full postal address and email in addition to the base invoice fields, and the company master data " +
-      "(address, tax number or USt-ID) must be complete in the account. e_invoice_id is the buyer reference (\"0\" if there is none); " +
-      "for public contracting authorities it must be the Leitweg-ID the recipient provides. A period of service must be given as its " +
-      "last day. " + RECURRING_DESCRIPTION + " For a normal " +
-      "PDF invoice, credit note, or offer, use create_invoice instead.",
-    annotations: { readOnlyHint: false, destructiveHint: false },
-    outputSchema: OBJECT_OUTPUT_SHAPE,
-    inputSchema: createEInvoiceShape,
-    async handler(args) {
-      const { items, confirm_creates_first_invoice, allow_open_ended, ...fields } = args;
-      assertRecurring({ ...fields, confirm_creates_first_invoice, allow_open_ended });
-      const payload = {
-        ...fields,
-        ...flattenItems(items, [
-          { key: "item_tax_type", get: (i) => i.tax_type },
-          { key: "item_tax_amount", get: (i) => i.tax_amount },
-        ]),
-      };
-      const result = await client.call("invoicesCreateEInvoice", payload);
-      return ok(
-        withWarnings(result, [
-          ...supplyDateWarnings(fields),
-          ...(fields.recurring_interval !== undefined ? [recurringCreatedWarning()] : []),
         ])
       );
     },
@@ -252,5 +246,5 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     },
   });
 
-  return [createInvoice, createEInvoice, createInvoiceCorrection];
+  return [createInvoice, createInvoiceCorrection];
 }

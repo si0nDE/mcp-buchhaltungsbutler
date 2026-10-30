@@ -37,7 +37,7 @@ describe("tools for endpoints added in the live API spec", () => {
 
   it("create_invoice_correction calls invoicesInvoiceCorrectionCreate", async () => {
     const client = mockClient();
-    const tool = createInvoicesTools(client)[2];
+    const tool = createInvoicesTools(client)[1];
     await tool.handler({ receipt_id_by_customer: 5 });
     expect(client.call).toHaveBeenCalledWith("invoicesInvoiceCorrectionCreate", { receipt_id_by_customer: 5 });
   });

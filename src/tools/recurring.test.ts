@@ -103,11 +103,12 @@ describe("Wiederholungsrechnungen", () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
-  it("create_einvoice bricht mit Wiederholung ohne Bestätigung ab", async () => {
+  it("E-Rechnung (e_invoice) bricht mit Wiederholung ohne Bestätigung ab", async () => {
     const { client, call } = await connect();
     const res = await client.callTool({
-      name: "create_einvoice",
+      name: "create_invoice",
       arguments: {
+        e_invoice: true,
         type: "invoice",
         show_prices_type: "net",
         company_name: "Muster Transport GmbH",
@@ -118,9 +119,10 @@ describe("Wiederholungsrechnungen", () => {
         country: "Deutschland",
         email: "x@example.invalid",
         e_invoice_id: "0",
-        items: [{ name: "Betreuung", amount: "1", unit: "Monat", tax_type: "19", tax_amount: "7.60", single_price: "40.00" }],
+        items: [{ name: "Betreuung", amount: "1", unit: "Monat", vat: "19", single_price: "40.00" }],
         recurring_interval: "monthly",
         recurring_date_next: "2027-01-01",
+        recurring_date_end: "2027-06-01",
       },
     });
     expect(res.isError).toBe(true);
