@@ -103,7 +103,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
     description:
       "Banken-Übersicht fürs Controlling: je Zahlungskonto (Bank, Kasse, Darlehens- und Verrechnungskonten) der gebuchte Stand (Summen- und " +
       "Saldenliste), der Zahlungsstand (alle Zahlungen, ob gebucht oder nicht), die Differenz, die Umsätze im Zeitraum (Ein- und " +
-      "Auszahlungen), die noch nicht gebuchten Zahlungen einzeln und die Prüfung, ob durchlaufende Posten und Geldtransit ausgeglichen sind (Saldo, gepaarte und offene Buchungen). " +
+      "Auszahlungen), alle Zahlungen des Zeitraums je Konto mit Buchungsstatus und Gegenkonten (zahlungen; with_payments: false lässt sie weg), die noch nicht gebuchten Zahlungen einzeln und die Prüfung, ob durchlaufende Posten und Geldtransit ausgeglichen sind (Saldo, gepaarte und offene Buchungen). " +
       "Fragt der Nutzer, was auf welchem Konto liegt, ob Zahlungen offen oder unerklärt sind, dieses Tool aufrufen und als Artefakt " +
       "darstellen. Es erzeugt eine Summen- und Saldenliste und ERSETZT damit die zuletzt in BHB erzeugte. Bei angebundenen Bankkonten " +
       "zeigt die Oberfläche den von der Bank gemeldeten Stand, der kann vom Zahlungsstand abweichen. as_of und date_from als YYYY-MM-DD.",
@@ -112,6 +112,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
     inputSchema: {
       as_of: z.string().optional().describe("YYYY-MM-DD, Stichtag der Stände. Standard: heute."),
       date_from: z.string().optional().describe("YYYY-MM-DD, Beginn des Umsatzzeitraums. Standard: 1. Januar des Jahres von as_of."),
+      with_payments: z.boolean().optional().describe("Alle Zahlungen des Zeitraums je Konto mitliefern (zahlungen: Datum, Betrag, Gegenpartei, Zweck, gebucht, Gegenkonten), Standard true. false liefert nur die nicht gebuchten."),
       save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
     },
     async handler(args) {
@@ -163,16 +164,30 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
         };
       });
 
-      const nichtGebucht = open
-        .map((r) => ({
-          konto: Number(r._konto),
-          id: Number(r.id_by_customer),
-          datum: String(r.booking_date ?? "").slice(0, 10),
-          betrag: r2(Number(r.amount)),
-          gegenpartei: String(r.to_from ?? ""),
-          zweck: String(r.purpose ?? "").split("\n")[0].slice(0, 140),
-        }))
-        .sort((a, b) => b.datum.localeCompare(a.datum) || a.konto - b.konto);
+      const zeile = (r: Row) => ({
+        konto: Number(r._konto),
+        id: Number(r.id_by_customer),
+        datum: String(r.booking_date ?? "").slice(0, 10),
+        betrag: r2(Number(r.amount)),
+        gegenpartei: String(r.to_from ?? ""),
+        zweck: String(r.purpose ?? "").split("\n")[0].slice(0, 140),
+      });
+      const nichtGebucht = open.map(zeile).sort((a, b) => b.datum.localeCompare(a.datum) || a.konto - b.konto);
+
+      // Alle Zahlungen des Zeitraums mit Buchungsstatus und Gegenkonten (die Seite der Buchung, die nicht das Zahlungskonto ist).
+      const kontoName = (nr: string) => entries[nr]?.postingaccount?.name ?? "";
+      const zahlungen =
+        args.with_payments === false
+          ? []
+          : status.rows
+              .map((r) => {
+                const ps = status.postings.get(String(r.id_by_customer)) ?? [];
+                const eigenes = String(r._konto);
+                const gegen = [...new Set(ps.map((p) => (String(p.debit_postingaccount_number) === eigenes ? String(p.credit_postingaccount_number) : String(p.debit_postingaccount_number))))];
+                const st = r.posting_status as { booked: boolean | null; fixed: boolean };
+                return { ...zeile(r), gebucht: st.booked, festgeschrieben: st.fixed, gegenkonten: gegen.map((nr) => ({ nummer: Number(nr), name: kontoName(nr) })) };
+              })
+              .sort((a, b) => a.konto - b.konto || b.datum.localeCompare(a.datum) || b.id - a.id);
 
       // Durchlaufende Posten und Geldtransit: alle Interimskonten mit Bewegung oder Saldo, mit dem, was sich nicht ausgleicht
       const durchlaufend: Array<{ konto: number; name: string; art: string; saldo: number; ausgeglichen: boolean; buchungen_anzahl: number; paare: number; gruppen: number; offen: Buchung[] }> = [];
@@ -209,6 +224,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
           nicht_gebucht_anzahl: nichtGebucht.length,
         },
         nicht_gebuchte_zahlungen: nichtGebucht,
+        zahlungen,
         durchlaufende_posten: durchlaufend,
         durchlaufende_ausgeglichen: durchlaufend.every((d) => d.ausgeglichen),
         hinweise: [

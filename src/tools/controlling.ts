@@ -211,6 +211,8 @@ const utc = (s: string) => {
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const monthStart = (y: number, m0: number) => iso(new Date(Date.UTC(y, m0, 1)));
 const monthEnd = (y: number, m0: number) => iso(new Date(Date.UTC(y, m0 + 1, 0)));
+const minusOneYear = (s: string) => `${Number(s.slice(0, 4)) - 1}${s.slice(4)}`;
+const dayBefore = (s: string) => iso(new Date(utc(s).getTime() - 86400000));
 
 export type { Range };
 
@@ -291,6 +293,108 @@ export async function fetchLedger(client: BBClient, konto: number, side: "debit"
   });
 }
 
+// Kapitalrentabilität wie im Dashboard (Kachel "Kapitalrentabilität"), Stand 30.10.2026 gegen ein Livekonto (EÜR, SKR03)
+// für Q2 und Q3 auf den Cent nachgerechnet. Eigen- und Fremdkapital kommen aus der Summen- und Saldenliste vom 1.1. des
+// Jahres bis zum Stichtag (Stichtage siehe capitalAt), der Durchschnitt ist das Mittel aus Anfang und Ende.
+//   Eigenkapital = Ergebnis seit Jahresbeginn (Klassen Einnahmen, Betriebsausgabe, Abschreibungen) - Saldo Privat (Soll positiv)
+//   Fremdkapital = Saldo von Umsatzsteuer, Vorsteuer und Verbindlichkeiten, Haben positiv. Darlehen der Klasse Finanzkonto
+//                  zählen nicht (die stecken im Cash-Bestand).
+//   Eigenkapitalrentabilität = Ergebnis / Ø Eigenkapital, Fremdkapitalrentabilität = Zinsaufwand / Ø Fremdkapital,
+//   Gesamtkapitalrentabilität = (Ergebnis + Zinsaufwand) / (Ø Eigenkapital + Ø Fremdkapital), je in Prozent.
+// Bei negativem Eigenkapital kehrt sich das Vorzeichen um (Gewinn auf negatives Kapital ergibt eine negative Rendite).
+interface SumsEntry {
+  postingaccount?: { class?: string };
+  balanceAfterAbsolute?: number;
+  balanceAfterSide?: string;
+}
+export interface Sums {
+  sums?: Record<string, SumsEntry>;
+  integrityError?: boolean;
+}
+const RESULT_CLASSES = new Set(["Einnahmen", "Betriebsausgabe", "Abschreibungen"]);
+const DEBT_CLASSES = new Set(["Umsatzsteuer", "Vorsteuer", "Verbindlichkeiten"]);
+const signedBalance = (e: SumsEntry) => (e.balanceAfterSide === "credit" ? -1 : 1) * (e.balanceAfterAbsolute ?? 0);
+
+export interface KapitalTeile {
+  ergebnis: number;
+  privat: number;
+  fremdkapital: number;
+}
+
+export function capitalFromSums(report: Sums): KapitalTeile {
+  let ergebnis = 0;
+  let privat = 0;
+  let fremd = 0;
+  for (const e of Object.values(report.sums ?? {})) {
+    const cls = e.postingaccount?.class ?? "";
+    if (RESULT_CLASSES.has(cls)) ergebnis -= signedBalance(e);
+    else if (cls === "Privat") privat += signedBalance(e);
+    else if (DEBT_CLASSES.has(cls)) fremd -= signedBalance(e);
+  }
+  return { ergebnis: r2(ergebnis), privat: r2(privat), fremdkapital: r2(fremd) };
+}
+
+// Stichtage wie BHB (am Livekonto für den 1.4. und den 1.7. nachgerechnet): Am Ende zählt alles bis einschließlich des
+// letzten Tags. Am Anfang nimmt BHB das Ergebnis bis einschließlich des ersten Tags, Privat und Fremdkapital aber nur bis
+// zum Vortag. `vortag` ist null, wenn der erste Tag der 1.1. ist: dann sind Privat und Fremdkapital 0 (für Januar und Q1
+// gegen BHB nachgerechnet).
+export function capitalAt(anfang: { tag: KapitalTeile; vortag: KapitalTeile | null }, ende: KapitalTeile): { ek: Kapital; fk: Kapital } {
+  const v = anfang.vortag ?? { ergebnis: 0, privat: 0, fremdkapital: 0 };
+  return {
+    ek: kapital(r2(anfang.tag.ergebnis - v.privat), r2(ende.ergebnis - ende.privat)),
+    fk: kapital(v.fremdkapital, ende.fremdkapital),
+  };
+}
+
+export interface Kapital {
+  anfang: number;
+  ende: number;
+  durchschnitt: number;
+}
+const kapital = (anfang: number, ende: number): Kapital => ({ anfang, ende, durchschnitt: r2((anfang + ende) / 2) });
+// Ungerundet, damit die Differenz in Prozentpunkten wie im Dashboard aus den genauen Werten entsteht.
+const ratio = (num: number, den: number): number | null => (den === 0 ? null : (num / den) * 100);
+const roundOrNull = (n: number | null) => (n === null ? null : r2(n));
+const diffOrNull = (a: number | null, b: number | null) => (a === null || b === null ? null : r2(a - b));
+
+export function kapitalSkala(groesster: number): { min: number; max: number } {
+  const max = groesster <= 100 ? 100 : r2(1.5 * groesster);
+  return { min: -max, max };
+}
+
+export function returnOnCapital(ergebnis: number, zins: number, ek: Kapital, fk: Kapital) {
+  // Mit dem ungerundeten Mittel wie BHB; der gerundete Durchschnitt ist nur für die Anzeige.
+  const ekMittel = (ek.anfang + ek.ende) / 2;
+  const fkMittel = (fk.anfang + fk.ende) / 2;
+  return {
+    eigenkapital: ratio(ergebnis, ekMittel),
+    fremdkapital: ratio(zins, fkMittel),
+    gesamtkapital: ratio(ergebnis + zins, ekMittel + fkMittel),
+  };
+}
+
+// Kurze Erklärungen je Kennzahl in eigenen Worten (für Fragen des Nutzers und die Info-Symbole im Artefakt). Sie
+// beschreiben, was hier tatsächlich gerechnet wird, auch wo BHBs eigener Infotext davon abweicht.
+const ERKLAERUNGEN = {
+  ertraege: "Alles, was im Zeitraum hereinkam: die Gesamtleistung (Umsatz und sonstige betriebliche Erträge) plus neutrale Erträge wie Zinserträge. Neutral heißt: nicht aus dem laufenden Geschäft.",
+  kosten: "Alle Aufwände des Zeitraums: die Gesamtkosten der BWA (Betriebswirtschaftliche Auswertung), der Wareneinsatz und neutraler Aufwand wie Zinsen.",
+  gesamtergebnis: "Erträge minus Kosten, also der Gewinn oder Verlust des Zeitraums laut Buchhaltung, vor Steuern vom Einkommen.",
+  ebit: "EBIT steht für Earnings Before Interest and Taxes, auf Deutsch das Betriebsergebnis vor Zinsen und Steuern vom Einkommen. Es zeigt, ob das Kerngeschäft Geld verdient. Die EBIT-Marge ist das EBIT geteilt durch die Gesamtleistung.",
+  ebitda: "EBITDA steht für Earnings Before Interest, Taxes, Depreciation and Amortisation, also das Ergebnis vor Zinsen, Steuern und Abschreibungen: EBIT plus Abschreibungen. Es zeigt die operative Leistung ohne die Wertminderung von Anlagen. Die EBITDA-Marge ist das EBITDA geteilt durch die Gesamtleistung.",
+  umsatzrentabilitaet: "EBIT geteilt durch die Umsatzerlöse: wie viel Cent von jedem Euro Umsatz als Betriebsergebnis übrig bleiben.",
+  rule_of_bhb: "Eine Faustzahl von BuchhaltungsButler: das Umsatzwachstum gegenüber dem Vergleichszeitraum in Prozent plus die Umsatzrentabilität. Sie zeigt Wachstum und Ertragskraft in einer Zahl, höher ist besser. BuchhaltungsButlers eigener Text nennt die EBIT-Marge, gerechnet wird aber mit der Umsatzrentabilität.",
+  kostenarten: "Die Kosten nach Kostenart der BWA mit ihrem Anteil an allen Kosten und der Veränderung gegenüber dem Vergleichszeitraum. 'Sonstige Kosten' sammelt, was keiner eigenen Kostenart zugeordnet ist.",
+  cogs: "COGS steht für Cost of Goods Sold, auf Deutsch Wareneinsatz: die direkt produktbezogenen Kosten, ohne Personal. Im Konnektor sind das der Wareneinsatz und die Kosten der Warenabgabe. Die COGS-Marge ist COGS geteilt durch die Gesamtleistung.",
+  personalkosten: "Alle Aufwendungen für die Entlohnung der Mitarbeiter: Löhne, Gehälter, Sozialabgaben und Nebenkosten. Die Personalaufwandsquote ist Personalkosten geteilt durch die Gesamtleistung, ein Maß für den Personaleinsatz im Verhältnis zur Leistung.",
+  eigenkapitalrentabilitaet: "Ergebnis des Zeitraums geteilt durch das durchschnittliche Eigenkapital (Ergebnis seit Jahresbeginn minus Privatentnahmen plus Privateinlagen). Bei negativem Eigenkapital kehrt sich das Vorzeichen um und der Wert ist kaum lesbar.",
+  fremdkapitalrentabilitaet: "Zinsaufwand geteilt durch das durchschnittliche Fremdkapital (Steuerschulden und Verbindlichkeiten): was das geliehene Geld kostet. Darlehen, die als Finanzkonto geführt werden, zählen hier nicht mit.",
+  gesamtkapitalrentabilitaet: "Ergebnis plus Zinsaufwand geteilt durch Eigen- plus Fremdkapital: die Verzinsung des gesamten eingesetzten Kapitals, egal ob eigenes oder geliehenes.",
+  kapitalrentabilitaet: "Wie gut sich das eingesetzte Kapital verzinst. Es gibt drei Kennzahlen: Eigenkapital-, Fremdkapital- und Gesamtkapitalrentabilität. Der Strich im Balken zeigt den Wert des Zeitraums, links rot, rechts grün. Die Balken reichen symmetrisch um null, mindestens bis ±100 %.",
+  uebersicht: "Erträge, Kosten und Gesamtergebnis je Monat über sechs Monate bis zum Ende des Zeitraums. Neutrale Erträge und Aufwände wie Zinsen sind eingerechnet.",
+  umsatzkennzahlen: "Die Umsatzerlöse sind alle Einnahmen aus dem Verkauf von Waren oder Leistungen des Kerngeschäfts. Die Umsatzrentabilität setzt das Betriebsergebnis ins Verhältnis dazu.",
+  kosten_fokus: "Zwei Kostenblöcke im Detail: COGS (Wareneinsatz) und Personalkosten, je Monat des Jahres gegen dieselben Monate des Vorjahres.",
+};
+
 export type ControllingOptions = RunnerOptions;
 
 export function createControllingTools(client: BBClient, opts: ControllingOptions = {}): [ToolDef] {
@@ -300,15 +404,17 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
   const getControlling = defineTool({
     name: "get_controlling",
     description:
-      "Controlling-Auswertung wie das Dashboard 'Controlling > Profitabilität' von BuchhaltungsButler (Beta, kostenpflichtiges Add-on; " +
-      "die API hat dafür keinen Endpunkt), gerechnet aus der BWA: Erträge, Kosten, Gesamtergebnis, EBIT und EBITDA mit Marge, " +
+      "Controlling-Auswertung wie das Dashboard 'Controlling > Profitabilität' von BuchhaltungsButler (Beta, in der Oberfläche nur bis 20.11.2026; " +
+      "die API hat dafür keinen Endpunkt, das Tool braucht nur BWA und Summen- und Saldenliste), gerechnet aus der BWA: Erträge, Kosten, Gesamtergebnis, EBIT und EBITDA mit Marge, " +
       "Umsatzrentabilität, Kosten nach Kostenart mit Anteil und Veränderung, COGS, Personalaufwandsquote, 'Rule of BHB' und eine " +
       "Zeitreihe über sechs Monate - Zeitraum gegen Vergleichszeitraum. Fragt der Nutzer nach Controlling, Kennzahlen, EBITDA, " +
       "Profitabilität oder Kostenstruktur, dieses Tool aufrufen und das Ergebnis als Artefakt darstellen (Skill dataviz laden): " +
       "Kennzahlen-Kacheln mit Differenz zum Vergleich, Linien für Erträge/Kosten/Ergebnis, Balken für Kostenarten. " +
       "Es erzeugt nacheinander BWA-Reports (2, mit series bis 8; je einige Sekunden) und ERSETZT damit die zuletzt in BHB " +
-      "erzeugte BWA. Nur bestätigte Buchungen zählen; die Antwort warnt bei unbestätigten. Nicht enthalten: Kapitalrentabilität " +
-      "(braucht Eigen-/Fremdkapital) und die Jahresvergleiche von COGS und Personalkosten. period_*/comparison_* als YYYY-MM-DD.",
+      "erzeugte BWA. Dazu die Kapitalrentabilität (Eigen-, Fremd-, Gesamtkapital, wie BHB aus bis zu sechs Summen- und Saldenlisten; " +
+      "ersetzt die zuletzt in BHB erzeugte SuSa; capital: false spart sie) und mit year_comparison COGS und Personalkosten gegen " +
+      "das Vorjahr. erklaerungen enthält je Kennzahl eine kurze Erklärung für Rückfragen und Info-Symbole. Nur bestätigte Buchungen " +
+      "zählen; die Antwort warnt bei unbestätigten. period_*/comparison_* als YYYY-MM-DD.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
@@ -319,6 +425,8 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       series: z.boolean().optional().describe("Zeitreihe über sechs Monate bis zum Ende des Zeitraums (Standard true). false spart sechs Reports."),
       with_postings: z.boolean().optional().describe("Je Konto die Buchungen des Zeitraums (Kontenblatt) mitliefern, Standard true. false spart einen Aufruf je Konto."),
       split_threshold_pct: z.number().min(0).max(100).optional().describe("Konten in 'Sonstige Kosten' ab diesem Anteil an den Kosten werden eine eigene Kostenart. Standard 0 = aus: die Kostenarten bleiben die der BWA, 'Sonstige Kosten' steht am Ende."),
+      capital: z.boolean().optional().describe("Kapitalrentabilität (Eigen-, Fremd-, Gesamtkapital) mitrechnen, Standard true. Braucht bis zu sechs Summen- und Saldenlisten (Anfang, Vortag und Ende von Zeitraum und Vergleich); false spart sie."),
+      year_comparison: z.boolean().optional().describe("COGS und Personalkosten der sechs Monate der Zeitreihe gegen dieselben Monate des Vorjahres (Dashboard: 'Jahresvergleich'), Standard false. Holt sechs weitere BWAs; nur zusammen mit series."),
       save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
     },
     async handler(args) {
@@ -347,8 +455,53 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       const monthly: Kpis[] = [];
       for (const m of months) monthly.push(kpisFromBwa(await get(m)));
 
+      const vorjahr: Kpis[] = [];
+      if (args.year_comparison === true) {
+        for (const m of months) vorjahr.push(kpisFromBwa(await get({ from: minusOneYear(m.from), to: monthEnd(Number(m.from.slice(0, 4)) - 1, Number(m.from.slice(5, 7)) - 1) })));
+      }
+
       const k = kpisFromBwa(cur);
       const p = kpisFromBwa(prev);
+
+      // Kapital zu den Stichtagen: je eine SuSa vom 1.1. des Jahres bis einschließlich Stichtag, nacheinander.
+      let kapitalrentabilitaet: Record<string, unknown> | null = null;
+      if (args.capital !== false) {
+        const susa = new Map<string, KapitalTeile>();
+        const at = async (date: string) => {
+          if (!susa.has(date)) susa.set(date, capitalFromSums(await runReport<Sums>("sums", { from: `${date.slice(0, 4)}-01-01`, to: date })));
+          return susa.get(date)!;
+        };
+        const sides = async (r: Range) => {
+          const tag = await at(r.from);
+          const vortag = r.from.slice(5) === "01-01" ? null : await at(dayBefore(r.from));
+          return capitalAt({ tag, vortag }, await at(r.to));
+        };
+        const kz = await sides(period);
+        const kv = await sides(comparison);
+        const rz = returnOnCapital(k.gesamtergebnis, k.zinsaufwand, kz.ek, kz.fk);
+        const rv = returnOnCapital(p.gesamtergebnis, p.zinsaufwand, kv.ek, kv.fk);
+        const groesster = Math.max(...[rz.eigenkapital, rz.fremdkapital, rz.gesamtkapital].map((x) => Math.abs(x ?? 0)));
+        kapitalrentabilitaet = {
+          zeitraum: { eigenkapital: kz.ek, fremdkapital: kz.fk },
+          vergleichszeitraum: { eigenkapital: kv.ek, fremdkapital: kv.fk },
+          eigenkapitalrentabilitaet_pct: roundOrNull(rz.eigenkapital),
+          fremdkapitalrentabilitaet_pct: roundOrNull(rz.fremdkapital),
+          gesamtkapitalrentabilitaet_pct: roundOrNull(rz.gesamtkapital),
+          vergleich: {
+            eigenkapitalrentabilitaet_pct: roundOrNull(rv.eigenkapital),
+            fremdkapitalrentabilitaet_pct: roundOrNull(rv.fremdkapital),
+            gesamtkapitalrentabilitaet_pct: roundOrNull(rv.gesamtkapital),
+          },
+          differenz_pp: {
+            eigenkapitalrentabilitaet: diffOrNull(rz.eigenkapital, rv.eigenkapital),
+            fremdkapitalrentabilitaet: diffOrNull(rz.fremdkapital, rv.fremdkapital),
+            gesamtkapitalrentabilitaet: diffOrNull(rz.gesamtkapital, rv.gesamtkapital),
+          },
+          // Skala der Balken-Tachos im Dashboard: symmetrisch um 0; bis 100 % fest ±100, darüber das 1,5-fache des größten
+          // Betrags im Zeitraum (gegen BHB in elf Zeiträumen geprüft).
+          skala: kapitalSkala(groesster),
+        };
+      }
 
       const promote = promotedAccounts(k, args.split_threshold_pct ?? 0);
       const kostenarten = mergeArten(promoteAccounts(k, promote).kostenarten, promoteAccounts(p, promote).kostenarten, k.kosten);
@@ -414,12 +567,19 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
           kosten: monthly.map((m) => m.kosten),
           gesamtergebnis: monthly.map((m) => m.gesamtergebnis),
           umsatzerloese: monthly.map((m) => m.umsatzerloese),
+          cogs: monthly.map((m) => m.cogs),
+          personalkosten: monthly.map((m) => m.personalkosten),
+          cogs_vorjahr: vorjahr.map((m) => m.cogs),
+          personalkosten_vorjahr: vorjahr.map((m) => m.personalkosten),
         },
+        kapitalrentabilitaet,
+        erklaerungen: ERKLAERUNGEN,
         hinweise: [
           "Quelle ist die BWA (nur bestätigte Buchungen). EBIT = Betriebsergebnis, EBITDA = EBIT + Abschreibungen, Margen auf die Gesamtleistung, Umsatzrentabilität auf die Umsatzerlöse.",
           "Kosten (Gesamtkosten im Dashboard) = Gesamtkosten + Wareneinsatz + neutraler Aufwand (z. B. Zinsaufwand); Erträge = Gesamtleistung + neutraler Ertrag. Gegen ein Livekonto ohne Wareneinsatz und ohne sonstigen neutralen Aufwand nachgerechnet; mit Wareneinsatz nicht belegt.",
           "COGS = Kosten Warenabgabe + Wareneinsatz (BHB: produktbezogene Kosten ohne Personal); rule_of_bhb ist eine Ableitung, keine dokumentierte Formel.",
-          "Nicht enthalten: Kapitalrentabilität (Eigen-/Fremd-/Gesamtkapital) und die Jahresvergleiche von COGS und Personalkosten.",
+          "Kapitalrentabilität: Eigenkapital = Ergebnis seit Jahresbeginn - Saldo Privat, Fremdkapital = Umsatzsteuer - Vorsteuer + Verbindlichkeiten (Haben positiv). Ende des Zeitraums: alles bis einschließlich letztem Tag. Anfang: Ergebnis bis einschließlich erstem Tag, Privat und Fremdkapital bis zum Vortag (so rechnet BHB). Durchschnitt aus Anfang und Ende. Gegen BHB auf den Cent belegt (EÜR-Konto, Q2 gegen Q3, Q1 gegen Q3 und alle Monate Januar bis Oktober gegen den Vormonat); mit Bilanz (Eigenkapitalkonten, Rückstellungen, Debitoren/Kreditoren) nicht belegt. Darlehen der Klasse Finanzkonto zählen nicht zum Fremdkapital.",
+          "Rule of BHB = Umsatzwachstum in Prozent + Umsatzrentabilität (EBIT / Umsatzerlöse). BHBs Infotext nennt die EBIT-Marge, gerechnet wird aber mit der Umsatzrentabilität (nur so ergibt sich der angezeigte Wert).",
         ],
         warnings,
       });

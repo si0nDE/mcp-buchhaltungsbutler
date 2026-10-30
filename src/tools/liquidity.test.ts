@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows } from "./liquidity.js";
+import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows, zweifelhaftAmpel } from "./liquidity.js";
 
 // Erfundene Zahlen. Aufbau wie die Summen- und Saldenliste von reportsGetSums.
 const entry = (cls: string, nr: number, abs: number, side: "debit" | "credit") => ({
@@ -41,6 +41,13 @@ describe("balancesFromSums", () => {
   });
 });
 
+describe("zweifelhaftAmpel", () => {
+  it("grün bis 33 %, gelb bis 66 %, darüber rot, ohne Forderungen keine Ampel", () => {
+    expect([0, 32.99, 33, 65.99, 66, 100].map(zweifelhaftAmpel)).toEqual(["gruen", "gruen", "gelb", "gelb", "rot", "rot"]);
+    expect(zweifelhaftAmpel(null)).toBeNull();
+  });
+});
+
 describe("cashflowByMonth", () => {
   const fin = new Set(["1200", "1000"]);
   const skip = new Set(["1590", "1360", "9000"]);
@@ -64,6 +71,23 @@ describe("cashflowByMonth", () => {
   it("zählt Einzahlungen und Auszahlungen je Monat ohne Interims-, Geldtransit- und Eigenüberweisungen", () => {
     expect(r.get("2026-03")).toEqual({ ein: 100, aus: 40.5 });
     expect(r.get("2026-04")).toEqual({ ein: 10, aus: 0 });
+  });
+
+  it("zählt negative Splits einer Zahlung nach Soll und Haben, nicht nach dem Vorzeichen", () => {
+    // Zahlungseingang 600 = Verkauf 1000 - Provision 150 - Geldtransit 250. BHB liefert die Abzüge als negative Beträge,
+    // Soll und Haben zeigen schon die Richtung (Provision: Soll Aufwand, Haben Bank).
+    const s = cashflowByMonth(
+      [
+        p("2026-06-24", "1000.00", "1200", "8820"),
+        p("2026-06-24", "-150.00", "4760", "1200"),
+        p("2026-06-24", "-250.00", "1360", "1200"),
+        p("2026-06-25", "-15.00", "1200", "4920"), // Gutschrift innerhalb einer Lastschrift
+      ],
+      fin,
+      skip,
+      ["2026-06"]
+    );
+    expect(s.get("2026-06")).toEqual({ ein: 1015, aus: 150 });
   });
 });
 
@@ -228,6 +252,9 @@ describe("get_liquidity", () => {
     expect(res.forderungen.parteien.map((p: { name: string }) => p.name)).toEqual(["Kunde A", "Kunde B"]);
     expect(res.forderungen.belege).toHaveLength(2);
     expect(res.verbindlichkeiten.belege[0]).toMatchObject({ gegenpartei: "Lieferant X", betrag: 250 });
+    expect(res.forderungen.zweifelhaft_ampel).toBe(zweifelhaftAmpel(res.forderungen.zweifelhaft.anteil_pct));
+    expect(res.forderungen.zweifelhaft_ampel).not.toBeNull();
+    expect(Object.keys(res.erklaerungen)).toEqual(expect.arrayContaining(["cash_bestand", "burn_rate", "cash_runway", "quick_ratio", "zweifelhaft"]));
   });
 
   it("Cashflow aus Buchungen, Burn Rate als Mittel (Auszahlungen - Einzahlungen), Runway = Cash durch Burn Rate", async () => {

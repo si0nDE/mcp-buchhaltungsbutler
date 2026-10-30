@@ -65,9 +65,10 @@ export function balancesFromSums(report: Sums): Balances {
   };
 }
 
-// Einzahlungen und Auszahlungen je Monat aus den Buchungen auf Finanzkonten (nach Buchungsdatum). Buchungen gegen
-// Interims- und Geldtransitkonten (zurückgebuchte Lastschriften, Umbuchungen), gegen das Saldenvortragskonto
-// (Anfangssalden) und zwischen Finanzkonten zählen nicht.
+// Einzahlungen und Auszahlungen je Monat aus den Buchungen auf Finanzkonten (nach Buchungsdatum), Split für Split.
+// Buchungen gegen Interims- und Geldtransitkonten (zurückgebuchte Lastschriften, Umbuchungen), gegen das
+// Saldenvortragskonto (Anfangssalden) und zwischen Finanzkonten zählen nicht. Abzüge innerhalb einer Zahlung liefert
+// BHB als negative Beträge, Soll und Haben zeigen dann schon die Richtung: es zählt der Betrag ohne Vorzeichen.
 export function cashflowByMonth(
   postings: Row[],
   finanzkonten: Set<string>,
@@ -79,7 +80,7 @@ export function cashflowByMonth(
     const m = String(p.date ?? "").slice(0, 7);
     const slot = out.get(m);
     if (!slot) continue;
-    const amount = Number(p.amount);
+    const amount = Math.abs(Number(p.amount));
     const db = String(p.debit_postingaccount_number ?? "");
     const cr = String(p.credit_postingaccount_number ?? "");
     if (!Number.isFinite(amount)) continue;
@@ -215,14 +216,40 @@ async function readAll(client: BBClient, key: "receiptsGet" | "postingsGet", par
 
 const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
+// Bereich der Tacho-Anzeige "Zweifelhafte Forderungen" im Dashboard (Halbkreis 0-100 %): grün bis 33, gelb bis 66, rot
+// darüber (aus BHBs Oberflächen-Code, 30.10.2026).
+export function zweifelhaftAmpel(anteilPct: number | null): "gruen" | "gelb" | "rot" | null {
+  if (anteilPct === null) return null;
+  return anteilPct < 33 ? "gruen" : anteilPct < 66 ? "gelb" : "rot";
+}
+
+// Kurze Erklärungen je Kennzahl in eigenen Worten (für Fragen des Nutzers und die Info-Symbole im Artefakt). Sie
+// beschreiben, was hier gerechnet wird; wo BHBs Infotext davon abweicht, gilt die Rechnung.
+const ERKLAERUNGEN = {
+  cash_bestand: "Summe aller Konten der Klasse Finanzkonto zum Monatsende: Bank, Kasse, PayPal und auch Darlehenskonten, die als Finanzkonto geführt werden. Ein Darlehen im Minus drückt den Wert ins Negative.",
+  working_capital: "Working Capital heißt Nettoumlaufvermögen: das kurzfristig verfügbare Geld abzüglich kurzfristiger Schulden. BuchhaltungsButler rechnet Cash-Bestand minus Vorsteuer, minus Umsatzsteuer, plus Verbindlichkeiten (die Vorzeichen sind ungewöhnlich). Die offenen Rechnungen sind darin nicht enthalten.",
+  cashflow: "Ein- und Auszahlungen je Monat über alle Finanzkonten. Umbuchungen zwischen eigenen Konten (Geldtransit), durchlaufende Posten und Anfangssalden zählen nicht.",
+  burn_rate: "Burn Rate heißt wörtlich Verbrennungsrate: der Durchschnitt der letzten zwölf Monate von Auszahlungen minus Einzahlungen. Positiv heißt: es fließt mehr ab als zu. Negativ heißt: im Schnitt kommt mehr herein.",
+  cash_runway: "Cash-Bestand geteilt durch die Burn Rate: wie viele Monate das Geld beim jetzigen Verbrauch reicht. BHB beschriftet den Wert mit Tagen, gemeint sind Monate. Nur aussagekräftig bei positivem Cash-Bestand und positiver Burn Rate.",
+  forderungen: "Summe der offenen Ausgangsrechnungen, also Geld, das Kunden noch schulden. Gutschriften mindern sie.",
+  top_kunden: "Die drei Kunden mit den höchsten offenen Rechnungen aus den letzten zwölf Monaten.",
+  zweifelhaft: "Anteil der offenen Forderungen, die mindestens 90 Tage über der Fälligkeit liegen (ohne Fälligkeit: ab Rechnungsdatum). Die Anzeige ist grün bis 33 %, gelb bis 66 %, darüber rot.",
+  debitorenlaufzeit: "Debitoren sind Kunden. Die Debitorenlaufzeit (englisch DSO, Days Sales Outstanding) ist die durchschnittliche Zahl der Tage vom Rechnungsdatum bis zur Zahlung, über alle bezahlten Rechnungen der letzten zwölf Monate. Kürzer ist besser.",
+  verbindlichkeiten: "Summe der offenen Eingangsrechnungen, also was das Unternehmen Lieferanten noch schuldet.",
+  top_lieferanten: "Die drei Lieferanten mit den höchsten offenen Rechnungen aus den letzten zwölf Monaten.",
+  kreditorenlaufzeit: "Kreditoren sind Lieferanten. Die Kreditorenlaufzeit (englisch DPO, Days Payables Outstanding) ist die durchschnittliche Zahl der Tage vom Rechnungsdatum bis zur eigenen Zahlung. Ideal liegt sie über der Debitorenlaufzeit: Kunden zahlen dann, bevor Lieferanten bezahlt werden müssen.",
+  quick_ratio: "Quick Ratio (Liquidität zweiten Grades): Cash-Bestand plus Forderungen geteilt durch Verbindlichkeiten. Über 1 reicht das kurzfristig Verfügbare für alle offenen Rechnungen, ab etwa 1,05 gilt es als gut. Zweifelhafte Forderungen zählen voll mit.",
+  future_cash_inflow: "Forderungen minus Verbindlichkeiten: um wie viel sich der Geldbestand ändert, wenn alle offenen Rechnungen in beide Richtungen bezahlt werden (englisch: künftiger Geldzufluss).",
+};
+
 export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {}): [ToolDef] {
   const runReport = createReportRunner(client, { pollMs: 4000, ...opts });
 
   const getLiquidity = defineTool({
     name: "get_liquidity",
     description:
-      "Liquiditäts-Auswertung wie das Dashboard 'Controlling > Liquidität' von BuchhaltungsButler (Beta, kostenpflichtiges Add-on; " +
-      "die API hat dafür keinen Endpunkt): Cash-Bestand, Working Capital und Cashflow (Ein-/Auszahlungen) über 12 Monate, " +
+      "Liquiditäts-Auswertung wie das Dashboard 'Controlling > Liquidität' von BuchhaltungsButler (Beta, in der Oberfläche nur bis 20.11.2026; " +
+      "die API hat dafür keinen Endpunkt, das Tool braucht nur Summen- und Saldenliste, Buchungen und Belege): Cash-Bestand, Working Capital und Cashflow (Ein-/Auszahlungen) über 12 Monate, " +
       "Burn Rate und Cash Runway, offene Forderungen und Verbindlichkeiten mit den drei größten Kunden/Lieferanten, Anteil " +
       "zweifelhafter Forderungen (mindestens 90 Tage überfällig), Debitoren-/Kreditorenlaufzeit, Quick Ratio, Future Cash-Inflow, " +
       "dazu alle offenen Belege je Firma (parteien) und einzeln (belege) zum Anklicken. " +
@@ -230,7 +257,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       "Artefakt darstellen (Skill dataviz laden). Es erzeugt je Monat eine Summen- und Saldenliste (bis 12, je einige Sekunden; " +
       "months senkt die Zahl) und ERSETZT damit die zuletzt in BHB erzeugte SuSa. Nur bestätigte Buchungen zählen. Cash-Bestand, " +
       "Working Capital, Forderungen, Verbindlichkeiten, Top-Kunden/-Lieferanten, Zweifelhaftes, Quick Ratio und Future Cash-Inflow " +
-      "und die Laufzeiten sind gegen BHBs Dashboard belegt; Cashflow, Burn Rate und Runway weichen ab (siehe hinweise). " +
+      "die Laufzeiten, Burn Rate und Runway sind gegen BHBs Dashboard belegt; Ein- und Auszahlungen einzelner Monate weichen um wenige Euro ab (siehe hinweise). " +
       "as_of als YYYY-MM-DD, Standard heute.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
@@ -301,7 +328,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
             verbindlichkeiten_konten: last.verbindlichkeiten,
           },
         },
-        forderungen: { ...forderungen, debitorenlaufzeit_tage: dso.tage, debitorenlaufzeit_belege: dso.anzahl, parteien: openByParty(outRows), belege: outRows },
+        forderungen: { ...forderungen, zweifelhaft_ampel: zweifelhaftAmpel(forderungen.zweifelhaft.anteil_pct), debitorenlaufzeit_tage: dso.tage, debitorenlaufzeit_belege: dso.anzahl, parteien: openByParty(outRows), belege: outRows },
         verbindlichkeiten: { ...verbindlichkeiten, kreditorenlaufzeit_tage: dpo.tage, kreditorenlaufzeit_belege: dpo.anzahl, parteien: openByParty(inRows), belege: inRows },
         kennzahlen: {
           quick_ratio: verbindlichkeiten.summe === 0 ? null : r2((last.cash + forderungen.summe) / verbindlichkeiten.summe),
@@ -315,11 +342,12 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
           auszahlungen: aus,
           cashflow,
         },
+        erklaerungen: ERKLAERUNGEN,
         hinweise: [
           "Cash-Bestand = Summe der Salden aller Konten der Klasse Finanzkonto in der Summen- und Saldenliste (gebuchte Buchungen), auch Darlehens- und Verrechnungskonten dieser Klasse. Ein Darlehenskonto im Minus drückt ihn tief ins Negative.",
           "Working Capital = Cash-Bestand - Saldo Vorsteuer - Saldo Umsatzsteuer + Saldo Verbindlichkeiten (Soll positiv): so rechnet BHB, die Vorzeichen sind ungewöhnlich. Auf den Cent belegt gegen BHB für drei Monate; ohne Debitoren/Kreditoren-Konten geprüft, deren Behandlung ist nicht belegt.",
           "Forderungen und Verbindlichkeiten = Summe der offenen Belege (Gutschriften mindern). Top-Kunden und -Lieferanten: offene Belege der letzten zwölf Monate je Gegenpartei. Zweifelhaft: Fälligkeit (ohne Fälligkeit Belegdatum) mindestens 90 Tage her.",
-          "Cashflow aus den Buchungen auf Finanzkonten nach Buchungsdatum, ohne Interims-/Geldtransitkonten und ohne Anfangssalden (Saldenvortrag). Stimmt mit BHB bis auf wenige Euro je Monat; in einem Monat wich BHB im Livekonto bei den Auszahlungen deutlich ab (Ursache nicht geklärt), dadurch weichen Burn Rate und Cash Runway ab.",
+          "Cashflow aus den Buchungen auf Finanzkonten nach Buchungsdatum, Split für Split, ohne Interims-/Geldtransitkonten und ohne Anfangssalden (Saldenvortrag). Im Livekonto stimmt die Summe über zwölf Monate mit BHB auf den Cent, damit auch Burn Rate und Cash Runway. Einzelne Monate weichen um wenige Euro ab: BHB zählt dann einen kleinen Betrag zusätzlich auf beiden Seiten, netto gleich (Ursache nicht geklärt).",
           "Cash Runway = Cash-Bestand durch Burn Rate (BHB beschriftet das mit Tagen, rechnerisch sind es Monate). Bei negativem Cash-Bestand und negativer Burn Rate ist die Zahl nicht aussagekräftig.",
           "Debitoren-/Kreditorenlaufzeit = einfaches Mittel aus Zahlungsdatum minus Belegdatum über alle bezahlten Belege der letzten zwölf Monate (payment_date des Belegs); gegen BHBs Dashboard auf die zweite Nachkommastelle bestätigt.",
         ],

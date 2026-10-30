@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { createControllingTools, kpisFromBwa, previousRange, seriesMonths } from "./controlling.js";
+import { capitalAt, capitalFromSums, createControllingTools, kapitalSkala, kpisFromBwa, previousRange, returnOnCapital, seriesMonths, type Sums } from "./controlling.js";
 
 // Erfundene Zahlen. Aufbau wie die BWA von reportsGetBwa (SKR03).
 function bwa(o: {
@@ -146,12 +146,23 @@ describe("Zeiträume", () => {
 });
 
 // Client, der BWAs nach Zeitraum liefert; die erste Abfrage jeder BWA ist "noch nicht fertig".
-function fakeClient(byRange: (from: string, to: string) => ReturnType<typeof bwa>, pendingTimes = 1) {
+function fakeClient(
+  byRange: (from: string, to: string) => ReturnType<typeof bwa>,
+  pendingTimes = 1,
+  sumsAt: (to: string) => Sums = () => ({ integrityError: false, sums: {} })
+) {
   let next = 100;
   const ranges = new Map<number, [string, string]>();
   const polls = new Map<number, number>();
   const order: string[] = [];
+  const sumsRanges = new Map<number, string>();
   const call = vi.fn(async (op: string, params: Record<string, unknown>) => {
+    if (op === "reportsCreateSums") {
+      const id = next++;
+      sumsRanges.set(id, String(params.date_to));
+      return { success: true, id_by_customer: String(id) };
+    }
+    if (op === "reportsGetSums") return { success: true, report: sumsAt(sumsRanges.get(Number(params.report_id_by_customer))!) };
     if (op === "reportsCreateBwa") {
       const id = next++;
       ranges.set(id, [String(params.date_from), String(params.date_to)]);
@@ -395,3 +406,132 @@ describe("get_controlling", () => {
     expect(call).not.toHaveBeenCalled();
   });
 });
+
+// Erfundene Salden. Aufbau wie reportsGetSums.
+const saldo = (cls: string, abs: number, side: "debit" | "credit") => ({ postingaccount: { class: cls }, balanceAfterAbsolute: abs, balanceAfterSide: side });
+const susa = (list: Array<[string, number, "debit" | "credit"]>): Sums => ({
+  integrityError: false,
+  sums: Object.fromEntries(list.map(([c, a, s], i) => [String(i), saldo(c, a, s)])),
+});
+
+describe("Kapitalrentabilität", () => {
+  it("Eigenkapital = Ergebnis seit Jahresbeginn - Saldo Privat, Fremdkapital = USt - VSt + Verbindlichkeiten (Haben positiv)", () => {
+    const k = capitalFromSums(
+      susa([
+        ["Einnahmen", 5000, "credit"],
+        ["Betriebsausgabe", 3000, "debit"],
+        ["Abschreibungen", 500, "debit"],
+        ["Privat", 400, "debit"], // Entnahmen
+        ["Privat", 1000, "credit"], // Einlagen
+        ["Umsatzsteuer", 900, "credit"],
+        ["Vorsteuer", 300, "debit"],
+        ["Verbindlichkeiten", 100, "debit"],
+        ["Finanzkonto", 7000, "credit"], // Darlehen als Finanzkonto: weder Eigen- noch Fremdkapital
+        ["Anlagevermögen", 800, "credit"],
+      ])
+    );
+    // Ergebnis 1500, Privat netto 600 im Haben
+    expect(k).toEqual({ ergebnis: 1500, privat: -600, fremdkapital: 500 });
+  });
+
+  it("Anfang: Ergebnis bis einschließlich erstem Tag, Privat und Fremdkapital vom Vortag; Ende: alles bis zum letzten Tag", () => {
+    const r = capitalAt(
+      { tag: { ergebnis: 950, privat: -150, fremdkapital: 210 }, vortag: { ergebnis: 900, privat: -100, fremdkapital: 200 } },
+      { ergebnis: 3000, privat: 0, fremdkapital: 300 }
+    );
+    expect(r.ek).toEqual({ anfang: 1050, ende: 3000, durchschnitt: 2025 });
+    expect(r.fk).toEqual({ anfang: 200, ende: 300, durchschnitt: 250 });
+    // Ohne Vortag (Zeitraum beginnt am 1.1.): Privat und Fremdkapital am Anfang 0
+    expect(capitalAt({ tag: { ergebnis: 100, privat: 40, fremdkapital: 70 }, vortag: null }, { ergebnis: 0, privat: 0, fremdkapital: 0 }).ek.anfang).toBe(100);
+  });
+
+  it("Rentabilitäten aus Ergebnis, Zinsen und Durchschnittskapital", () => {
+    const r = returnOnCapital(300, 20, { anfang: 1000, ende: 2000, durchschnitt: 1500 }, { anfang: 400, ende: 600, durchschnitt: 500 });
+    expect(r.eigenkapital).toBeCloseTo(20, 10);
+    expect(r.fremdkapital).toBeCloseTo(4, 10);
+    expect(r.gesamtkapital).toBeCloseTo(16, 10);
+    expect(returnOnCapital(300, 0, { anfang: 0, ende: 0, durchschnitt: 0 }, { anfang: 0, ende: 0, durchschnitt: 0 }).eigenkapital).toBeNull();
+  });
+
+  it("Skala der Tachos: bis 100 % fest ±100, darüber das 1,5-fache des größten Betrags", () => {
+    expect(kapitalSkala(30)).toEqual({ min: -100, max: 100 });
+    expect(kapitalSkala(99.5)).toEqual({ min: -100, max: 100 });
+    expect(kapitalSkala(100)).toEqual({ min: -100, max: 100 });
+    expect(kapitalSkala(120)).toEqual({ min: -180, max: 180 });
+  });
+
+  it("holt je Stichtag eine SuSa vom 1.1. bis einschließlich Stichtag und rechnet Zeitraum gegen Vergleich", async () => {
+    // Q2 gegen Q1, je Stichtag Ergebnis, Privat (Soll positiv) und Fremdkapital.
+    const erg: Record<string, number> = { "2026-01-01": 100, "2026-03-31": 900, "2026-04-01": 950, "2026-06-30": 3000 };
+    const priv: Record<string, number> = { "2026-01-01": 0, "2026-03-31": -100, "2026-04-01": -150, "2026-06-30": 0 };
+    const fk: Record<string, number> = { "2026-01-01": 50, "2026-03-31": 200, "2026-04-01": 210, "2026-06-30": 300 };
+    const sumsAt = (to: string) =>
+      susa([
+        ["Einnahmen", erg[to], "credit"],
+        ["Privat", Math.abs(priv[to]), priv[to] < 0 ? "credit" : "debit"],
+        ["Umsatzsteuer", fk[to], "credit"],
+      ]);
+    const { client, call } = fakeClient(
+      (from) => (from === "2026-04-01" ? bwa({ umsatz: 9000, sonstige: 7000, zins: 40 }) : bwa({ umsatz: 6000, sonstige: 5650, zins: 10 })),
+      0,
+      sumsAt
+    );
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false }));
+    const sumsCalls = call.mock.calls.filter(([op]) => op === "reportsCreateSums").map(([, p]) => `${p.date_from}..${p.date_to}`);
+    // Q2: 1.4., Vortag 31.3., 30.6.; Q1 beginnt am 1.1. (kein Vortag), 31.3. ist schon geholt.
+    expect(sumsCalls).toEqual(["2026-01-01..2026-04-01", "2026-01-01..2026-03-31", "2026-01-01..2026-06-30", "2026-01-01..2026-01-01"]);
+    const kr = res.kapitalrentabilitaet;
+    // Anfang: Ergebnis 1.4. (950) - Privat 31.3. (-100) = 1050; Ende 3000 - 0
+    expect(kr.zeitraum.eigenkapital).toEqual({ anfang: 1050, ende: 3000, durchschnitt: 2025 });
+    expect(kr.zeitraum.fremdkapital).toEqual({ anfang: 200, ende: 300, durchschnitt: 250 });
+    // Ergebnis Q2 = 9000 - 7000 - 40 = 1960; 1960 / 2025 = 96,79 %, Zinsen 40 / 250 = 16 %, 2000 / 2275 = 87,91 %
+    expect(kr.eigenkapitalrentabilitaet_pct).toBe(96.79);
+    expect(kr.fremdkapitalrentabilitaet_pct).toBe(16);
+    expect(kr.gesamtkapitalrentabilitaet_pct).toBe(87.91);
+    // Q1: Eigenkapital 100 -> 1000 (Ø 550), Ergebnis 6000 - 5650 - 10 = 340: 61,82 %
+    expect(kr.vergleichszeitraum.eigenkapital).toEqual({ anfang: 100, ende: 1000, durchschnitt: 550 });
+    expect(kr.vergleich.eigenkapitalrentabilitaet_pct).toBe(61.82);
+    expect(kr.differenz_pp.eigenkapitalrentabilitaet).toBe(34.97);
+    // Größter Wert 96,79 % liegt unter 100: Skala fest ±100
+    expect(kr.skala).toEqual({ min: -100, max: 100 });
+  });
+
+  it("capital: false holt keine SuSa", async () => {
+    const { client, call } = fakeClient(byRangeSimple, 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, capital: false }));
+    expect(call.mock.calls.filter(([op]) => op === "reportsCreateSums")).toHaveLength(0);
+    expect(res.kapitalrentabilitaet).toBeNull();
+  });
+
+  it("year_comparison holt dieselben sechs Monate des Vorjahres für COGS und Personalkosten", async () => {
+    const { client, call } = fakeClient((from) => (from.startsWith("2025") ? bwa({ umsatz: 100, personal: 7 }) : bwa({ umsatz: 100, personal: 9 })), 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", year_comparison: true, capital: false, with_postings: false }));
+    const vorjahr = call.mock.calls.filter(([op, p]) => op === "reportsCreateBwa" && String(p.date_from).startsWith("2025-"));
+    expect(vorjahr.map(([, p]) => `${p.date_from}..${p.date_to}`)).toEqual([
+      "2025-01-01..2025-01-31",
+      "2025-02-01..2025-02-28",
+      "2025-03-01..2025-03-31",
+      "2025-04-01..2025-04-30",
+      "2025-05-01..2025-05-31",
+      "2025-06-01..2025-06-30",
+    ]);
+    expect(res.zeitreihe.personalkosten_vorjahr).toEqual([7, 7, 7, 7, 7, 7]);
+    expect(res.zeitreihe.personalkosten).toEqual([9, 9, 9, 9, 9, 9]);
+  });
+
+  it("liefert Erklärungen je Kennzahl", async () => {
+    const { client } = fakeClient(byRangeSimple, 0);
+    const [tool] = createControllingTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, capital: false }));
+    expect(res.erklaerungen.ebit).toMatch(/Earnings Before Interest and Taxes/);
+    expect(res.erklaerungen.cogs).toMatch(/Cost of Goods Sold/);
+    expect(Object.keys(res.erklaerungen)).toEqual(expect.arrayContaining(["ebit", "rule_of_bhb", "eigenkapitalrentabilitaet", "kapitalrentabilitaet", "uebersicht", "umsatzkennzahlen", "kosten_fokus"]));
+  });
+});
+
+function byRangeSimple() {
+  return bwa({ umsatz: 100, sonstige: 40 });
+}

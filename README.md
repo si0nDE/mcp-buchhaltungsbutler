@@ -134,14 +134,16 @@ tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundla
 | Cost Locations | `list_cost_locations`, `manage_cost_location` |
 | Contacts (Debtors/Creditors) | `list_contacts`, `create_contacts`, `update_contact` |
 | Posting Accounts | `list_posting_accounts`, `manage_posting_account` |
-| Receipts | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions`, `pair_receipt_family` |
+| Receipts | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions`, `pair_receipt_family`, `get_receipt_overview` (state of one receipt: assigned payments, postings, open amount), `check_receipt_fields` (heuristic check of mandatory invoice details, § 14 Abs. 4 UStG) |
 | Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts`, `delete_transaction` |
 | Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Invoices | `create_invoice`, `create_invoice_correction` |
 | Month-end | `check_month_end` (read-only closing checks), `calculate_account_balance` |
-| USt-VA | `get_ustva_position` (which VAT-return field an account lands in), `preview_vat_impact` (sums of the tax accounts for a period plus `elster_estimate` with the Bemessungsgrundlagen floored to full euros like ELSTER; still not the ELSTER figure) |
+| USt-VA | `get_ustva_position` (which VAT-return field an account lands in), `preview_vat_impact` (sums of the tax accounts for a period plus `elster_estimate` with the Bemessungsgrundlagen floored to full euros like ELSTER; still not the ELSTER figure), `audit_vat_period` (quarter check before the USt-Voranmeldung: duplicates and other objective patterns as a table) |
 | Booking guide | `get_booking_guide` (documented BHB special cases: Skonto, Geldtransit, Auslagen, RAP, OSS, foreign currency, ...) |
-| Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger`, `get_controlling` (Controlling dashboard figures from the BWA: EBIT/EBITDA, margins, cost structure, 6-month series), `get_liquidity` (liquidity dashboard: cash, working capital, cash flow, open receivables/payables per company), `get_bank_overview` (balance per payment account, turnover, unbooked payments), `get_tax_position` (VAT position, booked taxes, open items with tax authorities) |
+| Reports | `create_report` (BWA, Summen- und Saldenliste), `get_report`, `get_account_ledger`, `get_controlling` (profitability dashboard: EBIT/EBITDA, margins, cost structure and trends, 6-month series, return on equity/debt/total capital, optional prior-year comparison of COGS and personnel costs, short explanations per figure), `get_liquidity` (liquidity dashboard: cash, working capital, cash flow, burn rate, cash runway, open receivables/payables per company, top 3, doubtful receivables, quick ratio, short explanations per figure), `get_bank_overview` (balance per payment account, turnover, all payments per account with booking status and counter accounts, unbooked payments, transit check), `get_tax_position` (VAT position, booked taxes, open items with tax authorities) |
+| House rules | `get_policy`, `set_policy` (client-specific decisions for unclear legal cases; `audit_vat_period` respects them) |
+| Version | `check_for_update` (running version and newer release on GitHub) |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
 | Reisekostenabrechnung | `generate_travel_expense_report`, `generate_and_upload_travel_expense_report` |
 

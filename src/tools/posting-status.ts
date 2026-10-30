@@ -20,9 +20,9 @@ const day = (v: unknown) => (typeof v === "string" ? v.slice(0, 10) : undefined)
 export async function attachPostingStatus(
   client: BBClient,
   rows: Row[]
-): Promise<{ rows: Row[]; truncated: boolean; scanned: number }> {
+): Promise<{ rows: Row[]; truncated: boolean; scanned: number; postings: Map<string, Row[]> }> {
   const days = rows.map((r) => day(r.booking_date)).filter((d): d is string => !!d).sort();
-  if (days.length === 0) return { rows, truncated: false, scanned: 0 };
+  if (days.length === 0) return { rows, truncated: false, scanned: 0, postings: new Map() };
   const range = { date_from: days[0], date_to: days[days.length - 1] };
   const byTx = new Map<string, Row[]>();
   let scanned = 0;
@@ -58,6 +58,8 @@ export async function attachPostingStatus(
     }),
     truncated,
     scanned,
+    // Die Buchungen je Zahlung (Schlüssel id_by_customer der Zahlung), für Aufrufer, die die Gegenkonten brauchen.
+    postings: byTx,
   };
 }
 

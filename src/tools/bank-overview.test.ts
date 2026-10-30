@@ -20,6 +20,7 @@ const sums = {
     "1000": { postingaccount: { class: "Finanzkonto", type: "cash", name: "Kasse" }, balanceAfterAbsolute: 50, balanceAfterSide: "debit" },
     "1590": { postingaccount: { class: "Interimskonto", type: "postingaccount", name: "Interimskonto / Kontierung nicht bekannt" }, balanceAfterAbsolute: 30, balanceAfterSide: "debit" },
     "1360": { postingaccount: { class: "Interimskonto", type: "postingaccount", name: "Geldtransit" }, balanceAfterAbsolute: 0, balanceAfterSide: "debit" },
+    "8400": { postingaccount: { class: "Einnahmen", type: "postingaccount", name: "Erlöse 19 %" }, balanceAfterAbsolute: 200, balanceAfterSide: "credit" },
   },
 };
 
@@ -33,9 +34,11 @@ function fakeClient() {
     if (op === "postingsGet") {
       return {
         data: [
-          { id_by_customer: "11", transaction_id_by_customer: "1", fixed: "0" },
-          { id_by_customer: "12", transaction_id_by_customer: "3", fixed: "0" },
-          { id_by_customer: "13", transaction_id_by_customer: "4", fixed: "0" },
+          { id_by_customer: "11", transaction_id_by_customer: "1", fixed: "1", debit_postingaccount_number: "1200", credit_postingaccount_number: "9000" },
+          // Zahlung 3 in zwei Splits: Erlös und durchlaufender Posten
+          { id_by_customer: "12", transaction_id_by_customer: "3", fixed: "0", debit_postingaccount_number: "1200", credit_postingaccount_number: "8400" },
+          { id_by_customer: "14", transaction_id_by_customer: "3", fixed: "0", debit_postingaccount_number: "1200", credit_postingaccount_number: "1590" },
+          { id_by_customer: "13", transaction_id_by_customer: "4", fixed: "0", debit_postingaccount_number: "1000", credit_postingaccount_number: "8400" },
         ],
       };
     }
@@ -75,6 +78,27 @@ describe("get_bank_overview", () => {
     expect(giro).toMatchObject({ einzahlungen: 150, auszahlungen: 200, anzahl_zahlungen: 2, nicht_gebucht_anzahl: 1, nicht_gebucht_summe: -200 });
     expect(res.nicht_gebuchte_zahlungen).toEqual([{ konto: 1200, id: 2, datum: "2026-03-10", betrag: -200, gegenpartei: "Lieferant X", zweck: "Rechnung 17" }]);
     expect(res.summe.nicht_gebucht_anzahl).toBe(1);
+  });
+
+  it("Umsatzliste: alle Zahlungen des Zeitraums je Konto mit Buchungsstatus und Gegenkonten, neueste zuerst", async () => {
+    const { client } = fakeClient();
+    const [tool] = createBankOverviewTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-03-31" }));
+    // Kasse (1000) vor Giro (1200); im Konto die neueste Zahlung zuerst
+    expect(res.zahlungen.map((z: { konto: number; id: number }) => `${z.konto}/${z.id}`)).toEqual(["1000/4", "1200/3", "1200/2", "1200/1"]);
+    const z3 = res.zahlungen.find((z: { id: number }) => z.id === 3);
+    expect(z3).toMatchObject({ datum: "2026-03-12", betrag: 150, gegenpartei: "Kunde Y", gebucht: true, festgeschrieben: false });
+    expect(z3.gegenkonten).toEqual([{ nummer: 8400, name: "Erlöse 19 %" }, { nummer: 1590, name: "Interimskonto / Kontierung nicht bekannt" }]);
+    expect(res.zahlungen.find((z: { id: number }) => z.id === 2)).toMatchObject({ gebucht: false, gegenkonten: [] });
+    expect(res.zahlungen.find((z: { id: number }) => z.id === 1)).toMatchObject({ festgeschrieben: true, gegenkonten: [{ nummer: 9000, name: "" }] });
+  });
+
+  it("with_payments: false lässt die Umsatzliste weg", async () => {
+    const { client } = fakeClient();
+    const [tool] = createBankOverviewTools(client, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-03-31", with_payments: false }));
+    expect(res.zahlungen).toEqual([]);
+    expect(res.nicht_gebuchte_zahlungen).toHaveLength(1);
   });
 
   it("Durchlaufende Posten: gepaarte Buchungen gleichen sich aus, übrig bleibt die offene; leere Interimskonten fehlen", async () => {
