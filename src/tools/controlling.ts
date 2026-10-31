@@ -422,7 +422,8 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       "erzeugte BWA. Dazu die Kapitalrentabilität (Eigen-, Fremd-, Gesamtkapital, wie BHB aus bis zu sechs Summen- und Saldenlisten; " +
       "ersetzt die zuletzt in BHB erzeugte SuSa; capital: false spart sie) und mit year_comparison COGS und Personalkosten gegen " +
       "das Vorjahr. erklaerungen enthält je Kennzahl eine kurze Erklärung für Rückfragen und Info-Symbole. Nur bestätigte Buchungen " +
-      "zählen; die Antwort warnt bei unbestätigten. period_*/comparison_* als YYYY-MM-DD.",
+      "zählen; die Antwort warnt bei unbestätigten. Für ein Controlling-Artefakt gilt ein Standardumfang mit allen Reitern " +
+      "(get_booking_guide controlling_artefakt). period_*/comparison_* als YYYY-MM-DD.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {

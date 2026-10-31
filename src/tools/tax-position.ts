@@ -76,20 +76,32 @@ const RESULT = new Set(["Einnahmen", "Betriebsausgabe", "Abschreibungen"]);
 // Zahlungen ans Finanzamt und Altjahre sind keine Umsatzsteuer der Periode.
 const NOT_PERIOD_UST = /vorauszahlung|erstattung|frühere jahre/i;
 
-export function monthInput(schluessel: string, report: Sums): MonthInput {
+export type Kumuliert = Omit<MonthInput, "schluessel">;
+
+// Stand seit Jahresbeginn aus den Salden (Erfolgs- und Umsatzsteuerkonten beginnen jedes Jahr bei 0). Nicht aus den
+// Periodensummen: eine SuSa ab Monatsbeginn zählt Buchungen gegen das Saldenvortragskonto (9000) zum Vortrag, nicht zur
+// Periode; eine Umbuchung von 9000 auf ein Erlöskonto fehlte dann im Gewinn (UG-Livekonto, September 2026).
+export function cumulativeInput(report: Sums): Kumuliert {
   let ust = 0;
   let vst = 0;
   let gewinn = 0;
   for (const e of Object.values(report.sums ?? {})) {
     const cls = e.postingaccount?.class;
     const name = e.postingaccount?.name ?? "";
-    const soll = e.sumPeriodDebit ?? 0;
-    const haben = e.sumPeriodCredit ?? 0;
-    if (cls === "Umsatzsteuer" && !NOT_PERIOD_UST.test(name)) ust += haben - soll;
-    else if (cls === "Vorsteuer") vst += soll - haben;
-    else if (cls !== undefined && RESULT.has(cls)) gewinn += haben - soll;
+    const saldo = signed(e);
+    if (cls === "Umsatzsteuer" && !NOT_PERIOD_UST.test(name)) ust -= saldo;
+    else if (cls === "Vorsteuer") vst += saldo;
+    else if (cls !== undefined && RESULT.has(cls)) gewinn -= saldo;
   }
-  return { schluessel, ust: r2(ust), vst: r2(vst), gewinn: r2(gewinn) };
+  return { ust: r2(ust), vst: r2(vst), gewinn: r2(gewinn) };
+}
+
+// Monatswerte als Differenz der Stände seit Jahresbeginn; der erste Monat ist Januar (Stand vorher 0).
+export function monthsFromCumulative(stand: Array<{ schluessel: string } & Kumuliert>): MonthInput[] {
+  return stand.map((s, i) => {
+    const v = i === 0 ? { ust: 0, vst: 0, gewinn: 0 } : stand[i - 1];
+    return { schluessel: s.schluessel, ust: r2(s.ust - v.ust), vst: r2(s.vst - v.vst), gewinn: r2(s.gewinn - v.gewinn) };
+  });
 }
 
 const AUTHORITY = /finanzamt|finanzkasse|steuerverwaltung|hauptzollamt|gemeindekasse|stadtkasse|steueramt/i;
@@ -109,7 +121,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
       "ohne Hinzurechnungen, Verlustvortrag, Vorauszahlungen und persönliche Verhältnisse, und ersetzt keine Steuererklärung. " +
       "Rechtsform und Ort stehen in BHB unter Unternehmensdaten (nicht über die API). Positiv bei zahllast heißt: so viel ist noch " +
       "zu zahlen, negativ: Guthaben. Es erzeugt je Monat des Jahres eine Summen- und Saldenliste (bis 12) und ERSETZT damit die zuletzt " +
-      "in BHB erzeugte. as_of als YYYY-MM-DD, Standard heute.",
+      "in BHB erzeugte. Teil des Standard-Controlling-Artefakts (get_booking_guide controlling_artefakt). as_of als YYYY-MM-DD, Standard heute.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
@@ -123,15 +135,17 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
     async handler(args) {
       const asOf = args.as_of ?? new Date().toISOString().slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new Error(`as_of "${asOf}" ist nicht im Format YYYY-MM-DD.`);
-      // Je Monat eine Summen- und Saldenliste (nacheinander): die Periodensummen geben Umsatzsteuer und Gewinn je Monat, der Saldo
-      // des letzten Berichts ist der Stand zum Stichtag (BHB führt die Salden vom Jahresbeginn fort).
+      // Je Monat eine Summen- und Saldenliste (nacheinander), nach Leistungsdatum wie die BWA und die Umsatzsteuer-Voranmeldung:
+      // die Salden sind der Stand seit Jahresbeginn (BHB führt sie vom Jahresbeginn fort), der Monatswert ist die Differenz zum
+      // Vormonat; der Saldo des letzten Berichts ist der Stand zum Stichtag.
       const ranges = seriesMonths(asOf, Number(asOf.slice(5, 7)));
-      const monthly: MonthInput[] = [];
+      const stand: Array<{ schluessel: string } & Kumuliert> = [];
       let report: Sums = {};
       for (const m of ranges) {
-        report = await runReport<Sums>("sums", { from: m.from, to: m.to > asOf ? asOf : m.to });
-        monthly.push(monthInput(m.from.slice(0, 7), report));
+        report = await runReport<Sums>("sums", { from: m.from, to: m.to > asOf ? asOf : m.to }, "date_delivery_else_date");
+        stand.push({ schluessel: m.from.slice(0, 7), ...cumulativeInput(report) });
       }
+      const monthly = monthsFromCumulative(stand);
       const lines = taxLines(report);
       const rechtsform = args.rechtsform !== undefined ? normalizeRechtsform(args.rechtsform) : null;
       const perioden = buildPeriods(monthly, { rechtsform, hebesatzPct: args.hebesatz_pct ?? null, ausschuettung: args.ausschuettung ?? 0, kirchensteuerPct: args.kirchensteuer_pct ?? 0 });

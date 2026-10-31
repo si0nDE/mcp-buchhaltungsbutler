@@ -106,7 +106,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
       "Auszahlungen), alle Zahlungen des Zeitraums je Konto mit Buchungsstatus und Gegenkonten (zahlungen; with_payments: false lässt sie weg), die noch nicht gebuchten Zahlungen einzeln und die Prüfung, ob durchlaufende Posten und Geldtransit ausgeglichen sind (Saldo, gepaarte und offene Buchungen). " +
       "Fragt der Nutzer, was auf welchem Konto liegt, ob Zahlungen offen oder unerklärt sind, dieses Tool aufrufen und als Artefakt " +
       "darstellen. Es erzeugt eine Summen- und Saldenliste und ERSETZT damit die zuletzt in BHB erzeugte. Bei angebundenen Bankkonten " +
-      "zeigt die Oberfläche den von der Bank gemeldeten Stand, der kann vom Zahlungsstand abweichen. as_of und date_from als YYYY-MM-DD.",
+      "zeigt die Oberfläche den von der Bank gemeldeten Stand, der kann vom Zahlungsstand abweichen. Teil des Standard-Controlling-Artefakts (get_booking_guide controlling_artefakt). as_of und date_from als YYYY-MM-DD.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {

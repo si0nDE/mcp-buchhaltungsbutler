@@ -302,7 +302,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       "months senkt die Zahl) und ERSETZT damit die zuletzt in BHB erzeugte SuSa. Nur bestätigte Buchungen zählen. Cash-Bestand, " +
       "Working Capital, Forderungen, Verbindlichkeiten, Top-Kunden/-Lieferanten, Zweifelhaftes, Quick Ratio und Future Cash-Inflow " +
       "die Laufzeiten, Burn Rate und Runway sind gegen BHBs Dashboard belegt; Ein- und Auszahlungen einzelner Monate weichen um wenige Euro ab (siehe hinweise). " +
-      "as_of als YYYY-MM-DD, Standard heute.",
+      "Teil des Standard-Controlling-Artefakts (get_booking_guide controlling_artefakt). as_of als YYYY-MM-DD, Standard heute.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
@@ -378,13 +378,15 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
         if (r.truncated) warnings.push(`${label}: Abfrage nach 20 Seiten abgebrochen, Summen unvollständig.`);
       }
       if (last.hatPersonenkonten) {
-        for (const [rows, art, konto, kennzahl] of [[outRows, "Ausgangsrechnungen", "Debitor", "Forderungen"], [inRows, "Eingangsrechnungen", "Kreditor", "Verbindlichkeiten"]] as const) {
+        for (const [rows, art, konto, kennzahl] of [[outRows, "Ausgangsrechnung", "Debitor", "Forderungen"], [inRows, "Eingangsrechnung", "Kreditor", "Verbindlichkeiten"]] as const) {
           const o = rows.filter((r) => r.gebucht === false);
           if (!o.length) continue;
           const beispiele = o.slice(0, 3).map((r) => `Rg. ${r.nummer || r.id} · ${r.gegenpartei} · ${r.betrag.toFixed(2)} EUR`).join("; ");
           warnings.push(
-            `${o.length} offene ${art} über zusammen ${ohneBuchung(rows).summe.toFixed(2)} EUR haben keine Buchung auf einem ${konto} ` +
-              `(${beispiele}${o.length > 3 ? "; …" : ""}). Sie fehlen in den ${kennzahl}, auch bei BHB. Beleg auf den ${konto} buchen (add_receipt_postings).`
+            (o.length === 1
+              ? `1 offene ${art} über ${ohneBuchung(rows).summe.toFixed(2)} EUR hat keine Buchung auf einem ${konto} (${beispiele}). Sie fehlt in den ${kennzahl}, auch bei BHB.`
+              : `${o.length} offene ${art}en über zusammen ${ohneBuchung(rows).summe.toFixed(2)} EUR haben keine Buchung auf einem ${konto} (${beispiele}${o.length > 3 ? "; …" : ""}). Sie fehlen in den ${kennzahl}, auch bei BHB.`) +
+              ` Beleg auf den ${konto} buchen (add_receipt_postings).`
           );
         }
       }

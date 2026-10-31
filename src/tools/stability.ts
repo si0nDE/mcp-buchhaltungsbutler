@@ -177,7 +177,7 @@ export function createStabilityTools(client: BBClient, opts: StabilityOptions = 
       "Fragt der Nutzer nach Stabilität, Bilanz, Verschuldung, Eigenkapital oder Kapitalstruktur, dieses Tool aufrufen und das Ergebnis " +
       "als Artefakt darstellen (Skill dataviz laden). Es erzeugt nacheinander Summen- und Saldenlisten nach Leistungsdatum (bis zu vier, " +
       "mit history bis zu 16; je einige Sekunden) und ERSETZT damit die zuletzt in BHB erzeugte SuSa. erklaerungen enthält je Kennzahl " +
-      "eine kurze Erklärung. Nur bestätigte Buchungen zählen. period_*/comparison_* als YYYY-MM-DD.",
+      "eine kurze Erklärung. Nur bestätigte Buchungen zählen. Teil des Standard-Controlling-Artefakts (get_booking_guide controlling_artefakt). period_*/comparison_* als YYYY-MM-DD.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {

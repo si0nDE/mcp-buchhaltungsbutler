@@ -131,7 +131,7 @@ describe("get_liquidity bei Konten mit Debitoren und Kreditoren", () => {
     expect(res.forderungen.ohne_buchung).toEqual({ anzahl: 1, summe: 900 });
     expect(res.verbindlichkeiten.ohne_buchung).toEqual({ anzahl: 1, summe: 250 });
     expect(res.forderungen.belege.map((b: { gegenpartei: string; gebucht: boolean | null }) => [b.gegenpartei, b.gebucht])).toEqual([["Kunde A", false], ["Kunde B", null]]);
-    expect(res.warnings.join(" ")).toMatch(/1 offene Ausgangsrechnungen über zusammen 900\.00 EUR haben keine Buchung auf einem Debitor/);
+    expect(res.warnings.join(" ")).toMatch(/1 offene Ausgangsrechnung über 900\.00 EUR hat keine Buchung auf einem Debitor/);
     expect(res.warnings.join(" ")).toMatch(/keine Buchung auf einem Kreditor/);
   });
 });

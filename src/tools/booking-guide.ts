@@ -963,6 +963,28 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "calculate_account_balance mit statement_balance; create_transactions prüft Betrag ungleich 0 und Verwendungszweck bis 500 Zeichen vorab; auf angebundenen Konten keine Zahlungen von Hand anlegen.",
     ],
   },
+  {
+    id: "controlling_artefakt",
+    titel: "Controlling-Artefakt: Standardumfang je Firma",
+    quelle: "Übergabe des Nutzers (Vorgabe für Controlling-Artefakte, 31.10.2026; aufgebaut an einem EÜR- und einem Bilanzierer-Livekonto)",
+    regeln: [
+      "Ein Controlling-Artefakt hat immer diese Reiter: Ergebnis, Kosten und Erträge, Liquidität, Banken, Steuern; bei Bilanzierern (Kapital- oder Debitoren-/Kreditorenkonten) zusätzlich Stabilität. Wer nur nach Profitabilität oder Liquidität fragt, bekommt trotzdem den vollen Umfang, außer er schränkt ihn ausdrücklich ein.",
+      "Quellen: get_controlling (Zeitraum gegen Vergleichszeitraum, mit Zeitreihe, Kontenblättern und Kapitalrentabilität; year_comparison für Kosten im Fokus), get_liquidity (Stichtag), get_stability (nur Bilanzierer; bricht bei EÜR ab), get_bank_overview (Stichtag, Umsätze ab 1.1.), get_tax_position (Stichtag, mit Rechtsform und Hebesatz).",
+      "Rechtsform und Gewerbesteuer-Hebesatz stehen nicht in der API (BHB: Unternehmensdaten): den Nutzer fragen oder aus einer früheren Angabe für dieselbe Firma nehmen. Ohne beide fehlt die Steuerschätzung; der Reiter Steuern zeigt dann nur Umsatzsteuer, Steuerkonten und offene Belege von Steuerbehörden.",
+      "Steuern je Rechtsform: Einzelunternehmen und Personengesellschaften mit Gewerbesteuer (Freibetrag) und Einkommensteuer, Kapitalgesellschaften (GmbH, UG) mit Gewerbesteuer ohne Freibetrag, Körperschaftsteuer und Soli; Spalten ohne Wert ausblenden. Die Annahmen der Schätzung gehören sichtbar auf den Reiter, mit Hinweis, dass sie keine Steuererklärung ersetzt und Verlustvorträge fehlen.",
+      "Bei Bilanzierern die offenen Belege mit dem Kennzeichen gebucht aus get_liquidity zeigen und benennen, was ohne Buchung in Forderungen und Verbindlichkeiten fehlt; die Kennzahlen sind die Salden der Personenkonten, die Liste die als offen markierten Belege.",
+      "Jede Kennzahl mit Erklärung (erklaerungen der Tools) und Abkürzungen ausgeschrieben; ein Wert, der fehlt, als Strich, nicht als 0. Wo BHB sichtbar anders rechnet oder ein Wert vom Dashboard abweicht, den Unterschied auf der Seite nennen.",
+      "Die Daten sind ein fester Stand mit Datum, keine Live-Abfragen: jede Abfrage legt in BHB Berichte an und ersetzt die vorigen. Für neue Zahlen die Tools erneut aufrufen und die Datensätze ersetzen.",
+      "Das Artefakt enthält Namen von Kunden und Lieferanten und ist privat, bis der Nutzer es teilt; vor dem Teilen darauf hinweisen.",
+    ],
+    ablauf: [
+      "1. Zeitraum, Vergleichszeitraum und Stichtag klären (Standard: letztes abgeschlossenes Quartal gegen das davor, Stichtag heute).",
+      "2. Rechtsform und Hebesatz klären (für get_tax_position).",
+      "3. Tools nacheinander aufrufen (sie erzeugen Berichte in BHB, nie parallel): get_controlling, get_liquidity, get_stability (wenn Bilanzierer), get_bank_overview, get_tax_position.",
+      "4. Summenkontrollen: Summe der Buchungen je Konto gleich Kontobetrag der BWA; Umsatzerlöse und Gesamtergebnis zwischen Ergebnis- und Steuerreiter für denselben Zeitraum gleich.",
+      "5. Artefakt mit allen Reitern bauen, dem Nutzer Stand, Annahmen und offene Punkte nennen.",
+    ],
+  },
 ];
 
 const BOOKING_TOPICS = BOOKING_GUIDE.map((e) => e.id) as [string, ...string[]];

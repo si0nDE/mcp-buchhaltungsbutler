@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
-import { createTaxPositionTools, monthInput, taxArea, taxLines } from "./tax-position.js";
+import { createTaxPositionTools, cumulativeInput, monthsFromCumulative, taxArea, taxLines } from "./tax-position.js";
 
 // Erfundene Zahlen. Saldo Soll positiv.
 const e = (cls: string, nr: number, name: string, abs: number, side: "debit" | "credit") => ({
@@ -114,32 +114,41 @@ describe("get_tax_position", () => {
   });
 });
 
-// Periodensummen je Konto: [Klasse, Nummer, Name, Soll der Periode, Haben der Periode]
-const period = (rows: Array<[string, number, string, number, number]>) => ({
+// Stand seit Jahresbeginn je Konto: [Klasse, Nummer, Name, Saldo (Soll positiv)]; Periodensummen bewusst anders (siehe unten)
+const stand = (rows: Array<[string, number, string, number]>, periode: Record<number, [number, number]> = {}) => ({
   integrityError: false,
   sums: Object.fromEntries(
-    rows.map(([cls, nr, name, soll, haben]) => [String(nr), { postingaccount: { class: cls, name, postingaccount_number: nr }, balanceAfterAbsolute: 0, balanceAfterSide: "debit", sumPeriodDebit: soll, sumPeriodCredit: haben }])
+    rows.map(([cls, nr, name, saldo]) => [String(nr), { postingaccount: { class: cls, name, postingaccount_number: nr }, balanceAfterAbsolute: Math.abs(saldo), balanceAfterSide: saldo < 0 ? "credit" : "debit", sumPeriodDebit: periode[nr]?.[0] ?? 0, sumPeriodCredit: periode[nr]?.[1] ?? 0 }])
   ),
 });
 
-describe("monthInput", () => {
-  const r = monthInput(
-    "2026-03",
-    period([
-      ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", 10, 210], // +200
-      ["Umsatzsteuer", 1787, "Umsatzsteuer nach § 13b UStG", 0, 30], // +30, hebt sich mit der Vorsteuer 13b auf
-      ["Umsatzsteuer", 1780, "Umsatzsteuer - Vorauszahlungen / Erstattungen", 500, 0], // Zahlung ans Finanzamt: zählt nicht
-      ["Verbindlichkeiten", 1791, "Umsatzsteuer frühere Jahre", 80, 0], // zählt nicht
-      ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 120, 20], // 100
-      ["Vorsteuer", 1577, "Abziehbare Vorsteuer § 13b UStG", 30, 0], // 30
-      ["Einnahmen", 8400, "Erlöse", 5, 1005], // +1000
-      ["Betriebsausgabe", 4950, "Beratung", 400, 0], // -400
-      ["Abschreibungen", 4832, "Abschreibung Kfz", 100, 0], // -100
-      ["Privat", 1800, "Privatentnahmen", 900, 0], // zählt nicht
+describe("cumulativeInput und monthsFromCumulative", () => {
+  const r = cumulativeInput(
+    stand([
+      ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -200],
+      ["Umsatzsteuer", 1787, "Umsatzsteuer nach § 13b UStG", -30], // hebt sich mit der Vorsteuer 13b auf
+      ["Umsatzsteuer", 1780, "Umsatzsteuer - Vorauszahlungen / Erstattungen", 500], // Zahlung ans Finanzamt: zählt nicht
+      ["Verbindlichkeiten", 1791, "Umsatzsteuer frühere Jahre", 80], // zählt nicht
+      ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 100],
+      ["Vorsteuer", 1577, "Abziehbare Vorsteuer § 13b UStG", 30],
+      ["Einnahmen", 8400, "Erlöse", -1000],
+      ["Betriebsausgabe", 4950, "Beratung", 400],
+      ["Abschreibungen", 4832, "Abschreibung Kfz", 100],
+      ["Privat", 1800, "Privatentnahmen", 900], // zählt nicht
     ])
   );
-  it("Umsatzsteuer der Periode ohne Vorauszahlungen und Altjahre, Vorsteuer, Gewinn aus den Ergebniskonten ohne Privat", () => {
-    expect(r).toEqual({ schluessel: "2026-03", ust: 230, vst: 130, gewinn: 500 });
+  it("Umsatzsteuer ohne Vorauszahlungen und Altjahre, Vorsteuer, Gewinn aus den Ergebniskonten ohne Privat, aus den Salden", () => {
+    expect(r).toEqual({ ust: 230, vst: 130, gewinn: 500 });
+  });
+  it("Monatswerte sind die Differenz zum Vormonat, Januar gegen 0", () => {
+    expect(monthsFromCumulative([{ schluessel: "2026-01", ust: 100, vst: 40, gewinn: 300 }, { schluessel: "2026-02", ust: 130, vst: 90, gewinn: 250 }])).toEqual([
+      { schluessel: "2026-01", ust: 100, vst: 40, gewinn: 300 },
+      { schluessel: "2026-02", ust: 30, vst: 50, gewinn: -50 },
+    ]);
+  });
+  it("eine Umbuchung von 9000 auf ein Erlöskonto zählt, auch wenn BHB sie nicht in den Periodensummen führt", () => {
+    // Stand Erlöse -1500 seit Jahresbeginn, die Periodensummen zeigen nur 1000 im Haben (500 kamen gegen 9000)
+    expect(cumulativeInput(stand([["Einnahmen", 8400, "Erlöse", -1500]], { 8400: [0, 1000] })).gewinn).toBe(1500);
   });
 });
 
@@ -156,7 +165,8 @@ describe("get_tax_position: Perioden und Schätzung", () => {
       if (op === "reportsGetSums") {
         const from = ranges.get(Number(params.report_id_by_customer))!;
         // Januar: Gewinn 30.000, Februar: Verlust 10.000
-        return { report: from.startsWith("2026-01") ? period([["Einnahmen", 8400, "Erlöse", 0, 40000], ["Betriebsausgabe", 4950, "Beratung", 10000, 0], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", 0, 700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200, 0]]) : period([["Einnahmen", 8400, "Erlöse", 0, 5000], ["Betriebsausgabe", 4950, "Beratung", 15000, 0]]) };
+        // Stand seit Jahresbeginn: Januar Gewinn 30.000, bis Februar kumuliert 20.000 (Februar Verlust 10.000)
+        return { report: from.startsWith("2026-01") ? stand([["Einnahmen", 8400, "Erlöse", -40000], ["Betriebsausgabe", 4950, "Beratung", 10000], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200]]) : stand([["Einnahmen", 8400, "Erlöse", -45000], ["Betriebsausgabe", 4950, "Beratung", 25000], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200]]) };
       }
       if (op === "receiptsGet") return { data: [] };
       throw new Error(`unexpected ${op}`);
@@ -169,6 +179,8 @@ describe("get_tax_position: Perioden und Schätzung", () => {
     const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
     const res = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 380 }));
     expect(call.mock.calls.filter(([op]) => op === "reportsCreateSums").map(([, p]) => (p as { date_from: string; date_to: string }).date_from + ".." + (p as { date_to: string }).date_to)).toEqual(["2026-01-01..2026-01-31", "2026-02-01..2026-02-15"]);
+    // Nach Leistungsdatum wie die BWA und die Umsatzsteuer-Voranmeldung
+    expect(call.mock.calls.filter(([op]) => op === "reportsCreateSums").every(([, p]) => (p as { base?: string }).base === "date_delivery_else_date")).toBe(true);
     expect(res.perioden.map((p: { schluessel: string }) => p.schluessel)).toEqual(["2026-01", "2026-02", "2026-Q1", "2026"]);
     expect(res.perioden[0]).toMatchObject({ umsatzsteuer: 700, vorsteuer: 200, zahllast: 500, gewinn: 30000, gewinn_kum: 30000 });
     expect(res.annahmen).toMatchObject({ rechtsform: "einzelunternehmen", hebesatz_pct: 380 });
