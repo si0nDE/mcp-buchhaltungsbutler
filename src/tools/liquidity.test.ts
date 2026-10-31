@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows, topPersonenkonten, zweifelhaftAmpel } from "./liquidity.js";
+import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows, markBooked, topPersonenkonten, zweifelhaftAmpel } from "./liquidity.js";
 
 // Erfundene Zahlen. Aufbau wie die Summen- und Saldenliste von reportsGetSums.
 const entry = (cls: string, nr: number, abs: number, side: "debit" | "credit") => ({
@@ -126,6 +126,21 @@ describe("get_liquidity bei Konten mit Debitoren und Kreditoren", () => {
     expect(res.kennzahlen.quick_ratio).toBe(5.25);
     // Top 3 aus dem Soll-Umsatz des Debitorenkontos, nicht aus den Belegen
     expect(res.forderungen.top).toEqual([{ name: "Kunde A", betrag: 900 }]);
+    // Offene Belege ohne Buchung fehlen im Kontensaldo: Kunde A (September) und Lieferant X (Oktober) haben keine;
+    // Kunde B (Januar) liegt vor den geholten Buchungen (ab August) und bleibt unbekannt.
+    expect(res.forderungen.ohne_buchung).toEqual({ anzahl: 1, summe: 900 });
+    expect(res.verbindlichkeiten.ohne_buchung).toEqual({ anzahl: 1, summe: 250 });
+    expect(res.forderungen.belege.map((b: { gegenpartei: string; gebucht: boolean | null }) => [b.gegenpartei, b.gebucht])).toEqual([["Kunde A", false], ["Kunde B", null]]);
+    expect(res.warnings.join(" ")).toMatch(/1 offene Ausgangsrechnungen über zusammen 900\.00 EUR haben keine Buchung auf einem Debitor/);
+    expect(res.warnings.join(" ")).toMatch(/keine Buchung auf einem Kreditor/);
+  });
+});
+
+describe("markBooked", () => {
+  const beleg = (id: number, datum: string) => ({ id, datum, faellig: null, nummer: "R" + id, gegenpartei: "Firma " + id, betrag: 10, tage_ueberfaellig: 0 });
+  it("gebucht, wenn eine Buchung den Beleg nennt; vor dem Buchungszeitraum unbekannt", () => {
+    const rows = markBooked([beleg(7, "2026-10-02"), beleg(8, "2026-10-03"), beleg(9, "2026-01-05")], [{ receipt_id_by_customer: "7" }, { receipt_id_by_customer: null }], "2026-08-01");
+    expect(rows.map((r) => r.gebucht)).toEqual([true, false, null]);
   });
 });
 
@@ -336,6 +351,9 @@ describe("get_liquidity", () => {
     expect(res.forderungen.zweifelhaft_ampel).toBe(zweifelhaftAmpel(res.forderungen.zweifelhaft.anteil_pct));
     expect(res.forderungen.zweifelhaft_ampel).not.toBeNull();
     expect(Object.keys(res.erklaerungen)).toEqual(expect.arrayContaining(["cash_bestand", "burn_rate", "cash_runway", "quick_ratio", "zweifelhaft"]));
+    // EÜR (keine Personenkonten): keine Buchungsprüfung der Belege
+    expect(res.forderungen.ohne_buchung).toBeUndefined();
+    expect(res.forderungen.belege[0].gebucht).toBeUndefined();
   });
 
   it("Cashflow aus Buchungen, Burn Rate als Mittel (Auszahlungen - Einzahlungen), Runway = Cash durch Burn Rate", async () => {

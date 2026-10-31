@@ -324,7 +324,8 @@ describe("get_controlling", () => {
     // Je Konto des Zeitraums ein Aufruf, nur für den Zeitraum (nicht den Vergleich)
     const ledgerCalls = call.mock.calls.filter(([op]) => op === "reportsGetSumsLedger");
     expect(ledgerCalls.length).toBeGreaterThan(0);
-    for (const [, params] of ledgerCalls) expect(params).toMatchObject({ date_from: "2026-04-01", date_to: "2026-06-30" });
+    // Nach Leistungsdatum wie die BWA, sonst passt die Summe bei Bilanzierern nicht zum Betrag der BWA
+    for (const [, params] of ledgerCalls) expect(params).toMatchObject({ date_from: "2026-04-01", date_to: "2026-06-30", base: "date_delivery_else_date" });
   });
 
   it("with_postings: false ruft keine Kontenblätter ab", async () => {

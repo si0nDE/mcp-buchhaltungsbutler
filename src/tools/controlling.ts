@@ -271,11 +271,14 @@ export function accountSides(bwa: Bwa): Map<number, "debit" | "credit"> {
 
 type LedgerRow = Record<string, unknown>;
 
-export async function fetchLedger(client: BBClient, konto: number, side: "debit" | "credit", range: Range): Promise<Buchung[]> {
+// base "date_delivery_else_date": nach Leistungsdatum wie die BWA (bei Bilanzierern verschiebt das Buchungen in einen anderen
+// Monat); ohne Angabe nach Buchungsdatum.
+export async function fetchLedger(client: BBClient, konto: number, side: "debit" | "credit", range: Range, base?: "date_delivery_else_date"): Promise<Buchung[]> {
   const res = await client.call<{ report_sums_postingaccount_ledger?: { postingaccountLedger?: LedgerRow[] } }>("reportsGetSumsLedger", {
     postingaccount_number: konto,
     date_from: range.from,
     date_to: range.to,
+    ...(base ? { base } : {}),
   });
   const rows = res.report_sums_postingaccount_ledger?.postingaccountLedger ?? [];
   return rows.map((r) => {
@@ -512,8 +515,9 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       const kostenarten = mergeArten(promoteAccounts(k, promote).kostenarten, promoteAccounts(p, promote).kostenarten, k.kosten);
       const ertragsarten = mergeArten(k.ertragsarten, p.ertragsarten, k.ertraege);
 
-      // Kontenblatt je Konto: die Summe der Zeilen eines Kontos ist genau der Betrag der BWA (Livekonto geprüft). Beträge
-      // zur normalen Seite des Kontos: Aufwand im Soll, Ertrag im Haben, die Gegenbuchung (Storno) ist negativ.
+      // Kontenblatt je Konto: die Summe der Zeilen eines Kontos ist genau der Betrag der BWA (Livekonto geprüft), bei
+      // Bilanzierern nur nach Leistungsdatum wie die BWA (am UG-Livekonto belegt: nach Buchungsdatum fehlten bei zwei Konten Beträge).
+      // Beträge zur normalen Seite des Kontos: Aufwand im Soll, Ertrag im Haben, die Gegenbuchung (Storno) ist negativ.
       const buchungen: Buchung[] = [];
       if (args.with_postings !== false) {
         const sides = accountSides(cur);
@@ -522,7 +526,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
         const worker = async () => {
           while (next < todo.length) {
             const [nr, side] = todo[next++];
-            buchungen.push(...(await fetchLedger(client, nr, side, period)));
+            buchungen.push(...(await fetchLedger(client, nr, side, period, "date_delivery_else_date")));
           }
         };
         await Promise.all(Array.from({ length: Math.min(4, todo.length) }, worker));

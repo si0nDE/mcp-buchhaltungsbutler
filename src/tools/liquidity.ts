@@ -177,6 +177,16 @@ export interface OpenReceipt {
   betrag: number;
   // Tage seit der Fälligkeit (ohne Fälligkeit seit dem Belegdatum); negativ = noch nicht fällig.
   tage_ueberfaellig: number | null;
+  // Nur bei Bilanzierern: hat der Beleg eine Buchung (auf dem Personenkonto)? null = älter als die geholten Buchungen.
+  gebucht?: boolean | null;
+}
+
+// Bilanzierer buchen jeden Beleg auf ein Debitoren- oder Kreditorenkonto. Ein offener Beleg ohne Buchung fehlt deshalb im
+// Saldo dieser Konten, also in Forderungen und Verbindlichkeiten (auch bei BHB). Geprüft wird nur, was im Zeitraum der
+// geholten Buchungen liegt (`since`); ältere Belege bleiben unbekannt (null), statt fälschlich als ungebucht zu gelten.
+export function markBooked(rows: OpenReceipt[], postings: Row[], since: string): OpenReceipt[] {
+  const ids = new Set(postings.map((p) => Number(p.receipt_id_by_customer)).filter((n) => Number.isInteger(n) && n > 0));
+  return rows.map((r) => ({ ...r, gebucht: r.datum < since ? null : ids.has(r.id) }));
 }
 
 export function openReceiptRows(rows: Row[], asOf: string): OpenReceipt[] {
@@ -286,7 +296,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       "die API hat dafür keinen Endpunkt, das Tool braucht nur Summen- und Saldenliste, Buchungen und Belege): Cash-Bestand, Working Capital und Cashflow (Ein-/Auszahlungen) über 12 Monate, " +
       "Burn Rate und Cash Runway, offene Forderungen und Verbindlichkeiten mit den drei größten Kunden/Lieferanten, Anteil " +
       "zweifelhafter Forderungen (mindestens 90 Tage überfällig), Debitoren-/Kreditorenlaufzeit, Quick Ratio, Future Cash-Inflow, " +
-      "dazu alle offenen Belege je Firma (parteien) und einzeln (belege) zum Anklicken. " +
+      "dazu alle offenen Belege je Firma (parteien) und einzeln (belege) zum Anklicken; bei Bilanzierern mit Kennzeichen, ob der Beleg auf dem Personenkonto gebucht ist (ohne Buchung fehlt er in Forderungen/Verbindlichkeiten). " +
       "Fragt der Nutzer nach Liquidität, Cash, Working Capital, Burn Rate oder offenen Posten, dieses Tool aufrufen und als " +
       "Artefakt darstellen (Skill dataviz laden). Es erzeugt je Monat eine Summen- und Saldenliste (bis 12, je einige Sekunden; " +
       "months senkt die Zahl) und ERSETZT damit die zuletzt in BHB erzeugte SuSa. Nur bestätigte Buchungen zählen. Cash-Bestand, " +
@@ -342,8 +352,16 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
         forderungen.top = topPersonenkonten(jahr, "Debitorenkonto");
         verbindlichkeiten.top = topPersonenkonten(jahr, "Kreditorenkonto");
       }
-      const outRows = openReceiptRows(outbound.rows, asOf);
-      const inRows = openReceiptRows(inbound.rows, asOf);
+      let outRows = openReceiptRows(outbound.rows, asOf);
+      let inRows = openReceiptRows(inbound.rows, asOf);
+      const ohneBuchung = (rows: OpenReceipt[]) => {
+        const o = rows.filter((r) => r.gebucht === false);
+        return { anzahl: o.length, summe: r2(o.reduce((s, r) => s + r.betrag, 0)) };
+      };
+      if (last.hatPersonenkonten) {
+        outRows = markBooked(outRows, postings.rows, monthRanges[0].from);
+        inRows = markBooked(inRows, postings.rows, monthRanges[0].from);
+      }
       const flow = cashflowByMonth(postings.rows, fin, excluded, keys);
       const ein = keys.map((k) => r2(flow.get(k)!.ein));
       const aus = keys.map((k) => r2(flow.get(k)!.aus));
@@ -358,6 +376,17 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       if (fin.size === 0) warnings.push("Kein Konto der Klasse Finanzkonto gefunden: Cash-Bestand und Working Capital sind 0.");
       for (const [label, r] of [["Belege (offene Ausgangsrechnungen)", outbound], ["Belege (offene Eingangsrechnungen)", inbound], ["Belege (bezahlte Ausgangsrechnungen)", paidOut], ["Belege (bezahlte Eingangsrechnungen)", paidIn], ["Buchungen", postings]] as const) {
         if (r.truncated) warnings.push(`${label}: Abfrage nach 20 Seiten abgebrochen, Summen unvollständig.`);
+      }
+      if (last.hatPersonenkonten) {
+        for (const [rows, art, konto, kennzahl] of [[outRows, "Ausgangsrechnungen", "Debitor", "Forderungen"], [inRows, "Eingangsrechnungen", "Kreditor", "Verbindlichkeiten"]] as const) {
+          const o = rows.filter((r) => r.gebucht === false);
+          if (!o.length) continue;
+          const beispiele = o.slice(0, 3).map((r) => `Rg. ${r.nummer || r.id} · ${r.gegenpartei} · ${r.betrag.toFixed(2)} EUR`).join("; ");
+          warnings.push(
+            `${o.length} offene ${art} über zusammen ${ohneBuchung(rows).summe.toFixed(2)} EUR haben keine Buchung auf einem ${konto} ` +
+              `(${beispiele}${o.length > 3 ? "; …" : ""}). Sie fehlen in den ${kennzahl}, auch bei BHB. Beleg auf den ${konto} buchen (add_receipt_postings).`
+          );
+        }
       }
 
       return finishWithExport(args.save_as, {
@@ -376,8 +405,8 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
             verbindlichkeiten_konten: last.verbindlichkeiten,
           },
         },
-        forderungen: { ...forderungen, zweifelhaft_ampel: zweifelhaftAmpel(forderungen.zweifelhaft.anteil_pct), debitorenlaufzeit_tage: dso.tage, debitorenlaufzeit_belege: dso.anzahl, parteien: openByParty(outRows), belege: outRows },
-        verbindlichkeiten: { ...verbindlichkeiten, kreditorenlaufzeit_tage: dpo.tage, kreditorenlaufzeit_belege: dpo.anzahl, parteien: openByParty(inRows), belege: inRows },
+        forderungen: { ...forderungen, zweifelhaft_ampel: zweifelhaftAmpel(forderungen.zweifelhaft.anteil_pct), debitorenlaufzeit_tage: dso.tage, debitorenlaufzeit_belege: dso.anzahl, ...(last.hatPersonenkonten ? { ohne_buchung: ohneBuchung(outRows) } : {}), parteien: openByParty(outRows), belege: outRows },
+        verbindlichkeiten: { ...verbindlichkeiten, kreditorenlaufzeit_tage: dpo.tage, kreditorenlaufzeit_belege: dpo.anzahl, ...(last.hatPersonenkonten ? { ohne_buchung: ohneBuchung(inRows) } : {}), parteien: openByParty(inRows), belege: inRows },
         kennzahlen: {
           quick_ratio: verbindlichkeiten.summe === 0 ? null : r2((last.cash + forderungen.summe) / verbindlichkeiten.summe),
           future_cash_inflow: r2(forderungen.summe - verbindlichkeiten.summe),
@@ -393,8 +422,8 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
         erklaerungen: ERKLAERUNGEN,
         hinweise: [
           "Cash-Bestand = Summe der Salden aller Konten der Klasse Finanzkonto in der Summen- und Saldenliste (gebuchte Buchungen), auch Darlehens- und Verrechnungskonten dieser Klasse. Ein Darlehenskonto im Minus drückt ihn tief ins Negative.",
-          "Working Capital = Cash-Bestand - Saldo Vorsteuer - Saldo Umsatzsteuer + Saldo Verbindlichkeiten (Soll positiv): so rechnet BHB, die Vorzeichen sind ungewöhnlich. Auf den Cent belegt gegen BHB für drei Monate; ohne Debitoren/Kreditoren-Konten geprüft, deren Behandlung ist nicht belegt.",
-          "Bilanzierer (Konten mit Debitoren-/Kreditorenkonten, an einem UG-Livekonto gegen BHB belegt): Forderungen und Verbindlichkeiten sind die Salden dieser Personenkonten (nicht die offenen Belege), die Top 3 sind je Personenkonto der Umsatz auf der Rechnungsseite der letzten zwölf Monate (Debitoren Soll, Kreditoren Haben; je Konto, nicht je Name; alle sechs Einträge auf den Cent). Das Working Capital enthält dort zusätzlich die Klassen Forderungen und Rückstellung und rechnet nach Leistungsdatum (Juni und September auf den Cent).",
+          "Working Capital = Cash-Bestand - Saldo Vorsteuer - Saldo Umsatzsteuer + Saldo Verbindlichkeiten (Soll positiv): so rechnet BHB, die Vorzeichen sind ungewöhnlich. Auf den Cent belegt gegen BHB für drei Monate an einem EÜR-Konto; bei Bilanzierern siehe den nächsten Hinweis.",
+          "Bilanzierer (Konten mit Debitoren-/Kreditorenkonten, an einem UG-Livekonto gegen BHB belegt): Forderungen und Verbindlichkeiten sind die Salden dieser Personenkonten (nicht die offenen Belege), die Top 3 sind je Personenkonto der Umsatz auf der Rechnungsseite der letzten zwölf Monate (Debitoren Soll, Kreditoren Haben; je Konto, nicht je Name; alle sechs Einträge auf den Cent). Das Working Capital enthält dort zusätzlich die Klassen Forderungen und Rückstellung und rechnet nach Leistungsdatum (Juni und September auf den Cent). Offene Belege ohne Buchung (gebucht: false, Summe in ohne_buchung) fehlen in diesen Salden, auch bei BHB: Belege erst auf den Debitor oder Kreditor buchen. Belege, die älter sind als die geholten Buchungen, bleiben ungeprüft (gebucht: null).",
           "Forderungen und Verbindlichkeiten (ohne Personenkonten, EÜR) = Summe der offenen Belege (Gutschriften mindern). Top-Kunden und -Lieferanten: offene Belege der letzten zwölf Monate je Gegenpartei. Zweifelhaft: Fälligkeit (ohne Fälligkeit Belegdatum) mindestens 90 Tage her.",
           "Cashflow aus den Buchungen auf Finanzkonten nach Buchungsdatum, Split für Split, ohne Interims-/Geldtransitkonten und ohne Anfangssalden (Saldenvortrag). Im Livekonto stimmt die Summe über zwölf Monate mit BHB auf den Cent, damit auch Burn Rate und Cash Runway. Einzelne Monate weichen um wenige Euro ab: BHB zählt dann einen kleinen Betrag zusätzlich auf beiden Seiten, netto gleich (Ursache nicht geklärt).",
           "Cash Runway = Cash-Bestand durch Burn Rate (BHB beschriftet das mit Tagen, rechnerisch sind es Monate). Wird der Quotient negativ, zeigt BHB unbegrenzt (∞): cash_runway ist dann null und cash_runway_unbegrenzt true. Sind Cash-Bestand und Burn Rate beide negativ, bleibt es eine Zahl, die kaum aussagekräftig ist.",
