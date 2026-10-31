@@ -17,11 +17,11 @@ function mockClient(result: unknown): BBClient {
 }
 
 describe("createServer", () => {
-  it("registers exactly 57 tools", () => {
+  it("registers exactly 58 tools", () => {
     const server = createServer(mockClient({}));
     const registeredTools = (server as unknown as { _registeredTools: Record<string, unknown> })
       ._registeredTools;
-    expect(Object.keys(registeredTools)).toHaveLength(57);
+    expect(Object.keys(registeredTools)).toHaveLength(58);
   });
 
   it("wires list_accounts through to the given client", async () => {

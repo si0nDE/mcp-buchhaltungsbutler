@@ -21,6 +21,8 @@ interface SumsEntry {
   postingaccount?: { class?: string; type?: string; name?: string; postingaccount_number?: number };
   balanceAfterAbsolute?: number;
   balanceAfterSide?: string;
+  sumPeriodDebit?: number | string | null;
+  sumPeriodCredit?: number | string | null;
 }
 interface Sums {
   sums?: Record<string, SumsEntry>;
@@ -35,13 +37,20 @@ export interface Balances {
   vorsteuer: number;
   umsatzsteuer: number;
   verbindlichkeiten: number;
+  forderungen: number;
+  rueckstellung: number;
+  // Salden der Debitoren- und Kreditorenkonten (Soll positiv) und ob es solche Konten gibt (Bilanzierer).
+  debitoren: number;
+  kreditoren: number;
+  hatPersonenkonten: boolean;
   workingCapital: number;
   finanzkonten: string[];
   interimskonten: string[];
 }
 
 export function balancesFromSums(report: Sums): Balances {
-  const by = { fin: 0, vst: 0, ust: 0, verb: 0 };
+  const by = { fin: 0, vst: 0, ust: 0, verb: 0, ford: 0, rueck: 0, deb: 0, kred: 0 };
+  let personen = false;
   const finanzkonten: string[] = [];
   const interimskonten: string[] = [];
   for (const [nr, e] of Object.entries(report.sums ?? {})) {
@@ -52,6 +61,10 @@ export function balancesFromSums(report: Sums): Balances {
     } else if (cls === "Vorsteuer") by.vst += signed(e);
     else if (cls === "Umsatzsteuer") by.ust += signed(e);
     else if (cls === "Verbindlichkeiten") by.verb += signed(e);
+    else if (cls === "Forderungen") by.ford += signed(e);
+    else if (cls === "Rückstellung") by.rueck += signed(e);
+    else if (cls === "Debitorenkonto") { by.deb += signed(e); personen = true; }
+    else if (cls === "Kreditorenkonto") { by.kred += signed(e); personen = true; }
     else if (cls === "Interimskonto" || cls === "Saldovortrag") interimskonten.push(nr);
   }
   return {
@@ -59,7 +72,12 @@ export function balancesFromSums(report: Sums): Balances {
     vorsteuer: r2(by.vst),
     umsatzsteuer: r2(by.ust),
     verbindlichkeiten: r2(by.verb),
-    workingCapital: r2(by.fin - by.vst - by.ust + by.verb),
+    forderungen: r2(by.ford),
+    rueckstellung: r2(by.rueck),
+    debitoren: r2(by.deb),
+    kreditoren: r2(by.kred),
+    hatPersonenkonten: personen,
+    workingCapital: r2(by.fin - by.vst - by.ust + by.verb + by.ford + by.rueck),
     finanzkonten,
     interimskonten,
   };
@@ -132,6 +150,22 @@ export function openReceiptKpis(rows: Row[], asOf: string, topN = 3): OpenKpis {
     top,
     zweifelhaft: { betrag: r2(zweifelhaft), anteil_pct: summe === 0 ? null : r2((zweifelhaft / summe) * 100) },
   };
+}
+
+// Top-Gegenparteien bei Konten mit Debitoren-/Kreditorenkonten: je Personenkonto der Umsatz auf der Rechnungsseite in den
+// letzten zwölf Monaten (Debitoren Soll, Kreditoren Haben), aus einer SuSa über diesen Zeitraum. Je Konto, nicht je Name:
+// hat eine Firma zwei Personenkonten, zählt jedes für sich (so zeigt es BHB). Am UG-Livekonto für alle sechs Einträge auf
+// den Cent belegt; ein Saldovortrag aus der Zeit davor zählt nicht.
+export function topPersonenkonten(report: Sums, cls: "Debitorenkonto" | "Kreditorenkonto", topN = 3): Array<{ name: string; betrag: number }> {
+  return Object.values(report.sums ?? {})
+    .filter((e) => e.postingaccount?.class === cls)
+    .map((e) => ({
+      name: e.postingaccount?.name ?? String(e.postingaccount?.postingaccount_number ?? ""),
+      betrag: r2(Number(cls === "Debitorenkonto" ? e.sumPeriodDebit : e.sumPeriodCredit) || 0),
+    }))
+    .filter((t) => t.betrag > 0)
+    .sort((a, b) => b.betrag - a.betrag)
+    .slice(0, topN);
 }
 
 export interface OpenReceipt {
@@ -232,11 +266,11 @@ const ERKLAERUNGEN = {
   burn_rate: "Burn Rate heißt wörtlich Verbrennungsrate: der Durchschnitt der letzten zwölf Monate von Auszahlungen minus Einzahlungen. Positiv heißt: es fließt mehr ab als zu. Negativ heißt: im Schnitt kommt mehr herein.",
   cash_runway: "Cash-Bestand geteilt durch die Burn Rate: wie viele Monate das Geld beim jetzigen Verbrauch reicht. BHB beschriftet den Wert mit Tagen, gemeint sind Monate. Nur aussagekräftig bei positivem Cash-Bestand und positiver Burn Rate.",
   forderungen: "Summe der offenen Ausgangsrechnungen, also Geld, das Kunden noch schulden. Gutschriften mindern sie.",
-  top_kunden: "Die drei Kunden mit den höchsten offenen Rechnungen aus den letzten zwölf Monaten.",
+  top_kunden: "Die drei Kunden mit den höchsten offenen Rechnungen aus den letzten zwölf Monaten. Mit Debitorenkonten (Bilanzierer): die drei Kunden mit dem höchsten Rechnungsumsatz der letzten zwölf Monate, bezahlt oder offen.",
   zweifelhaft: "Anteil der offenen Forderungen, die mindestens 90 Tage über der Fälligkeit liegen (ohne Fälligkeit: ab Rechnungsdatum). Die Anzeige ist grün bis 33 %, gelb bis 66 %, darüber rot.",
   debitorenlaufzeit: "Debitoren sind Kunden. Die Debitorenlaufzeit (englisch DSO, Days Sales Outstanding) ist die durchschnittliche Zahl der Tage vom Rechnungsdatum bis zur Zahlung, über alle bezahlten Rechnungen der letzten zwölf Monate. Kürzer ist besser.",
   verbindlichkeiten: "Summe der offenen Eingangsrechnungen, also was das Unternehmen Lieferanten noch schuldet.",
-  top_lieferanten: "Die drei Lieferanten mit den höchsten offenen Rechnungen aus den letzten zwölf Monaten.",
+  top_lieferanten: "Die drei Lieferanten mit den höchsten offenen Rechnungen aus den letzten zwölf Monaten. Mit Kreditorenkonten (Bilanzierer): die drei Lieferanten mit dem höchsten Rechnungsumsatz der letzten zwölf Monate, bezahlt oder offen.",
   kreditorenlaufzeit: "Kreditoren sind Lieferanten. Die Kreditorenlaufzeit (englisch DPO, Days Payables Outstanding) ist die durchschnittliche Zahl der Tage vom Rechnungsdatum bis zur eigenen Zahlung. Ideal liegt sie über der Debitorenlaufzeit: Kunden zahlen dann, bevor Lieferanten bezahlt werden müssen.",
   quick_ratio: "Quick Ratio (Liquidität zweiten Grades): Cash-Bestand plus Forderungen geteilt durch Verbindlichkeiten. Über 1 reicht das kurzfristig Verfügbare für alle offenen Rechnungen, ab etwa 1,05 gilt es als gut. Zweifelhafte Forderungen zählen voll mit.",
   future_cash_inflow: "Forderungen minus Verbindlichkeiten: um wie viel sich der Geldbestand ändert, wenn alle offenen Rechnungen in beide Richtungen bezahlt werden (englisch: künftiger Geldzufluss).",
@@ -273,12 +307,13 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       const monthRanges = seriesMonths(asOf, count);
       const keys = monthRanges.map((r) => r.from.slice(0, 7));
 
-      // Nacheinander: BHB führt nur eine Summen- und Saldenliste gleichzeitig.
+      // Nacheinander: BHB führt nur eine Summen- und Saldenliste gleichzeitig. Nach Leistungsdatum wie BHB: bei Bilanzierern
+      // verschiebt ein abweichendes Leistungsdatum Kreditoren und Steuer in einen anderen Monat (am UG-Livekonto belegt).
       const balances: Balances[] = [];
       let integrity = false;
       for (const m of monthRanges) {
         const range: Range = { from: `${m.from.slice(0, 4)}-01-01`, to: m.to > asOf ? asOf : m.to };
-        const report = await runReport<Sums>("sums", range);
+        const report = await runReport<Sums>("sums", range, "date_delivery_else_date");
         integrity = integrity || report.integrityError === true;
         balances.push(balancesFromSums(report));
       }
@@ -296,6 +331,17 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       ]);
       const forderungen = openReceiptKpis(outbound.rows, asOf);
       const verbindlichkeiten = openReceiptKpis(inbound.rows, asOf);
+      // Mit Debitoren-/Kreditorenkonten (Bilanzierer) zählt BHB deren Salden, nicht die offenen Belege; die Top 3 sind der
+      // Umsatz der Personenkonten über zwölf Monate (eine weitere SuSa, erster Tag des Monats elf Monate vor as_of bis as_of).
+      if (last.hatPersonenkonten) {
+        forderungen.summe = last.debitoren;
+        verbindlichkeiten.summe = r2(-last.kreditoren);
+        forderungen.zweifelhaft.anteil_pct = forderungen.summe === 0 ? null : r2((forderungen.zweifelhaft.betrag / forderungen.summe) * 100);
+        verbindlichkeiten.zweifelhaft.anteil_pct = verbindlichkeiten.summe === 0 ? null : r2((verbindlichkeiten.zweifelhaft.betrag / verbindlichkeiten.summe) * 100);
+        const jahr = await runReport<Sums>("sums", { from: seriesMonths(asOf, 12)[0].from, to: asOf }, "date_delivery_else_date");
+        forderungen.top = topPersonenkonten(jahr, "Debitorenkonto");
+        verbindlichkeiten.top = topPersonenkonten(jahr, "Kreditorenkonto");
+      }
       const outRows = openReceiptRows(outbound.rows, asOf);
       const inRows = openReceiptRows(inbound.rows, asOf);
       const flow = cashflowByMonth(postings.rows, fin, excluded, keys);
@@ -320,7 +366,9 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
           bestand: last.cash,
           working_capital: last.workingCapital,
           burn_rate: burn,
-          cash_runway: burn === 0 ? null : r2(last.cash / burn),
+          // BHB zeigt "unbegrenzt" (∞), wenn der Quotient negativ wird: das Geld reicht dann beim jetzigen Verlauf nie auf.
+          cash_runway: burn === 0 || last.cash / burn < 0 ? null : r2(last.cash / burn),
+          cash_runway_unbegrenzt: burn !== 0 && last.cash / burn < 0,
           komponenten_working_capital: {
             finanzkonten: last.cash,
             vorsteuer: last.vorsteuer,
@@ -346,9 +394,10 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
         hinweise: [
           "Cash-Bestand = Summe der Salden aller Konten der Klasse Finanzkonto in der Summen- und Saldenliste (gebuchte Buchungen), auch Darlehens- und Verrechnungskonten dieser Klasse. Ein Darlehenskonto im Minus drückt ihn tief ins Negative.",
           "Working Capital = Cash-Bestand - Saldo Vorsteuer - Saldo Umsatzsteuer + Saldo Verbindlichkeiten (Soll positiv): so rechnet BHB, die Vorzeichen sind ungewöhnlich. Auf den Cent belegt gegen BHB für drei Monate; ohne Debitoren/Kreditoren-Konten geprüft, deren Behandlung ist nicht belegt.",
-          "Forderungen und Verbindlichkeiten = Summe der offenen Belege (Gutschriften mindern). Top-Kunden und -Lieferanten: offene Belege der letzten zwölf Monate je Gegenpartei. Zweifelhaft: Fälligkeit (ohne Fälligkeit Belegdatum) mindestens 90 Tage her.",
+          "Bilanzierer (Konten mit Debitoren-/Kreditorenkonten, an einem UG-Livekonto gegen BHB belegt): Forderungen und Verbindlichkeiten sind die Salden dieser Personenkonten (nicht die offenen Belege), die Top 3 sind je Personenkonto der Umsatz auf der Rechnungsseite der letzten zwölf Monate (Debitoren Soll, Kreditoren Haben; je Konto, nicht je Name; alle sechs Einträge auf den Cent). Das Working Capital enthält dort zusätzlich die Klassen Forderungen und Rückstellung und rechnet nach Leistungsdatum (Juni und September auf den Cent).",
+          "Forderungen und Verbindlichkeiten (ohne Personenkonten, EÜR) = Summe der offenen Belege (Gutschriften mindern). Top-Kunden und -Lieferanten: offene Belege der letzten zwölf Monate je Gegenpartei. Zweifelhaft: Fälligkeit (ohne Fälligkeit Belegdatum) mindestens 90 Tage her.",
           "Cashflow aus den Buchungen auf Finanzkonten nach Buchungsdatum, Split für Split, ohne Interims-/Geldtransitkonten und ohne Anfangssalden (Saldenvortrag). Im Livekonto stimmt die Summe über zwölf Monate mit BHB auf den Cent, damit auch Burn Rate und Cash Runway. Einzelne Monate weichen um wenige Euro ab: BHB zählt dann einen kleinen Betrag zusätzlich auf beiden Seiten, netto gleich (Ursache nicht geklärt).",
-          "Cash Runway = Cash-Bestand durch Burn Rate (BHB beschriftet das mit Tagen, rechnerisch sind es Monate). Bei negativem Cash-Bestand und negativer Burn Rate ist die Zahl nicht aussagekräftig.",
+          "Cash Runway = Cash-Bestand durch Burn Rate (BHB beschriftet das mit Tagen, rechnerisch sind es Monate). Wird der Quotient negativ, zeigt BHB unbegrenzt (∞): cash_runway ist dann null und cash_runway_unbegrenzt true. Sind Cash-Bestand und Burn Rate beide negativ, bleibt es eine Zahl, die kaum aussagekräftig ist.",
           "Debitoren-/Kreditorenlaufzeit = einfaches Mittel aus Zahlungsdatum minus Belegdatum über alle bezahlten Belege der letzten zwölf Monate (payment_date des Belegs); gegen BHBs Dashboard auf die zweite Nachkommastelle bestätigt.",
         ],
         warnings,

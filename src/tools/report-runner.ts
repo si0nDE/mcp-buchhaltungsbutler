@@ -30,12 +30,17 @@ export function createReportRunner(client: BBClient, opts: RunnerOptions = {}) {
   const pollMs = opts.pollMs ?? 3000;
   const maxWaitMs = opts.maxWaitMs ?? 120_000;
 
-  return async function run<T>(kind: keyof typeof KINDS, range: Range): Promise<T> {
+  // base gilt nur für die SuSa: "date_delivery_else_date" rechnet nach Leistungsdatum (so rechnet BHB Bilanz und Kapital).
+  return async function run<T>(kind: keyof typeof KINDS, range: Range, base?: "date" | "date_delivery_else_date"): Promise<T> {
     const k = KINDS[kind];
     let created: { id_by_customer?: string | number } | undefined;
     for (let waited = 0; !created; waited += pollMs) {
       try {
-        created = await client.call<{ id_by_customer?: string | number }>(k.create, { date_from: range.from, date_to: range.to });
+        created = await client.call<{ id_by_customer?: string | number }>(k.create, {
+          date_from: range.from,
+          date_to: range.to,
+          ...(base && kind === "sums" ? { base } : {}),
+        });
       } catch (e) {
         const busy = e instanceof BuchhaltungsButlerApiError && e.statusCode === 400 && BUSY.test(e.message);
         if (!busy) throw e;

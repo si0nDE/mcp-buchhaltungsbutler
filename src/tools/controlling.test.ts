@@ -434,6 +434,23 @@ describe("Kapitalrentabilität", () => {
     expect(k).toEqual({ ergebnis: 1500, privat: -600, fremdkapital: 500 });
   });
 
+  it("Bilanzierer: Klasse Kapital zählt wie Privat gegen das Eigenkapital, Rückstellungen zum Fremdkapital", () => {
+    const k = capitalFromSums(
+      susa([
+        ["Einnahmen", 2000, "credit"],
+        ["Betriebsausgabe", 2600, "debit"],
+        ["Kapital", 500, "credit"], // gezeichnetes Kapital
+        ["Kapital", 1800, "debit"], // Verlustvortrag
+        ["Umsatzsteuer", 300, "credit"],
+        ["Vorsteuer", 120, "debit"],
+        ["Rückstellung", 40, "credit"],
+        ["Kreditorenkonto", 700, "credit"], // Personenkonten stecken schon im Sammelkonto der Klasse Verbindlichkeiten
+      ])
+    );
+    // Ergebnis -600; Kapital netto 1300 im Soll: Eigenkapital -600 - 1300 = -1900; Fremdkapital 300 - 120 + 40 = 220
+    expect(k).toEqual({ ergebnis: -600, privat: 1300, fremdkapital: 220 });
+  });
+
   it("Anfang: Ergebnis bis einschließlich erstem Tag, Privat und Fremdkapital vom Vortag; Ende: alles bis zum letzten Tag", () => {
     const r = capitalAt(
       { tag: { ergebnis: 950, privat: -150, fremdkapital: 210 }, vortag: { ergebnis: 900, privat: -100, fremdkapital: 200 } },
@@ -481,6 +498,8 @@ describe("Kapitalrentabilität", () => {
     const sumsCalls = call.mock.calls.filter(([op]) => op === "reportsCreateSums").map(([, p]) => `${p.date_from}..${p.date_to}`);
     // Q2: 1.4., Vortag 31.3., 30.6.; Q1 beginnt am 1.1. (kein Vortag), 31.3. ist schon geholt.
     expect(sumsCalls).toEqual(["2026-01-01..2026-04-01", "2026-01-01..2026-03-31", "2026-01-01..2026-06-30", "2026-01-01..2026-01-01"]);
+    // Nach Leistungsdatum wie BHB (bei Bilanzierern verschiebt das Kapital und Fremdkapital).
+    expect(call.mock.calls.filter(([op]) => op === "reportsCreateSums").every(([, p]) => p.base === "date_delivery_else_date")).toBe(true);
     const kr = res.kapitalrentabilitaet;
     // Anfang: Ergebnis 1.4. (950) - Privat 31.3. (-100) = 1050; Ende 3000 - 0
     expect(kr.zeitraum.eigenkapital).toEqual({ anfang: 1050, ende: 3000, durchschnitt: 2025 });

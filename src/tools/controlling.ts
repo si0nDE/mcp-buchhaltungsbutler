@@ -201,7 +201,7 @@ export function mergeArten(cur: CostLine[], prev: CostLine[], total: number) {
 }
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const utc = (s: string) => {
+export const utc = (s: string) => {
   const m = DATE.exec(s);
   if (!m) throw new Error(`Datum "${s}" ist nicht im Format YYYY-MM-DD.`);
   const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
@@ -212,7 +212,7 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 const monthStart = (y: number, m0: number) => iso(new Date(Date.UTC(y, m0, 1)));
 const monthEnd = (y: number, m0: number) => iso(new Date(Date.UTC(y, m0 + 1, 0)));
 const minusOneYear = (s: string) => `${Number(s.slice(0, 4)) - 1}${s.slice(4)}`;
-const dayBefore = (s: string) => iso(new Date(utc(s).getTime() - 86400000));
+export const dayBefore = (s: string) => iso(new Date(utc(s).getTime() - 86400000));
 
 export type { Range };
 
@@ -243,7 +243,7 @@ export function seriesMonths(to: string, count = 6): Range[] {
 }
 
 const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
-const monthLabel = (r: Range) => `${MONTHS[Number(r.from.slice(5, 7)) - 1]} ${r.from.slice(0, 4)}`;
+export const monthLabel = (r: Range) => `${MONTHS[Number(r.from.slice(5, 7)) - 1]} ${r.from.slice(0, 4)}`;
 
 export interface Buchung {
   konto: number;
@@ -311,8 +311,13 @@ export interface Sums {
   sums?: Record<string, SumsEntry>;
   integrityError?: boolean;
 }
+// Bilanzierer (Klasse Kapital, Rückstellungen, Debitoren/Kreditoren) am 30.10.2026 gegen ein zweites Livekonto (UG, SKR03)
+// für Q3 gegen Q2 nachgerechnet: die Klasse Kapital zählt wie Privat gegen das Eigenkapital, Rückstellungen zählen zum
+// Fremdkapital, und BHB nimmt die SuSa nach Leistungsdatum (base date_delivery_else_date). Bei EÜR ohne Personenkonten
+// ändert beides nichts.
 const RESULT_CLASSES = new Set(["Einnahmen", "Betriebsausgabe", "Abschreibungen"]);
-const DEBT_CLASSES = new Set(["Umsatzsteuer", "Vorsteuer", "Verbindlichkeiten"]);
+const EQUITY_CLASSES = new Set(["Privat", "Kapital"]);
+const DEBT_CLASSES = new Set(["Umsatzsteuer", "Vorsteuer", "Verbindlichkeiten", "Rückstellung"]);
 const signedBalance = (e: SumsEntry) => (e.balanceAfterSide === "credit" ? -1 : 1) * (e.balanceAfterAbsolute ?? 0);
 
 export interface KapitalTeile {
@@ -328,7 +333,7 @@ export function capitalFromSums(report: Sums): KapitalTeile {
   for (const e of Object.values(report.sums ?? {})) {
     const cls = e.postingaccount?.class ?? "";
     if (RESULT_CLASSES.has(cls)) ergebnis -= signedBalance(e);
-    else if (cls === "Privat") privat += signedBalance(e);
+    else if (EQUITY_CLASSES.has(cls)) privat += signedBalance(e);
     else if (DEBT_CLASSES.has(cls)) fremd -= signedBalance(e);
   }
   return { ergebnis: r2(ergebnis), privat: r2(privat), fremdkapital: r2(fremd) };
@@ -386,8 +391,8 @@ const ERKLAERUNGEN = {
   kostenarten: "Die Kosten nach Kostenart der BWA mit ihrem Anteil an allen Kosten und der Veränderung gegenüber dem Vergleichszeitraum. 'Sonstige Kosten' sammelt, was keiner eigenen Kostenart zugeordnet ist.",
   cogs: "COGS steht für Cost of Goods Sold, auf Deutsch Wareneinsatz: die direkt produktbezogenen Kosten, ohne Personal. Im Konnektor sind das der Wareneinsatz und die Kosten der Warenabgabe. Die COGS-Marge ist COGS geteilt durch die Gesamtleistung.",
   personalkosten: "Alle Aufwendungen für die Entlohnung der Mitarbeiter: Löhne, Gehälter, Sozialabgaben und Nebenkosten. Die Personalaufwandsquote ist Personalkosten geteilt durch die Gesamtleistung, ein Maß für den Personaleinsatz im Verhältnis zur Leistung.",
-  eigenkapitalrentabilitaet: "Ergebnis des Zeitraums geteilt durch das durchschnittliche Eigenkapital (Ergebnis seit Jahresbeginn minus Privatentnahmen plus Privateinlagen). Bei negativem Eigenkapital kehrt sich das Vorzeichen um und der Wert ist kaum lesbar.",
-  fremdkapitalrentabilitaet: "Zinsaufwand geteilt durch das durchschnittliche Fremdkapital (Steuerschulden und Verbindlichkeiten): was das geliehene Geld kostet. Darlehen, die als Finanzkonto geführt werden, zählen hier nicht mit.",
+  eigenkapitalrentabilitaet: "Ergebnis des Zeitraums geteilt durch das durchschnittliche Eigenkapital (Ergebnis seit Jahresbeginn minus Privatentnahmen plus Privateinlagen, bei Kapitalgesellschaften zuzüglich gezeichnetem Kapital und Gewinn- oder Verlustvortrag). Bei negativem Eigenkapital kehrt sich das Vorzeichen um und der Wert ist kaum lesbar.",
+  fremdkapitalrentabilitaet: "Zinsaufwand geteilt durch das durchschnittliche Fremdkapital (Steuerschulden, Verbindlichkeiten und Rückstellungen): was das geliehene Geld kostet. Darlehen, die als Finanzkonto geführt werden, zählen hier nicht mit.",
   gesamtkapitalrentabilitaet: "Ergebnis plus Zinsaufwand geteilt durch Eigen- plus Fremdkapital: die Verzinsung des gesamten eingesetzten Kapitals, egal ob eigenes oder geliehenes.",
   kapitalrentabilitaet: "Wie gut sich das eingesetzte Kapital verzinst. Es gibt drei Kennzahlen: Eigenkapital-, Fremdkapital- und Gesamtkapitalrentabilität. Der Strich im Balken zeigt den Wert des Zeitraums, links rot, rechts grün. Die Balken reichen symmetrisch um null, mindestens bis ±100 %.",
   uebersicht: "Erträge, Kosten und Gesamtergebnis je Monat über sechs Monate bis zum Ende des Zeitraums. Neutrale Erträge und Aufwände wie Zinsen sind eingerechnet.",
@@ -468,7 +473,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       if (args.capital !== false) {
         const susa = new Map<string, KapitalTeile>();
         const at = async (date: string) => {
-          if (!susa.has(date)) susa.set(date, capitalFromSums(await runReport<Sums>("sums", { from: `${date.slice(0, 4)}-01-01`, to: date })));
+          if (!susa.has(date)) susa.set(date, capitalFromSums(await runReport<Sums>("sums", { from: `${date.slice(0, 4)}-01-01`, to: date }, "date_delivery_else_date")));
           return susa.get(date)!;
         };
         const sides = async (r: Range) => {
@@ -578,7 +583,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
           "Quelle ist die BWA (nur bestätigte Buchungen). EBIT = Betriebsergebnis, EBITDA = EBIT + Abschreibungen, Margen auf die Gesamtleistung, Umsatzrentabilität auf die Umsatzerlöse.",
           "Kosten (Gesamtkosten im Dashboard) = Gesamtkosten + Wareneinsatz + neutraler Aufwand (z. B. Zinsaufwand); Erträge = Gesamtleistung + neutraler Ertrag. Gegen ein Livekonto ohne Wareneinsatz und ohne sonstigen neutralen Aufwand nachgerechnet; mit Wareneinsatz nicht belegt.",
           "COGS = Kosten Warenabgabe + Wareneinsatz (BHB: produktbezogene Kosten ohne Personal); rule_of_bhb ist eine Ableitung, keine dokumentierte Formel.",
-          "Kapitalrentabilität: Eigenkapital = Ergebnis seit Jahresbeginn - Saldo Privat, Fremdkapital = Umsatzsteuer - Vorsteuer + Verbindlichkeiten (Haben positiv). Ende des Zeitraums: alles bis einschließlich letztem Tag. Anfang: Ergebnis bis einschließlich erstem Tag, Privat und Fremdkapital bis zum Vortag (so rechnet BHB). Durchschnitt aus Anfang und Ende. Gegen BHB auf den Cent belegt (EÜR-Konto, Q2 gegen Q3, Q1 gegen Q3 und alle Monate Januar bis Oktober gegen den Vormonat); mit Bilanz (Eigenkapitalkonten, Rückstellungen, Debitoren/Kreditoren) nicht belegt. Darlehen der Klasse Finanzkonto zählen nicht zum Fremdkapital.",
+          "Kapitalrentabilität: Eigenkapital = Ergebnis seit Jahresbeginn - Saldo Privat, Fremdkapital = Umsatzsteuer - Vorsteuer + Verbindlichkeiten (Haben positiv). Ende des Zeitraums: alles bis einschließlich letztem Tag. Anfang: Ergebnis bis einschließlich erstem Tag, Privat und Fremdkapital bis zum Vortag (so rechnet BHB). Durchschnitt aus Anfang und Ende. Gegen BHB auf den Cent belegt (EÜR-Konto, Q2 gegen Q3, Q1 gegen Q3 und alle Monate Januar bis Oktober gegen den Vormonat). Bei Bilanzierern zählt die Klasse Kapital wie Privat gegen das Eigenkapital und Rückstellungen zählen zum Fremdkapital; die SuSa läuft nach Leistungsdatum (UG-Konto, Ende Q2 und Q3 belegt). Darlehen der Klasse Finanzkonto zählen nicht zum Fremdkapital.",
           "Rule of BHB = Umsatzwachstum in Prozent + Umsatzrentabilität (EBIT / Umsatzerlöse). BHBs Infotext nennt die EBIT-Marge, gerechnet wird aber mit der Umsatzrentabilität (nur so ergibt sich der angezeigte Wert).",
         ],
         warnings,

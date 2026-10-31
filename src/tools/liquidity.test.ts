@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows, zweifelhaftAmpel } from "./liquidity.js";
+import { averageDaysToPay, balancesFromSums, cashflowByMonth, createLiquidityTools, openByParty, openReceiptKpis, openReceiptRows, topPersonenkonten, zweifelhaftAmpel } from "./liquidity.js";
 
 // Erfundene Zahlen. Aufbau wie die Summen- und Saldenliste von reportsGetSums.
 const entry = (cls: string, nr: number, abs: number, side: "debit" | "credit") => ({
@@ -45,6 +45,87 @@ describe("zweifelhaftAmpel", () => {
   it("grün bis 33 %, gelb bis 66 %, darüber rot, ohne Forderungen keine Ampel", () => {
     expect([0, 32.99, 33, 65.99, 66, 100].map(zweifelhaftAmpel)).toEqual(["gruen", "gruen", "gelb", "gelb", "rot", "rot"]);
     expect(zweifelhaftAmpel(null)).toBeNull();
+  });
+});
+
+describe("Bilanzierer: Personenkonten, Working Capital, Top nach Volumen", () => {
+  const b = balancesFromSums(
+    sums([
+      ["Finanzkonto", 1200, 100, "debit"],
+      ["Vorsteuer", 1576, 40, "debit"],
+      ["Umsatzsteuer", 1776, 90, "credit"],
+      ["Verbindlichkeiten", 1600, 300, "credit"],
+      ["Forderungen", 1566, 5, "debit"],
+      ["Rückstellung", 1766, 8, "credit"],
+      ["Debitorenkonto", 10001, 70, "debit"],
+      ["Kreditorenkonto", 70001, 280, "credit"],
+      ["Kreditorenkonto", 70002, 20, "credit"],
+    ])
+  );
+  it("Salden der Debitoren- und Kreditorenkonten und das Merkmal 'hat Personenkonten'", () => {
+    expect(b.debitoren).toBe(70);
+    expect(b.kreditoren).toBe(-300);
+    expect(b.hatPersonenkonten).toBe(true);
+    expect(balancesFromSums(sums([["Finanzkonto", 1200, 1, "debit"]])).hatPersonenkonten).toBe(false);
+  });
+  it("Working Capital enthält auch Forderungen (aufzuteilende Vorsteuer) und Rückstellungen", () => {
+    // 100 - 40 + 90 - 300 + 5 - 8
+    expect(b.workingCapital).toBe(-153);
+  });
+  it("Top 3: je Personenkonto der Umsatz auf der Rechnungsseite (Debitoren Soll, Kreditoren Haben), je Konto statt je Name", () => {
+    const konto = (nr: number, cls: string, name: string, soll: number | null, haben: number | null) => ({
+      postingaccount: { class: cls, postingaccount_number: nr, name },
+      sumPeriodDebit: soll,
+      sumPeriodCredit: haben,
+    });
+    const jahr = {
+      sums: {
+        "10001": konto(10001, "Debitorenkonto", "Alpha GmbH", 900, 900),
+        "10002": konto(10002, "Debitorenkonto", "Beta AG", 400, 300),
+        "10003": konto(10003, "Debitorenkonto", "Gamma KG", null, 50), // nur Zahlung, keine Rechnung im Zeitraum
+        "70001": konto(70001, "Kreditorenkonto", "Delta GmbH", 600, 700),
+        "70002": konto(70002, "Kreditorenkonto", "Delta GmbH", 80, 80), // zweites Konto derselben Firma
+        "70003": konto(70003, "Kreditorenkonto", "Epsilon e.K.", 200, 150),
+        "70004": konto(70004, "Kreditorenkonto", "Zeta UG", 10, 10),
+        "1200": konto(1200, "Finanzkonto", "Bank", 5000, 4000),
+      },
+    };
+    expect(topPersonenkonten(jahr, "Debitorenkonto")).toEqual([
+      { name: "Alpha GmbH", betrag: 900 },
+      { name: "Beta AG", betrag: 400 },
+    ]);
+    expect(topPersonenkonten(jahr, "Kreditorenkonto")).toEqual([
+      { name: "Delta GmbH", betrag: 700 },
+      { name: "Epsilon e.K.", betrag: 150 },
+      { name: "Delta GmbH", betrag: 80 },
+    ]);
+  });
+});
+
+describe("get_liquidity bei Konten mit Debitoren und Kreditoren", () => {
+  it("Forderungen und Verbindlichkeiten sind die Salden der Personenkonten; Quick Ratio und Future Cash-Inflow folgen daraus", async () => {
+    const { client } = fakeClient();
+    const call = vi.fn(async (op: string, params: Record<string, unknown>) => {
+      const r = await client.call(op as never, params);
+      if (op === "reportsGetSums") {
+        const rep = (r as { report: { sums: Record<string, unknown> } }).report;
+        rep.sums["10001"] = { postingaccount: { class: "Debitorenkonto", postingaccount_number: 10001, name: "Kunde A" }, balanceAfterAbsolute: 50, balanceAfterSide: "debit", sumPeriodDebit: 900, sumPeriodCredit: 850 };
+        rep.sums["70001"] = { postingaccount: { class: "Kreditorenkonto", postingaccount_number: 70001 }, balanceAfterAbsolute: 200, balanceAfterSide: "credit" };
+      }
+      return r;
+    });
+    const [tool] = createLiquidityTools({ call } as unknown as BBClient, { sleep, pollMs: 1 });
+    const res = parse(await tool.handler({ as_of: "2026-10-30", months: 3 }));
+    // Nach den drei Monatsenden eine SuSa über zwölf Monate für die Top 3, alle nach Leistungsdatum.
+    const sums = call.mock.calls.filter(([op]) => op === "reportsCreateSums").map(([, p]) => `${p.date_from}..${p.date_to} ${p.base}`);
+    expect(sums.at(-1)).toBe("2025-11-01..2026-10-30 date_delivery_else_date");
+    expect(res.forderungen.summe).toBe(50);
+    expect(res.verbindlichkeiten.summe).toBe(200);
+    expect(res.kennzahlen.future_cash_inflow).toBe(-150);
+    // (1000 + 50) / 200
+    expect(res.kennzahlen.quick_ratio).toBe(5.25);
+    // Top 3 aus dem Soll-Umsatz des Debitorenkontos, nicht aus den Belegen
+    expect(res.forderungen.top).toEqual([{ name: "Kunde A", betrag: 900 }]);
   });
 });
 
@@ -229,7 +310,7 @@ describe("get_liquidity", () => {
     await tool.handler({ as_of: "2026-10-30", months: 3 });
     expect(created).toEqual(["2026-08-31", "2026-09-30", "2026-10-30"]);
     const sumCreates = call.mock.calls.filter(([op]) => op === "reportsCreateSums");
-    expect(sumCreates[0][1]).toEqual({ date_from: "2026-01-01", date_to: "2026-08-31" });
+    expect(sumCreates[0][1]).toEqual({ date_from: "2026-01-01", date_to: "2026-08-31", base: "date_delivery_else_date" });
     expect(sleep).toHaveBeenCalled();
   });
 
@@ -266,7 +347,26 @@ describe("get_liquidity", () => {
     expect(res.zeitreihe.cashflow).toEqual([0, 300, -120]);
     // (120 - 300) / 3
     expect(res.cash.burn_rate).toBe(-60);
-    expect(res.cash.cash_runway).toBe(-16.67);
+    // Cash 1000 positiv, Burn Rate negativ (es kommt mehr herein): BHB zeigt "unbegrenzt", nicht eine negative Zahl
+    expect(res.cash.cash_runway).toBeNull();
+    expect(res.cash.cash_runway_unbegrenzt).toBe(true);
+  });
+
+  it("Runway bleibt eine Zahl, wenn Cash und Burn Rate beide negativ sind (wie BHB)", async () => {
+    // Cash -1000, Burn Rate -60: Quotient positiv
+    const { client } = fakeClient();
+    const [tool] = createLiquidityTools(
+      { call: vi.fn(async (op: string, params: Record<string, unknown>) => {
+          const r = await client.call(op as never, params);
+          if (op === "reportsGetSums") { const rep = (r as { report: { sums: Record<string, { balanceAfterSide?: string }> } }).report; rep.sums["1200"].balanceAfterSide = "credit"; }
+          return r;
+        }) } as unknown as BBClient,
+      { sleep, pollMs: 1 }
+    );
+    const res = parse(await tool.handler({ as_of: "2026-10-30", months: 3 }));
+    expect(res.cash.bestand).toBe(-1000);
+    expect(res.cash.cash_runway).toBe(16.67);
+    expect(res.cash.cash_runway_unbegrenzt).toBe(false);
   });
 
   it("ohne Burn Rate gibt es keinen Runway", async () => {
