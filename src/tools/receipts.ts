@@ -401,6 +401,10 @@ export function createReceiptsTools(client: BBClient): [ToolDef, ToolDef, ToolDe
     name: "upload_receipt",
     description:
       "Upload a receipt file (base64-encoded PDF/XML/image) for OCR-assisted processing, with optional known metadata. " +
+      "Prefer pointing the user to BHB's own channels over uploading yourself when the file is not already base64 in this conversation, " +
+      "is larger than a few KB, or there are several files: a PDF as base64 is about 1.3x its size in the call (a typical invoice PDF is 100,000+ tokens and one wrong character corrupts it). " +
+      "Those channels are the receipt e-mail addresses (inbound and outbound, sender must be authorised, 10 MB per mail), Dropbox/Google Drive/OneDrive, GetMyInvoices and the BuchhaltungsButler scan app (get_booking_guide belegupload). " +
+      "They probably count against the quota too (not verified), so ask the user for the remaining quota first. " +
       "Accepted: PDF, JPEG, PNG, TIFF, BMP, GIF, ZUGFeRD (PDF with embedded XML), XRechnung (XML); at most 50 pages and 20 MB. " +
       "OCR only reads the first pages (none from page 4 on: then pass counterparty/date/amount yourself); an abweichendes " +
       "Leistungsdatum is never recognised. On credit notes (Gutschriften, Provisionsabrechnungen) OCR often takes the own company as counterparty " +

@@ -302,6 +302,13 @@ describe("receipts tools", () => {
     expect(client.call).toHaveBeenCalledWith("receiptsUpload", { file: "base64...", type: "invoice inbound" });
   });
 
+  it("upload_receipt description points to BHB's own channels for large or many files", () => {
+    const [, , , uploadReceipt] = createReceiptsTools(mockClient({ success: true }));
+
+    expect(uploadReceipt.description).toContain("receipt e-mail addresses");
+    expect(uploadReceipt.description).toContain("remaining quota");
+  });
+
   it("set_receipt_deleted true calls receiptsDeleteIdByCustomer", async () => {
     const client = mockClient({ success: true });
     const [, , , , setReceiptDeleted] = createReceiptsTools(client);
