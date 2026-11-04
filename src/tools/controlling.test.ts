@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { BuchhaltungsButlerApiError } from "../bb-client/errors.js";
-import { capitalAt, capitalFromSums, createControllingTools, kapitalSkala, kpisFromBwa, previousRange, returnOnCapital, seriesMonths, type Sums } from "./controlling.js";
+import { capitalAt, capitalFromSums, createControllingTools, kapitalSkala, kpisFromBwa, mergeArten, previousRange, returnOnCapital, seriesMonths, type Sums } from "./controlling.js";
 
 // Erfundene Zahlen. Aufbau wie die BWA von reportsGetBwa (SKR03).
 function bwa(o: {
@@ -60,6 +60,18 @@ function bwa(o: {
     },
   };
 }
+
+describe("Konventionen wie BHB", () => {
+  it("Veränderung durch den Vergleichswert mit Vorzeichen: von -0,40 auf 0 ergibt -100 %", () => {
+    const r = mergeArten([{ name: "Wareneinkauf", amount: 0, konten: [] }], [{ name: "Wareneinkauf", amount: -0.4, konten: [] }], 100);
+    expect(r[0].veraenderung_pct).toBe(-100);
+  });
+  it("kaufmännisch gerundet: ,5 vom Nullpunkt weg", () => {
+    // Umsatzrentabilität -197,50 / 16 = -1.234,375 %
+    const k = kpisFromBwa(bwa({ umsatz: 16, sonstige: 213.5 }));
+    expect(k.umsatzrentabilitaet_pct).toBe(-1234.38);
+  });
+});
 
 describe("kpisFromBwa", () => {
   const k = kpisFromBwa(bwa({ umsatz: 8000, sonstErtrag: 2000, personal: 1000, abschreibung: 500, sonstige: 2500, zins: 100, neutralErtrag: 300 }));
@@ -264,6 +276,9 @@ describe("get_controlling", () => {
     expect(res.kpis.differenz.ebit_marge_pp).toBe(26.67);
     // Umsatzwachstum 50 + EBIT/Umsatz 66,67
     expect(res.kpis.rule_of_bhb).toBe(116.67);
+    // Ohne Umsatz im Zeitraum: Wachstum -100 %, Umsatzrentabilität wie bei BHB als 0 → -100
+    const ohne = createControllingTools(fakeClient((from: string) => (from === "2026-04-01" ? bwa({ umsatz: 0, sonstige: 50 }) : bwa({ umsatz: 900 })), 0).client, { sleep, pollMs: 1 })[0];
+    expect(parse(await ohne.handler({ period_from: "2026-04-01", period_to: "2026-06-30", series: false, capital: false, with_postings: false })).kpis.rule_of_bhb).toBe(-100);
     const personal = res.kostenarten.find((c: { name: string }) => c.name === "Personalkosten");
     expect(personal).toMatchObject({ amount: 500, vergleich: 1000, veraenderung_pct: -50 });
     const zins = res.kostenarten.find((c: { name: string }) => c.name === "Zinsaufwand");
@@ -450,6 +465,22 @@ describe("Kapitalrentabilität", () => {
     );
     // Ergebnis -600; Kapital netto 1300 im Soll: Eigenkapital -600 - 1300 = -1900; Fremdkapital 300 - 120 + 40 = 220
     expect(k).toEqual({ ergebnis: -600, privat: 1300, fremdkapital: 220 });
+  });
+
+  it("Eröffnungswerte am 1.1.: aus dem Vortrag der SuSa (Verlustvortrag, offene Verbindlichkeiten), Ergebnis dort 0", () => {
+    const report: Sums = {
+      sums: {
+        a: { postingaccount: { class: "Kapital" }, balanceBeforeAbsolute: 900, balanceBeforeSide: "debit", balanceAfterAbsolute: 900, balanceAfterSide: "debit" },
+        b: { postingaccount: { class: "Verbindlichkeiten" }, balanceBeforeAbsolute: 300, balanceBeforeSide: "credit", balanceAfterAbsolute: 340, balanceAfterSide: "credit" },
+        c: { postingaccount: { class: "Betriebsausgabe" }, balanceAfterAbsolute: 20, balanceAfterSide: "debit" },
+      },
+    };
+    expect(capitalFromSums(report, "vortrag")).toEqual({ ergebnis: 0, privat: 900, fremdkapital: 300 });
+    expect(capitalFromSums(report)).toEqual({ ergebnis: -20, privat: 900, fremdkapital: 340 });
+    // Anfang am 1.1.: Ergebnis des 1.1. (-20) minus Vortrag Kapital (900); Fremdkapital aus dem Vortrag
+    const r = capitalAt({ tag: capitalFromSums(report), vortag: capitalFromSums(report, "vortrag") }, capitalFromSums(report));
+    expect(r.ek.anfang).toBe(-920);
+    expect(r.fk.anfang).toBe(300);
   });
 
   it("Anfang: Ergebnis bis einschließlich erstem Tag, Privat und Fremdkapital vom Vortag; Ende: alles bis zum letzten Tag", () => {

@@ -145,8 +145,11 @@ describe("pairOff", () => {
   it("nichts offen, wenn alles Gegenbuchungen hat; Nullbuchungen werden ignoriert", () => {
     expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -10), b(3, "2026-01-04", 0)])).toEqual({ paare: 1, gruppen: 0, offen: [] });
   });
-  it("verschiedene Beträge an verschiedenen Tagen bleiben offen, auch wenn die Summe passt", () => {
-    expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -4), b(3, "2026-01-04", -6)]).offen).toHaveLength(3);
+  it("über Tage hinweg gleichen sich Buchungen innerhalb von 14 Tagen als Gruppe aus (zwei Einkäufe, später zusammen ausgeglichen)", () => {
+    expect(pairOff([b(1, "2026-03-05", 4.2), b(2, "2026-03-05", 6.3), b(3, "2026-03-08", -10.5)])).toEqual({ paare: 0, gruppen: 1, offen: [] });
+  });
+  it("mehr als 14 Tage auseinander bleiben sie offen, auch wenn die Summe passt", () => {
+    expect(pairOff([b(1, "2026-01-02", 10), b(2, "2026-01-03", -4), b(3, "2026-01-20", -6)]).offen).toHaveLength(3);
   });
   it("Buchungen eines Tages, die zusammen null ergeben, gleichen sich als Gruppe aus (ein verteilter Einkauf)", () => {
     const r = pairOff([b(1, "2026-06-03", -4), b(2, "2026-06-03", 7), b(3, "2026-06-03", -3)]);

@@ -35,10 +35,12 @@ const GROUP = {
   neutralIncome: "Neutraler Ertrag",
 } as const;
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
+// Kaufmännisch gerundet wie BHB: ,5 vom Nullpunkt weg (-1.234,375 % wird -1.234,38 %, Math.round ergäbe -1.234,37).
+const r2 = (n: number) => (Math.sign(n) * Math.round(Math.abs(n) * 100)) / 100;
 const pct = (num: number, den: number): number | null => (den === 0 ? null : r2((num / den) * 100));
 // Änderung in Prozent gegenüber dem Vergleichswert; ohne Vergleichswert gibt es keine sinnvolle Zahl.
-const change = (cur: number, prev: number): number | null => (prev === 0 ? null : r2(((cur - prev) / Math.abs(prev)) * 100));
+// Wie BHB durch den Vergleichswert mit Vorzeichen geteilt: von einem negativen Wert auf 0 ergibt -100 %.
+const change = (cur: number, prev: number): number | null => (prev === 0 ? null : r2(((cur - prev) / prev) * 100));
 const ppDiff = (n1: number, d1: number, n2: number, d2: number): number | null =>
   d1 === 0 || d2 === 0 ? null : r2((n1 / d1 - n2 / d2) * 100);
 
@@ -309,6 +311,8 @@ interface SumsEntry {
   postingaccount?: { class?: string };
   balanceAfterAbsolute?: number;
   balanceAfterSide?: string;
+  balanceBeforeAbsolute?: number;
+  balanceBeforeSide?: string;
 }
 export interface Sums {
   sums?: Record<string, SumsEntry>;
@@ -322,6 +326,7 @@ const RESULT_CLASSES = new Set(["Einnahmen", "Betriebsausgabe", "Abschreibungen"
 const EQUITY_CLASSES = new Set(["Privat", "Kapital"]);
 const DEBT_CLASSES = new Set(["Umsatzsteuer", "Vorsteuer", "Verbindlichkeiten", "Rückstellung"]);
 const signedBalance = (e: SumsEntry) => (e.balanceAfterSide === "credit" ? -1 : 1) * (e.balanceAfterAbsolute ?? 0);
+const signedBefore = (e: SumsEntry) => (e.balanceBeforeSide === "credit" ? -1 : 1) * (e.balanceBeforeAbsolute ?? 0);
 
 export interface KapitalTeile {
   ergebnis: number;
@@ -329,23 +334,27 @@ export interface KapitalTeile {
   fremdkapital: number;
 }
 
-export function capitalFromSums(report: Sums): KapitalTeile {
+// stand "vortrag": die Salden vor dem ersten Tag der SuSa (Spalte Vortrag), also die Eröffnungswerte des Jahres, wenn die
+// SuSa am 1.1. beginnt. Erfolgskonten beginnen jedes Jahr bei 0, das Ergebnis ist dort 0.
+export function capitalFromSums(report: Sums, stand: "ende" | "vortrag" = "ende"): KapitalTeile {
+  const saldo = stand === "ende" ? signedBalance : signedBefore;
   let ergebnis = 0;
   let privat = 0;
   let fremd = 0;
   for (const e of Object.values(report.sums ?? {})) {
     const cls = e.postingaccount?.class ?? "";
-    if (RESULT_CLASSES.has(cls)) ergebnis -= signedBalance(e);
-    else if (EQUITY_CLASSES.has(cls)) privat += signedBalance(e);
-    else if (DEBT_CLASSES.has(cls)) fremd -= signedBalance(e);
+    if (RESULT_CLASSES.has(cls)) ergebnis -= saldo(e);
+    else if (EQUITY_CLASSES.has(cls)) privat += saldo(e);
+    else if (DEBT_CLASSES.has(cls)) fremd -= saldo(e);
   }
   return { ergebnis: r2(ergebnis), privat: r2(privat), fremdkapital: r2(fremd) };
 }
 
 // Stichtage wie BHB (am Livekonto für den 1.4. und den 1.7. nachgerechnet): Am Ende zählt alles bis einschließlich des
 // letzten Tags. Am Anfang nimmt BHB das Ergebnis bis einschließlich des ersten Tags, Privat und Fremdkapital aber nur bis
-// zum Vortag. `vortag` ist null, wenn der erste Tag der 1.1. ist: dann sind Privat und Fremdkapital 0 (für Januar und Q1
-// gegen BHB nachgerechnet).
+// zum Vortag. Beginnt der Zeitraum am 1.1., sind das die Eröffnungswerte des Jahres (Vortrag der SuSa ab 1.1.): bei EÜR
+// meist 0, bei Bilanzierern Verlust- oder Gewinnvortrag und offene Verbindlichkeiten (UG-Livekonto, Januar, Q1 und Jahr
+// 2026 gegen BHB nachgerechnet; vorher setzte das Tool hier 0 an).
 export function capitalAt(anfang: { tag: KapitalTeile; vortag: KapitalTeile | null }, ende: KapitalTeile): { ek: Kapital; fk: Kapital } {
   const v = anfang.vortag ?? { ergebnis: 0, privat: 0, fremdkapital: 0 };
   return {
@@ -475,14 +484,19 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
       // Kapital zu den Stichtagen: je eine SuSa vom 1.1. des Jahres bis einschließlich Stichtag, nacheinander.
       let kapitalrentabilitaet: Record<string, unknown> | null = null;
       if (args.capital !== false) {
-        const susa = new Map<string, KapitalTeile>();
-        const at = async (date: string) => {
-          if (!susa.has(date)) susa.set(date, capitalFromSums(await runReport<Sums>("sums", { from: `${date.slice(0, 4)}-01-01`, to: date }, "date_delivery_else_date")));
+        const susa = new Map<string, { ende: KapitalTeile; vortrag: KapitalTeile }>();
+        const stand = async (date: string) => {
+          if (!susa.has(date)) {
+            const report = await runReport<Sums>("sums", { from: `${date.slice(0, 4)}-01-01`, to: date }, "date_delivery_else_date");
+            susa.set(date, { ende: capitalFromSums(report), vortrag: capitalFromSums(report, "vortrag") });
+          }
           return susa.get(date)!;
         };
+        const at = async (date: string) => (await stand(date)).ende;
         const sides = async (r: Range) => {
           const tag = await at(r.from);
-          const vortag = r.from.slice(5) === "01-01" ? null : await at(dayBefore(r.from));
+          // Am 1.1. ist der Vortag das Vorjahr: die Eröffnungswerte stehen als Vortrag in der SuSa ab 1.1.
+          const vortag = r.from.slice(5) === "01-01" ? (await stand(r.from)).vortrag : await at(dayBefore(r.from));
           return capitalAt({ tag, vortag }, await at(r.to));
         };
         const kz = await sides(period);
@@ -566,7 +580,8 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
           },
           // Nachgerechnet gegen ein Dashboard-Beispiel (gerundet gleich), aber nicht von BHB dokumentiert: Umsatzwachstum
           // plus EBIT/Umsatz. BHB beschreibt nur "Umsatzwachstum und EBIT-Marge im ausgewählten Zeitraum".
-          rule_of_bhb: umsatzwachstum === null || k.umsatzrentabilitaet_pct === null ? null : r2(umsatzwachstum + k.umsatzrentabilitaet_pct),
+          // Ohne Umsatz im Zeitraum setzt BHB die Umsatzrentabilität mit 0 an (Umsatz weggefallen: -100).
+          rule_of_bhb: umsatzwachstum === null ? null : r2(umsatzwachstum + (k.umsatzrentabilitaet_pct ?? 0)),
         },
         kostenarten,
         ertragsarten,

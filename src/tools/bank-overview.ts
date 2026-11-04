@@ -45,6 +45,9 @@ async function allTransactions(client: BBClient, account: number, dateTo: string
 //  2. Gruppen: was danach am selben Tag übrig ist und zusammen null ergibt (ein Einkauf, der auf mehrere Buchungen verteilt und
 //     wieder ausgeglichen wurde), gleicht sich ebenfalls aus. Je Tag wird die größte Teilmenge mit Summe null gesucht, bis keine
 //     mehr da ist (bis 16 Buchungen je Tag, darüber bleibt der Tag unverändert).
+//  3. Gruppen über Tage: was dann noch übrig ist und innerhalb von 14 Tagen zusammen null ergibt (zwei Einkäufe vom 13., die am
+//     16. mit einer Buchung ausgeglichen wurden; UG-Livekonto, Januar 2026). Je Startbuchung die Buchungen der folgenden 14 Tage
+//     (höchstens 16); das Zeitfenster hält zufällige Nullsummen aus weit auseinanderliegenden Kleinbeträgen fern.
 // Was übrig bleibt, hat keine Gegenbuchung. Beträge im Soll positiv, im Haben negativ.
 const cents = (b: Buchung) => Math.round(b.betrag * 100);
 
@@ -80,7 +83,7 @@ export function pairOff(rows: Buchung[]): { paare: number; gruppen: number; offe
   const byDay = new Map<string, Buchung[]>();
   for (const r of [...open.values()].flat()) byDay.set(r.datum, [...(byDay.get(r.datum) ?? []), r]);
   let gruppen = 0;
-  const offen: Buchung[] = [];
+  let offen: Buchung[] = [];
   for (const day of byDay.values()) {
     let rest = day;
     for (let sub = zeroSumSubset(rest); sub !== null; sub = zeroSumSubset(rest)) {
@@ -90,8 +93,19 @@ export function pairOff(rows: Buchung[]): { paare: number; gruppen: number; offe
     offen.push(...rest);
   }
   offen.sort((a, b) => a.datum.localeCompare(b.datum) || a.id - b.id);
+  const tag = (s: string) => Date.UTC(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)));
+  for (let i = 0; i < offen.length; ) {
+    const start = tag(offen[i].datum);
+    const fenster = offen.slice(i).filter((x) => tag(x.datum) - start <= SPAN_DAYS * 86400000).slice(0, 16);
+    const sub = fenster.length > 2 ? zeroSumSubset(fenster) : null;
+    if (sub && sub.includes(offen[i])) {
+      gruppen++;
+      offen = offen.filter((x) => !sub.includes(x));
+    } else i++;
+  }
   return { paare, gruppen, offen };
 }
+const SPAN_DAYS = 14;
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -231,7 +245,7 @@ export function createBankOverviewTools(client: BBClient, opts: RunnerOptions = 
           "Buchsaldo = Saldo in der Summen- und Saldenliste (nur gebuchte Zahlungen). Zahlungssaldo = Summe aller Zahlungen bis zum Stichtag, auch ungebuchter; ohne eingetragenen Anfangsbestand stimmt nur die Veränderung. Die Differenz sind Zahlungen, die noch nicht gebucht sind.",
           "Darlehens- und Verrechnungskonten stehen als Konten der Klasse Finanzkonto mit in der Liste (art: sonstiges); ihr Saldo zählt in BHB zum Cash-Bestand.",
           "Bei angebundenen Bank- und Kreditkartenkonten zeigt die BHB-Oberfläche den von der Bank gemeldeten Stand, nicht den hier berechneten.",
-          "Durchlaufende Posten und Geldtransit (Interimskonten): der Saldo muss 0 sein. paare sind Buchungen mit gleich hoher Gegenbuchung (zurückgebuchte Lastschrift, Umbuchung), gruppen sind Buchungen eines Tages, die zusammen null ergeben (ein auf mehrere Buchungen verteilter Einkauf), offen sind Buchungen ohne Ausgleich im Zeitraum. Der Saldo gilt zum Stichtag, die Buchungen für den Zeitraum ab date_from. Beträge zur Sollseite (Haben negativ). Ein Posten mit Kennzeichen 'kein Beleg' ist gewollt gebucht und kein offener Fall.",
+          "Durchlaufende Posten und Geldtransit (Interimskonten): der Saldo muss 0 sein. paare sind Buchungen mit gleich hoher Gegenbuchung (zurückgebuchte Lastschrift, Umbuchung), gruppen sind Buchungen, die zusammen null ergeben, am selben Tag oder höchstens 14 Tage auseinander (ein auf mehrere Buchungen verteilter oder später gesammelt ausgeglichener Einkauf), offen sind Buchungen ohne Ausgleich im Zeitraum. Der Saldo gilt zum Stichtag, die Buchungen für den Zeitraum ab date_from. Beträge zur Sollseite (Haben negativ). Ein Posten mit Kennzeichen 'kein Beleg' ist gewollt gebucht und kein offener Fall.",
         ],
         warnings,
       });
