@@ -329,6 +329,14 @@ describe("get_liquidity", () => {
     expect(sleep).toHaveBeenCalled();
   });
 
+  it("Laufzeiten über die zwölf Kalendermonate des Dashboards (ab dem Ersten), unabhängig von months", async () => {
+    const { client, call } = fakeClient();
+    const [tool] = createLiquidityTools(client, { sleep, pollMs: 1 });
+    await tool.handler({ as_of: "2026-10-30", months: 3 });
+    const paid = call.mock.calls.filter(([op, p]) => op === "receiptsGet" && p.payment_status === "paid").map(([, p]) => p.date_from);
+    expect(paid).toEqual(["2025-11-01", "2025-11-01"]);
+  });
+
   it("rechnet Cash, Working Capital, Quick Ratio und Future Cash-Inflow", async () => {
     const { client } = fakeClient();
     const [tool] = createLiquidityTools(client, { sleep, pollMs: 1 });

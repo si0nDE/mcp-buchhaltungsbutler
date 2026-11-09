@@ -13,9 +13,11 @@ import { finishWithExport } from "./export-file.js";
 //   Forderungen aus L+L      = Saldo der Debitorenkonten (die Personenkonten; das Sammelkonto steckt in der Klasse Forderungen)
 //   Sonstige Vermögensgeg.   = Soll-Salden der Klassen Forderungen (ohne die Forderungen aus L+L), Vorsteuer,
 //                              Verbindlichkeiten, Interimskonto und Umsatzsteuer
-//   Rückstellungen           = Haben-Salden der Klasse Rückstellung
+//   Rückstellungen           = Saldo der Klasse Rückstellung, Haben positiv (ein Soll-Saldo, etwa auf "Umsatzsteuer nicht
+//                              fällig", steht negativ; am 9.11.2026 bestätigt)
 //   Verbindlichkeiten        = Haben-Salden der Klassen Finanzkonto (z. B. Gesellschafterkonten), Interimskonto,
-//                              Verbindlichkeiten (Sammelkonto der Kreditoren) und Umsatzsteuer
+//                              Verbindlichkeiten (Sammelkonto der Kreditoren), Umsatzsteuer und Forderungen (Sammelkonto
+//                              der Debitoren im Haben; am 9.11.2026 bestätigt)
 //   Eigenkapital             = -(Saldo Kapital + Saldo Privat) + Ergebnis des gewählten Zeitraums (nicht seit Jahresbeginn)
 //                              Negativ steht es als "nicht gedeckter Fehlbetrag" auf der Aktivseite, die Bilanz geht dann
 //                              nicht auf (so zeigt es BHB).
@@ -38,7 +40,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const signed = (e: SumsEntry) => (e.balanceAfterSide === "credit" ? -1 : 1) * (e.balanceAfterAbsolute ?? 0);
 const RESULT_CLASSES = new Set(["Einnahmen", "Betriebsausgabe", "Abschreibungen"]);
 const SONSTIGE_SOLL = ["Forderungen", "Vorsteuer", "Verbindlichkeiten", "Interimskonto", "Umsatzsteuer"];
-const VERB_HABEN = ["Finanzkonto", "Interimskonto", "Verbindlichkeiten", "Umsatzsteuer"];
+const VERB_HABEN = ["Finanzkonto", "Interimskonto", "Verbindlichkeiten", "Umsatzsteuer", "Forderungen"];
 
 export interface BilanzTeile {
   kasse_bank: number;
@@ -75,7 +77,7 @@ export function bilanzFromSums(report: Sums): BilanzTeile {
   const s = (c: string) => soll.get(c) ?? 0;
   const h = (c: string) => haben.get(c) ?? 0;
   const forderungenLul = Math.max(0, n("Debitorenkonto"));
-  const rueckstellungen = h("Rückstellung");
+  const rueckstellungen = -n("Rückstellung");
   const verbindlichkeiten = VERB_HABEN.reduce((sum, c) => sum + h(c), 0);
   const fremdkapital = verbindlichkeiten + rueckstellungen;
   return {

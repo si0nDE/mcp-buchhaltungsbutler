@@ -48,6 +48,22 @@ describe("bilanzFromSums", () => {
     // 6050 - Finanzkonto (-3100) - Forderungen 255 + Vorsteuer 600 + Umsatzsteuer (-800) = 8695
     expect(b.effektivverschuldung).toBe(8695);
   });
+  it("Rückstellungen mit Vorzeichen, Haben-Saldo der Forderungen als Verbindlichkeit (wie BHB)", () => {
+    const b = bilanzFromSums(
+      susa([
+        ["Finanzkonto", 300, "debit"],
+        ["Kapital", 1000, "credit"],
+        ["Rückstellung", 40, "credit"],
+        ["Rückstellung", 65, "debit"], // z. B. Umsatzsteuer nicht fällig im Soll
+        ["Forderungen", 180, "credit"], // Sammelkonto im Haben, etwa nach einer Vorauszahlung
+        ["Verbindlichkeiten", 500, "credit"],
+      ])
+    );
+    expect(b.rueckstellungen).toBe(-25);
+    expect(b.verbindlichkeiten).toBe(680);
+    expect(b.fremdkapital).toBe(655);
+    expect(b.sonstige_vermoegensgegenstaende).toBe(0);
+  });
 });
 
 describe("stabilityFrom", () => {

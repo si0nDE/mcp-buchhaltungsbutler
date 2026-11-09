@@ -233,8 +233,8 @@ export function openByParty(rows: OpenReceipt[]): OpenParty[] {
     .sort((a, b) => b.offen - a.offen || a.name.localeCompare(b.name, "de"));
 }
 
-// Debitoren-/Kreditorenlaufzeit: einfaches Mittel aus Zahlungsdatum minus Belegdatum über alle bezahlten Belege der letzten zwölf
-// Monate (payment_date des Belegs). Gegen BHBs Dashboard auf die zweite Nachkommastelle bestätigt (Ausgangs- und Eingangsrechnungen).
+// Debitoren-/Kreditorenlaufzeit: einfaches Mittel aus Zahlungsdatum minus Belegdatum über alle bezahlten Belege der zwölf
+// Kalendermonate des Dashboards (payment_date des Belegs). Gegen BHBs Dashboard auf die zweite Nachkommastelle bestätigt (Ausgangs- und Eingangsrechnungen).
 export function averageDaysToPay(rows: Row[]): { tage: number | null; anzahl: number } {
   let sum = 0;
   let n = 0;
@@ -331,7 +331,9 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
       const fin = new Set(last.finanzkonten);
       const excluded = new Set(last.interimskonten);
 
-      const since = minusYear(asOf);
+      // Laufzeiten wie BHB über die zwölf Kalendermonate des Dashboards, ab dem Ersten des ersten Monats (am 9.11.2026
+      // bestätigt: ab 1.12.2025, nicht ab 9.11.2025).
+      const since = seriesMonths(asOf, 12)[0].from;
       const [outbound, inbound, paidOut, paidIn, postings] = await Promise.all([
         readAll(client, "receiptsGet", { list_direction: "outbound", payment_status: "unpaid", deleted: false }, 500),
         readAll(client, "receiptsGet", { list_direction: "inbound", payment_status: "unpaid", deleted: false }, 500),
