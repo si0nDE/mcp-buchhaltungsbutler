@@ -77,7 +77,10 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     buchungen: [
       "Beispiel Artikel: Porto 63,00 € von der Deutschen Post, privat bezahlt: Beleg dem Auslagenkonto zuweisen und auf 4910 Porto buchen; Erstattung 63,00 € Bank an Geldtransit 1360 und Auslagenkonto an Geldtransit 1360.",
     ],
-    konnektor: ["create_account (type other, postingaccount_number, receipt_creates_transaction true), create_transactions für die manuelle Zahlung."],
+    konnektor: [
+      "create_account (type other, postingaccount_number, receipt_creates_transaction true), create_transactions für die manuelle Zahlung.",
+      "Gemischter Bon (private und geschäftliche Positionen, privat bezahlt): prepare_mixed_receipt, generate_mixed_receipt, generate_and_upload_mixed_receipt erzeugen einen Auslagenbeleg mit geschwärzten privaten Positionen und Vorsteuer je Steuersatz; das Original bleibt in BHB (docs/gemischte-belege-faq.md).",
+    ],
   },
   {
     id: "ist_versteuerer_debitoren",

@@ -83,6 +83,18 @@ Returns: `status`, `new_receipt_id_by_customer`, `original_receipt_id_by_custome
 `false`), `pages_before`/`pages_after`, `original_sha256`, `duplicates_found`, `checks`, `amounts`, `warnings`,
 `next_step_hint`. `new_receipt_id_by_customer` comes from the upload response (fallback: resolved via the internal filename from the receipt list; otherwise `null` with a warning). `duplicates_found` lists only other receipts with the same date, counterparty and amount (invoice number alone does not count) or linked to the original, each with `matches` and `linked_to_original` so old Fall-B pages are recognisable; the original and the new receipt never appear. Fall A (`bill_file`) and Fall B (`link_to_receipt_id_by_customer`) behave as before.
 
+### Mixed receipts (private and business items on one receipt)
+
+For a receipt paid privately that also contains business items (Auslage):
+
+1. Upload the scan to BuchhaltungsButler as usual (black-and-white, one page, no OCR text layer).
+2. `prepare_mixed_receipt` returns the receipt with line numbers and the questions to clarify first.
+3. Clarify business lines, Pfand/Rabatt, receipt number, who paid, occasion, VAT lines.
+4. `generate_mixed_receipt` returns the rendered A4 Auslagenbeleg (redacted receipt, net/tax per rate) as an image; nothing is uploaded.
+5. After approval `generate_and_upload_mixed_receipt` with `confirm: true` uploads it and comments on the original. The original is never deleted by the tool.
+
+Details: [docs/gemischte-belege-faq.md](docs/gemischte-belege-faq.md), legal background: [docs/rechtsgrundlagen-gemischte-belege.md](docs/rechtsgrundlagen-gemischte-belege.md).
+
 ## Remote deployment (Docker)
 
 For clients that can't launch a local process (e.g. Claude on mobile), the server also runs as a
@@ -135,6 +147,7 @@ tax law), legal basis: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundla
 | Contacts (Debtors/Creditors) | `list_contacts`, `create_contacts`, `update_contact` |
 | Posting Accounts | `list_posting_accounts`, `manage_posting_account` |
 | Receipts | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions`, `pair_receipt_family`, `get_receipt_overview` (state of one receipt: assigned payments, postings, open amount), `check_receipt_fields` (heuristic check of mandatory invoice details, § 14 Abs. 4 UStG) |
+| Mixed receipts | `prepare_mixed_receipt`, `generate_mixed_receipt`, `generate_and_upload_mixed_receipt` |
 | Transactions | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts`, `delete_transaction` |
 | Postings | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Invoices | `create_invoice`, `create_invoice_correction` |
