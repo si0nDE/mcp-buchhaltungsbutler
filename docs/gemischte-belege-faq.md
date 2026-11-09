@@ -4,7 +4,7 @@ Tools: `prepare_mixed_receipt`, `generate_mixed_receipt`, `generate_and_upload_m
 
 ## Wofür?
 
-Jemand kauft privat ein, auf demselben Bon stehen Dinge fürs Büro, bezahlt wurde mit eigenem Geld. Die Gesellschaft erstattet nur den geschäftlichen Anteil. Das Tool erzeugt dafür einen Auslagenbeleg: links der Bon mit geschwärzten privaten Positionen, rechts die geschäftlichen Positionen mit Netto, Steuer und Brutto je Steuersatz, wer ausgelegt hat und wofür.
+Jemand kauft privat ein, auf demselben Bon stehen Dinge fürs Büro, bezahlt wurde mit eigenem Geld. Die Gesellschaft erstattet nur den geschäftlichen Anteil. Das Tool erzeugt dafür einen Auslagenbeleg: links der Bon (lange Bons auf Seite 2) mit geschwärzten privaten Positionen, rechts die geschäftlichen Positionen mit Netto, Steuer und Brutto je Steuersatz, wer ausgelegt hat und wofür.
 
 ## Ablauf
 
@@ -24,7 +24,7 @@ Belege dürfen nicht so verändert werden, dass der ursprüngliche Inhalt nicht 
 
 ## Was verhindert doppelte Vorsteuer?
 
-Gebucht wird nur der Auslagenbeleg. Das Original wird soft-gelöscht und trägt den Kommentar "Nicht buchen". Vor dem Upload prüft das Tool, ob es schon einen anderen aktiven Beleg mit derselben Bonnummer gibt.
+Gebucht wird nur der Auslagenbeleg. Das Original trägt den Kommentar „Nicht buchen“ und wird nach Rückfrage beim Nutzer soft-gelöscht; das Tool selbst löscht nie. Vor dem Upload prüft das Tool, ob es schon einen anderen aktiven Beleg mit derselben Bonnummer gibt (ein erneuter Upload unter anderer Bonnummer fällt dabei nicht auf).
 
 ## Wie viele Positionen passen auf den Beleg?
 
@@ -32,4 +32,4 @@ Etwa sechs kurze Positionen passen auf die Seite. Bei mehr Positionen oder einem
 
 ## Textbaustein für die Verfahrensdokumentation
 
-> Gemischte Einkäufe (private und betriebliche Positionen auf einem Kassenbon, privat bezahlt) werden so behandelt: Der Kassenbon wird unverändert als Scan in BuchhaltungsButler hochgeladen. Daraus entsteht ein Auslagenbeleg mit dem Bon, dessen private Positionen geschwärzt sind, den betrieblichen Positionen mit Netto, Steuer und Brutto je Steuersatz, der auslegenden Person und dem Anlass. Er verweist über Bonnummer und SHA-256-Prüfsumme auf das Original. Das Original wird in BuchhaltungsButler als gelöscht markiert, bleibt dort aber unverändert archiviert und abrufbar und trägt einen Kommentar mit Verweis auf den Auslagenbeleg. Gebucht wird nur der Auslagenbeleg; erstattet wird nur der betriebliche Anteil.
+> Gemischte Einkäufe (private und betriebliche Positionen auf einem Kassenbon, privat bezahlt) werden so behandelt: Der Kassenbon wird unverändert als Scan in BuchhaltungsButler hochgeladen. Daraus entsteht ein Auslagenbeleg mit dem Bon, dessen private Positionen geschwärzt sind, den betrieblichen Positionen mit Netto, Steuer und Brutto je Steuersatz, der auslegenden Person und dem Anlass. Er verweist über Bonnummer und SHA-256-Prüfsumme auf das Original. Das Original wird nach Freigabe in BuchhaltungsButler als gelöscht markiert, bleibt dort aber unverändert archiviert und abrufbar und trägt einen Kommentar mit Verweis auf den Auslagenbeleg. Gebucht wird nur der Auslagenbeleg; erstattet wird nur der betriebliche Anteil.
