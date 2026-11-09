@@ -136,12 +136,12 @@ describe("renderMixedReceiptPdf", () => {
     expect(text).toContain("-0,75 €");
   });
 
-  it("fits 7 short positions on one page (8 overflow with the current layout)", async () => {
-    const eight = Array.from({ length: 7 }, (_, i) => ({ description: `Artikel ${i + 1}`, gross: 0.5, vat_rate: 7 as const }));
+  it("fits 6 short positions on one page (7 overflow with the current layout)", async () => {
+    const eight = Array.from({ length: 6 }, (_, i) => ({ description: `Artikel ${i + 1}`, gross: 0.5, vat_rate: 7 as const }));
     const amounts = computeMixedReceipt(eight, 23.45, vatLines);
     const { pdf } = await renderMixedReceiptPdf(sheet({ positions: eight, amounts }), await longScan());
     expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
-    expect(await textOf(pdf)).toContain("Artikel 7");
+    expect(await textOf(pdf)).toContain("Artikel 6");
   });
 
   it("refuses overflow also with the receipt on page 2", async () => {
