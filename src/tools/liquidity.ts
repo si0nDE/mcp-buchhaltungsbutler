@@ -292,7 +292,7 @@ export function createLiquidityTools(client: BBClient, opts: RunnerOptions = {})
   const getLiquidity = defineTool({
     name: "get_liquidity",
     description:
-      "Liquiditäts-Auswertung wie das Dashboard 'Controlling > Liquidität' von BuchhaltungsButler (Beta, in der Oberfläche nur bis 20.11.2026; " +
+      "Liquiditäts-Auswertung wie das Dashboard 'Controlling > Liquidität' von BuchhaltungsButler (Beta bis 20.11.2026, danach kostenpflichtiges Add-on; " +
       "die API hat dafür keinen Endpunkt, das Tool braucht nur Summen- und Saldenliste, Buchungen und Belege): Cash-Bestand, Working Capital und Cashflow (Ein-/Auszahlungen) über 12 Monate, " +
       "Burn Rate und Cash Runway, offene Forderungen und Verbindlichkeiten mit den drei größten Kunden/Lieferanten, Anteil " +
       "zweifelhafter Forderungen (mindestens 90 Tage überfällig), Debitoren-/Kreditorenlaufzeit, Quick Ratio, Future Cash-Inflow, " +

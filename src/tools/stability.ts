@@ -170,7 +170,7 @@ export function createStabilityTools(client: BBClient, opts: StabilityOptions = 
   const getStability = defineTool({
     name: "get_stability",
     description:
-      "Stabilitäts-Auswertung wie das Dashboard 'Controlling > Stabilität' von BuchhaltungsButler (Beta, in der Oberfläche nur bis 20.11.2026; " +
+      "Stabilitäts-Auswertung wie das Dashboard 'Controlling > Stabilität' von BuchhaltungsButler (Beta bis 20.11.2026, danach kostenpflichtiges Add-on; " +
       "die API hat dafür keinen Endpunkt): Bilanzstruktur (Aktiva/Passiva mit nicht gedecktem Fehlbetrag), Vermögensanalyse (Top-5-Posten, " +
       "Anlage- und Umlaufvermögen mit Veränderung), Abschreibungsaufwand, Kapitalstruktur (Eigen- und Fremdkapital über zwölf Monate), " +
       "Effektivverschuldung, Verschuldungsgrad und Bilanzregeln - Zeitraum gegen Vergleichszeitraum. Nur für Bilanzierer (GmbH, UG, bilanzierende Kaufleute); bei EÜR bricht es mit Hinweis ab. " +

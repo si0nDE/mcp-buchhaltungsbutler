@@ -421,7 +421,7 @@ export function createControllingTools(client: BBClient, opts: ControllingOption
   const getControlling = defineTool({
     name: "get_controlling",
     description:
-      "Controlling-Auswertung wie das Dashboard 'Controlling > Profitabilität' von BuchhaltungsButler (Beta, in der Oberfläche nur bis 20.11.2026; " +
+      "Controlling-Auswertung wie das Dashboard 'Controlling > Profitabilität' von BuchhaltungsButler (Beta bis 20.11.2026, danach kostenpflichtiges Add-on; " +
       "die API hat dafür keinen Endpunkt, das Tool braucht nur BWA und Summen- und Saldenliste), gerechnet aus der BWA: Erträge, Kosten, Gesamtergebnis, EBIT und EBITDA mit Marge, " +
       "Umsatzrentabilität, Kosten nach Kostenart mit Anteil und Veränderung, COGS, Personalaufwandsquote, 'Rule of BHB' und eine " +
       "Zeitreihe über sechs Monate - Zeitraum gegen Vergleichszeitraum. Fragt der Nutzer nach Controlling, Kennzahlen, EBITDA, " +
