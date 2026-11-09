@@ -56,6 +56,7 @@ describe("renderMixedReceiptPdf", () => {
       "Milch 1 l",
       "Mineralwasser 0,5 l",
       "Erstattung an Erika Beispiel",
+      "privat bezahlt, Erstattung durch das Unternehmen",
       "6,42 €",
       "0,84 €",
       "Bestätigung ausstehend",

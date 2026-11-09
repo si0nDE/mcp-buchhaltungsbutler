@@ -16,7 +16,7 @@ Jemand kauft privat ein, auf demselben Bon stehen Dinge fürs Büro, bezahlt wur
 
 ## Warum nur Schwarz-Weiß-Scans ohne Texterkennung?
 
-Das Tool schwärzt Bildpixel. Hat die PDF eine Textebene (E-Bon oder Scan mit Texterkennung), stünde der private Text darin weiter lesbar. Version 1 lehnt solche Dateien deshalb ab. Am Scanner: Farbmodus Schwarzweiß, Texterkennung (durchsuchbare PDF) aus, eine Seite je Bon. Fotos und Graustufen-Scans sind noch nicht unterstützt.
+Das Tool schwärzt Bildpixel und baut daraus eine neue PDF auf, die nur das geschwärzte Bild enthält. Scans mit Textebene (E-Bon oder Texterkennung) lehnt Version 1 trotzdem ab, damit kein privater Text unbemerkt durchrutscht; das ist eine zusätzliche Sicherung. Am Scanner: Farbmodus Schwarzweiß, Texterkennung (durchsuchbare PDF) aus, eine Seite je Bon, Bon gerade einlegen. Fotos und Graustufen-Scans sind noch nicht unterstützt, gedrehte Scans lehnt das Tool ebenfalls ab.
 
 ## Warum bleibt das Original in BuchhaltungsButler?
 

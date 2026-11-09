@@ -110,7 +110,7 @@ export async function renderMixedReceiptPdf(sheet: MixedReceiptSheet, redactedSc
     when,
     `Summe ${formatEuro(sheet.receiptTotal)}${sheet.paymentMethod ? `, ${sheet.paymentMethod}` : ""}`,
   ]);
-  section("3", "Ausgelegt von", [sheet.paidBy, "privat bezahlt, Erstattung durch die Gesellschaft"]);
+  section("3", "Ausgelegt von", [sheet.paidBy, "privat bezahlt, Erstattung durch das Unternehmen"]);
   section("4", "Anlass", [sheet.occasion]);
 
   // 5 Business positions

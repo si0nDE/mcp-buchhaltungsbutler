@@ -1,3 +1,4 @@
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { receiptDisplayRef } from "../formatting/display-ref.js";
@@ -7,7 +8,7 @@ import { computeMixedReceipt, type MixedReceiptAmounts } from "./mixed-receipt-c
 import { renderMixedReceiptPdf } from "./mixed-receipt-pdf.js";
 import { renderPreview } from "./mixed-receipt-preview.js";
 import { renderPdfPagesToPng } from "./mixed-receipt-render.js";
-import { assertUsableBands, findLines, parseLineSpec, readBilevelScan, redactLines, writeScan } from "./mixed-receipt-scan.js";
+import { assertUsableBands, findLines, findTallBands, parseLineSpec, readBilevelScan, redactLines, tallLinesWarning, writeScan } from "./mixed-receipt-scan.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, withImages, type ToolDef } from "./types.js";
 
 const MIN_OCCASION_LENGTH = 15;
@@ -98,7 +99,7 @@ async function scanWithLines(original: LoadedOriginal) {
   const scan = await readBilevelScan(original.bytes);
   const bands = findLines(scan);
   assertUsableBands(bands);
-  return { scan, bands };
+  return { scan, bands, tall: findTallBands(bands) };
 }
 
 function amountsView(a: MixedReceiptAmounts) {
@@ -121,17 +122,67 @@ function bookingHint(a: MixedReceiptAmounts, paidBy: string) {
       vat_code: r.vat_rate === 0 ? "0_none" : `${r.vat_rate}_pre`,
       konto_vorschlag: "4653/6643 Aufmerksamkeiten (Kaffee, Milch, Getränke im Büro) oder 4980/6850 Sonstiger Betriebsbedarf; das Konto legt der Steuerberater fest.",
     })),
+    inhaber: "Hat der Inhaber eines Einzelunternehmens selbst ausgelegt, ist das keine Erstattung, sondern eine Privateinlage (get_booking_guide auslagen).",
     original: "Das Original nie buchen. Erst nach Rückfrage beim Nutzer mit set_receipt_deleted soft-löschen; es bleibt in BuchhaltungsButler archiviert.",
   };
 }
 
-async function buildMixedReceipt(client: BBClient, args: GenerateArgs) {
+// Free text goes onto the PDF and into one-line fields: line breaks become ", ".
+function oneLine(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, ", ").trim();
+}
+
+// Standard Helvetica only encodes WinAnsi; check before anything is loaded or generated.
+async function sanitiseFreeText(args: GenerateArgs): Promise<GenerateArgs> {
+  const out: GenerateArgs = {
+    ...args,
+    merchant: { name: oneLine(args.merchant.name), address: oneLine(args.merchant.address) },
+    receipt_number: oneLine(args.receipt_number),
+    payment_method: args.payment_method === undefined ? undefined : oneLine(args.payment_method),
+    paid_by: oneLine(args.paid_by),
+    occasion: oneLine(args.occasion),
+    company_name: oneLine(args.company_name),
+    company_address: oneLine(args.company_address),
+    positions: args.positions.map((p) => ({ ...p, description: oneLine(p.description), quantity_text: p.quantity_text === undefined ? undefined : oneLine(p.quantity_text) })),
+    confirmation: args.confirmation ? { ...args.confirmation, name: oneLine(args.confirmation.name) } : undefined,
+  };
+  const fields: Array<[string, string | undefined]> = [
+    ["merchant.name", out.merchant.name],
+    ["merchant.address", out.merchant.address],
+    ["receipt_number", out.receipt_number],
+    ["payment_method", out.payment_method],
+    ["paid_by", out.paid_by],
+    ["occasion", out.occasion],
+    ["company_name", out.company_name],
+    ["company_address", out.company_address],
+    ["confirmation.name", out.confirmation?.name],
+    ...out.positions.flatMap((p, i): Array<[string, string | undefined]> => [
+      [`positions[${i}].description`, p.description],
+      [`positions[${i}].quantity_text`, p.quantity_text],
+    ]),
+  ];
+  const font = await (await PDFDocument.create()).embedFont(StandardFonts.Helvetica);
+  for (const [field, text] of fields) {
+    if (text === undefined) continue;
+    for (const ch of text) {
+      try {
+        font.encodeText(ch);
+      } catch {
+        throw new Error(`${field} enthält das Zeichen "${ch}", das der Beleg nicht darstellen kann. Bitte umschreiben (z. B. "L"). Es wurde nichts erzeugt.`);
+      }
+    }
+  }
+  return out;
+}
+
+async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
+  const args = await sanitiseFreeText(rawArgs);
   if (args.occasion.trim().length < MIN_OCCASION_LENGTH) {
     throw new Error(`Anlass "${args.occasion}" ist zu knapp (mindestens ${MIN_OCCASION_LENGTH} Zeichen): konkret sagen, wofür der Einkauf ist. Es wurde nichts erzeugt.`);
   }
   const amounts = computeMixedReceipt(args.positions, args.receipt_total, args.receipt_vat_lines);
   const original = await loadOriginal(client, args.source_receipt_id_by_customer);
-  const { scan, bands } = await scanWithLines(original);
+  const { scan, bands, tall } = await scanWithLines(original);
   const lines = parseLineSpec(args.redact_lines, bands.length);
   const { bits, blocks } = redactLines(scan, bands, lines);
   const redactedScan = await writeScan(scan, bits);
@@ -160,6 +211,7 @@ async function buildMixedReceipt(client: BBClient, args: GenerateArgs) {
   const pages = await renderPdfPagesToPng(pdf);
   const bonParts = renderPreview(scan, bits, bands, { numbers: true });
   const warnings = [...amounts.warnings];
+  if (tall.length > 0) warnings.push(tallLinesWarning(tall));
   if (!args.confirmation) warnings.push("Keine Bestätigung angegeben: Auf dem Beleg steht 'Bestätigung ausstehend'.");
   const bhbNumber = typeof original.row.invoicenumber === "string" ? original.row.invoicenumber.trim() : "";
   if (bhbNumber && bhbNumber !== args.receipt_number.trim()) {
@@ -198,7 +250,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
     inputSchema: { source_receipt_id_by_customer: sourceId },
     async handler(args) {
       const original = await loadOriginal(client, args.source_receipt_id_by_customer);
-      const { scan, bands } = await scanWithLines(original);
+      const { scan, bands, tall } = await scanWithLines(original);
       const parts = renderPreview(scan, scan.bits, bands, { numbers: true });
       const r = original.row;
       return withImages(
@@ -213,6 +265,8 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
           },
           original_sha256: original.sha256,
           line_count: bands.length,
+          tall_lines: tall.map((b) => b.nr),
+          ...(tall.length > 0 ? { warnings: [tallLinesWarning(tall)] } : {}),
           images: parts.map((p) => ({ kind: "bon", from_line: p.fromLine, to_line: p.toLine })),
           questions: QUESTIONS,
           next_step: "Fragen mit dem Nutzer klären, dann generate_mixed_receipt (Vorschau). Nichts annehmen.",

@@ -1,4 +1,4 @@
-import { concatTransformationMatrix, drawObject, PDFDocument, PDFName, popGraphicsState, pushGraphicsState, StandardFonts } from "pdf-lib";
+import { concatTransformationMatrix, degrees, drawObject, PDFDocument, PDFName, popGraphicsState, pushGraphicsState, StandardFonts } from "pdf-lib";
 
 export interface FakeScanOptions {
   width?: number; // pixels, default 400
@@ -12,6 +12,9 @@ export interface FakeScanOptions {
   textLayer?: boolean;
   images?: number; // image XObjects per page, default 1
   pages?: number; // default 1
+  extraBytes?: number; // appends this many bytes to the decoded stream (over-long stream)
+  rotate?: number; // page rotation in degrees
+  pageScale?: { w: number; h: number }; // page size factor, so the image no longer matches the page aspect
 }
 
 // Synthetic receipt scan like a document scanner writes it at 600 dpi: one page, one 1-bit Flate image.
@@ -22,7 +25,7 @@ export async function makeFakeScanPdf(o: FakeScanOptions = {}): Promise<Uint8Arr
   const bpc = o.bitsPerComponent ?? 1;
   const components = o.colorSpace === "DeviceRGB" ? 3 : 1;
   const rowBytes = bpc === 1 ? Math.ceil(width / 8) : width * components;
-  const bits = new Uint8Array(rowBytes * height).fill(o.decodeInverted ? 0x00 : 0xff);
+  const bits = new Uint8Array(rowBytes * height + (o.extraBytes ?? 0)).fill(o.decodeInverted ? 0x00 : 0xff);
   const inkEnd = Math.min(width, 10 + (o.inkWidth ?? 200));
   for (const [top, bottom] of o.inkRows ?? []) {
     for (let y = top; y < bottom; y++) {
@@ -33,11 +36,12 @@ export async function makeFakeScanPdf(o: FakeScanOptions = {}): Promise<Uint8Arr
       }
     }
   }
-  const pageW = (width * 72) / 600;
-  const pageH = (height * 72) / 600;
+  const pageW = ((width * 72) / 600) * (o.pageScale?.w ?? 1);
+  const pageH = ((height * 72) / 600) * (o.pageScale?.h ?? 1);
   const doc = await PDFDocument.create();
   for (let p = 0; p < (o.pages ?? 1); p++) {
     const page = doc.addPage([pageW, pageH]);
+    if (o.rotate) page.setRotation(degrees(o.rotate));
     if (o.textLayer) {
       const font = await doc.embedFont(StandardFonts.Helvetica);
       page.drawText("Beispielartikel 1,00", { x: 2, y: 2, size: 4, font });

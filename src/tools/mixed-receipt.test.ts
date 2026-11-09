@@ -80,6 +80,35 @@ describe("prepare_mixed_receipt", () => {
     expect(call.mock.calls.map((c) => c[0])).toEqual(["receiptsGetIdByCustomer"]);
   });
 
+  it("accepts a tall band (logo, QR code), names it and warns", async () => {
+    const rows: Array<[number, number]> = [[20, 50], [70, 220], [240, 270], [290, 320], [340, 370], [390, 420], [440, 470]];
+    const pdf = await makeFakeScanPdf({ inkRows: rows });
+    const { client } = fakeClient({ original: await original({ file_content: Buffer.from(pdf).toString("base64") }) });
+    const result = await createMixedReceiptTools(client)[0].handler({ source_receipt_id_by_customer: 42 } as never);
+    const d = data(result);
+    expect(d.tall_lines).toEqual([2]);
+    expect((d.warnings as string[]).join(" ")).toMatch(/Zeile\(n\) 2 sind ungewöhnlich hoch/);
+  });
+
+  it("reports no tall lines for a normal receipt", async () => {
+    const { client } = fakeClient({ original: await original() });
+    const d = data(await createMixedReceiptTools(client)[0].handler({ source_receipt_id_by_customer: 42 } as never));
+    expect(d.tall_lines).toEqual([]);
+    expect(d.warnings).toBeUndefined();
+  });
+
+  it("still aborts with fewer than 5 lines", async () => {
+    const pdf = await makeFakeScanPdf({ inkRows: inkLines(4) });
+    const { client } = fakeClient({ original: await original({ file_content: Buffer.from(pdf).toString("base64") }) });
+    await expect(createMixedReceiptTools(client)[0].handler({ source_receipt_id_by_customer: 42 } as never)).rejects.toThrow(/Nur 4 Textzeilen/);
+  });
+
+  it("refuses a rotated original with the geometry reason", async () => {
+    const pdf = await makeFakeScanPdf({ inkRows: inkLines(8), rotate: 90 });
+    const { client } = fakeClient({ original: await original({ file_content: Buffer.from(pdf).toString("base64") }) });
+    await expect(createMixedReceiptTools(client)[0].handler({ source_receipt_id_by_customer: 42 } as never)).rejects.toThrow(/gedreht/);
+  });
+
   it("refuses a deleted original and a non-PDF original", async () => {
     const deleted = fakeClient({ original: await original({ deleted: "1" }) });
     await expect(createMixedReceiptTools(deleted.client)[0].handler({ source_receipt_id_by_customer: 42 } as never)).rejects.toThrow(/gelöscht/);
@@ -105,6 +134,37 @@ describe("generate_mixed_receipt", () => {
     expect(images.some((i) => i.kind === "bon")).toBe(true);
     expect((result.images as string[]).length).toBe(images.length);
     expect(call.mock.calls.map((c) => c[0])).not.toContain("receiptsUpload");
+  });
+
+  it("adds the tall-line warning and the Inhaber hint to the preview", async () => {
+    const rows: Array<[number, number]> = [[20, 50], [70, 220], [240, 270], [290, 320], [340, 370], [390, 420], [440, 470], [490, 520]];
+    const pdf = await makeFakeScanPdf({ inkRows: rows });
+    const { client } = fakeClient({ original: await original({ file_content: Buffer.from(pdf).toString("base64") }) });
+    const d = data(await createMixedReceiptTools(client)[1].handler(args as never));
+    expect((d.warnings as string[]).join(" ")).toMatch(/Zeile\(n\) 2 sind ungewöhnlich hoch/);
+    expect((d.booking_hint as Data).inhaber).toMatch(/Privateinlage/);
+  });
+
+  it("joins line breaks in free text with a comma", async () => {
+    const { client, call } = fakeClient({ original: await original() });
+    await createMixedReceiptTools(client)[2].handler({
+      ...args,
+      merchant: { name: "Beispielmarkt", address: "Musterstraße 1\r\n12345 Musterstadt" },
+      confirm: true,
+    } as never);
+    const params = call.mock.calls.find((c) => c[0] === "receiptsUpload")![1] as Data;
+    const pdfText = (await extractText(await getDocumentProxy(new Uint8Array(Buffer.from(params.file as string, "base64"))), { mergePages: true })).text;
+    expect(pdfText).toContain("Musterstraße 1, 12345 Musterstadt");
+    expect(params.counterparty).toBe("Beispielmarkt");
+  });
+
+  it("names the field and character when a free text is not encodable, before loading anything", async () => {
+    const { client, call } = fakeClient({ original: await original() });
+    const upload = createMixedReceiptTools(client)[2];
+    await expect(upload.handler({ ...args, paid_by: "Łukasz Beispiel", confirm: true } as never)).rejects.toThrow(/paid_by enthält das Zeichen "Ł".*Es wurde nichts erzeugt/);
+    expect(call).not.toHaveBeenCalled();
+    await expect(createMixedReceiptTools(client)[1].handler({ ...args, positions: [{ ...args.positions[0], description: "Kaffee ☕" }] } as never)).rejects.toThrow(/positions\[0\]\.description enthält das Zeichen "☕"/);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("warns when the receipt number differs from BuchhaltungsButler", async () => {

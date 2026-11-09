@@ -2,7 +2,7 @@ import { inflateSync } from "node:zlib";
 import { concatTransformationMatrix, drawObject, PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef, popGraphicsState, pushGraphicsState, PDFStream } from "pdf-lib";
 import { extractTextItems, getDocumentProxy } from "unpdf";
 
-export type UnsupportedReason = "not_pdf" | "page_count" | "image_count" | "text_layer" | "not_bilevel" | "filter" | "unreadable";
+export type UnsupportedReason = "not_pdf" | "page_count" | "image_count" | "text_layer" | "not_bilevel" | "filter" | "unreadable" | "geometry";
 
 const REASON_TEXT: Record<UnsupportedReason, string> = {
   not_pdf: "Das Original ist keine PDF (Foto, Bild oder E-Rechnung)",
@@ -11,6 +11,7 @@ const REASON_TEXT: Record<UnsupportedReason, string> = {
   text_layer: "Die PDF hat eine Textebene (E-Bon oder Scan mit Texterkennung); geschwärzte Pixel ließen den Text darin stehen",
   not_bilevel: "Das Bild ist kein Schwarz-Weiß-Scan (Graustufe oder Farbe)",
   unreadable: "Die PDF lässt sich nicht vollständig lesen, daher ist nicht prüfbar, ob sie Text enthält",
+  geometry: "Die Seite ist gedreht oder das Bild füllt die Seite nicht aus; der neu aufgebaute Beleg würde gedreht oder verzerrt",
   filter: "Das Bild ist nicht mit Flate ohne Prädiktor komprimiert (z. B. CCITT oder JPEG)",
 };
 
@@ -96,9 +97,15 @@ export async function readBilevelScan(pdfBytes: Uint8Array): Promise<BilevelScan
   const width = (dict.lookup(PDFName.of("Width")) as PDFNumber).asNumber();
   const height = (dict.lookup(PDFName.of("Height")) as PDFNumber).asNumber();
   const rowBytes = Math.ceil(width / 8);
+  const page = doc.getPage(0);
+  const rotation = ((page.getRotation().angle % 360) + 360) % 360;
+  const media = page.getMediaBox();
+  if (rotation !== 0 || !(media.width > 0) || !(media.height > 0) || Math.abs(width / height / (media.width / media.height) - 1) > 0.02) {
+    throw new UnsupportedScanError("geometry");
+  }
   let bits: Uint8Array;
   try {
-    bits = new Uint8Array(inflateSync(image.contents));
+    bits = new Uint8Array(inflateSync(image.contents, { maxOutputLength: rowBytes * height + 65536 }));
   } catch {
     throw new UnsupportedScanError("filter");
   }
@@ -137,15 +144,21 @@ export function assertUsableBands(bands: Band[]): void {
   if (bands.length < MIN_LINES) {
     throw new Error(`Nur ${bands.length} Textzeilen erkannt (mindestens ${MIN_LINES}). Ist das wirklich ein Kassenbon? Es wurde nichts erzeugt.`);
   }
+}
+
+// Bands taller than three times the median: logo, QR code, barcode or lines that run into each other.
+export function findTallBands(bands: Band[]): Band[] {
+  if (bands.length === 0) return [];
   const heights = bands.map((b) => b.bottom - b.top).sort((a, b) => a - b);
   const median = heights[Math.floor(heights.length / 2)];
-  const tall = bands.filter((b) => b.bottom - b.top > 3 * median);
-  if (tall.length > 0) {
-    throw new Error(
-      `Zeile(n) ${tall.map((b) => b.nr).join(", ")} sind mehr als dreimal so hoch wie eine normale Zeile (Median ${median} px): ` +
-        "Zeilen gehen ineinander über, etwa bei einem schief eingezogenen Bon. Bon gerade neu scannen. Es wurde nichts erzeugt."
-    );
-  }
+  return bands.filter((b) => b.bottom - b.top > 3 * median);
+}
+
+export function tallLinesWarning(tall: Band[]): string {
+  return (
+    `Zeile(n) ${tall.map((b) => b.nr).join(", ")} sind ungewöhnlich hoch (Logo, QR-Code, Barcode oder ineinanderlaufende Zeilen). ` +
+    "Im Bild prüfen, ob dort private Positionen stehen; sie ganz zu schwärzen ist unbedenklich."
+  );
 }
 
 export function parseLineSpec(spec: Array<number | string>, lineCount: number): number[] {

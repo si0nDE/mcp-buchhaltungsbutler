@@ -57,7 +57,8 @@ const DIGITS: Record<string, string[]> = {
   "9": ["###", "#.#", "###", "..#", "###"],
 };
 
-export const PREVIEW_SCALE = 3; // scan pixels per preview pixel
+// scan pixels per preview pixel: about 600 preview pixels across, whatever the scan resolution
+export const previewScale = (width: number): number => Math.max(1, Math.round(width / 600));
 export const NUMBER_MARGIN = 28; // preview pixels left of the receipt (three digits)
 export const DIGIT_PX = 2; // preview pixels per digit pixel
 export const MAX_PART_HEIGHT = 1000; // preview pixels per image
@@ -95,22 +96,23 @@ export function renderPreview(
   options: { numbers: boolean }
 ): PreviewPart[] {
   const view = { bits, rowBytes: scan.rowBytes, blackBit: scan.blackBit };
-  const w = Math.floor(scan.width / PREVIEW_SCALE);
-  const h = Math.floor(scan.height / PREVIEW_SCALE);
+  const scale = previewScale(scan.width);
+  const w = Math.floor(scan.width / scale);
+  const h = Math.floor(scan.height / scale);
   const margin = options.numbers ? NUMBER_MARGIN : 0;
   const width = w + margin;
   const px = new Uint8Array(width * h).fill(255);
-  const area = PREVIEW_SCALE * PREVIEW_SCALE;
+  const area = scale * scale;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let white = 0;
-      for (let dy = 0; dy < PREVIEW_SCALE; dy++) {
-        for (let dx = 0; dx < PREVIEW_SCALE; dx++) if (!isBlack(view, x * PREVIEW_SCALE + dx, y * PREVIEW_SCALE + dy)) white++;
+      for (let dy = 0; dy < scale; dy++) {
+        for (let dx = 0; dx < scale; dx++) if (!isBlack(view, x * scale + dx, y * scale + dy)) white++;
       }
       px[y * width + margin + x] = Math.round((255 * white) / area);
     }
   }
-  const center = (b: Band) => (b.top + b.bottom) / 2 / PREVIEW_SCALE;
+  const center = (b: Band) => (b.top + b.bottom) / 2 / scale;
   if (options.numbers) for (const b of bands) drawNumber(px, width, h, String(b.nr), Math.round(center(b)));
 
   const parts: PreviewPart[] = [];
@@ -119,7 +121,7 @@ export function renderPreview(
     let end = Math.min(h, start + MAX_PART_HEIGHT);
     if (end < h) {
       // cut just above a line that starts in the lower half of this part
-      const cut = bands.map((b) => Math.floor(b.top / PREVIEW_SCALE)).filter((t) => t > start + MAX_PART_HEIGHT / 2 && t <= end).pop();
+      const cut = bands.map((b) => Math.floor(b.top / scale)).filter((t) => t > start + MAX_PART_HEIGHT / 2 && t <= end).pop();
       if (cut !== undefined) end = cut;
     }
     const inPart = bands.filter((b) => center(b) >= start && center(b) < end);

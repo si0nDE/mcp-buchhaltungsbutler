@@ -82,6 +82,18 @@ Rückgabe: `status`, `new_receipt_id_by_customer`, `original_receipt_id_by_custo
 `false`), `pages_before`/`pages_after`, `original_sha256`, `duplicates_found`, `checks`, `amounts`, `warnings`,
 `next_step_hint`. `new_receipt_id_by_customer` stammt aus der Upload-Antwort (Fallback: Ermittlung über den internen Dateinamen per Belegliste; sonst `null` mit Warnung). `duplicates_found` listet nur andere Belege mit gleichem Datum, gleicher Gegenpartei und gleichem Betrag (die Rechnungsnummer allein zählt nicht) oder mit Verknüpfung zum Original, je Eintrag mit `matches` und `linked_to_original` - so sind alte Fall-B-Seiten erkennbar; Original und neuer Beleg erscheinen nie. Die Fälle A (`bill_file`) und B (`link_to_receipt_id_by_customer`) funktionieren unverändert.
 
+### Gemischte Belege (private und geschäftliche Positionen auf einem Bon)
+
+Für einen privat bezahlten Bon, auf dem auch geschäftliche Positionen stehen (Auslage):
+
+1. Den Scan wie gewohnt in BuchhaltungsButler hochladen (Schwarz-Weiß, eine Seite, ohne Texterkennung).
+2. `prepare_mixed_receipt` liefert den Bon mit Zeilennummern und die Fragen, die vorher zu klären sind.
+3. Geschäftliche Zeilen, Pfand/Rabatt, Bonnummer, wer ausgelegt hat, Anlass und MwSt-Zeilen klären.
+4. `generate_mixed_receipt` liefert den gerenderten A4-Auslagenbeleg (geschwärzter Bon, Netto/Steuer je Satz) als Bild; hochgeladen wird nichts.
+5. Nach der Freigabe lädt `generate_and_upload_mixed_receipt` mit `confirm: true` ihn hoch und kommentiert das Original. Das Original löscht das Tool nie.
+
+Details: [docs/gemischte-belege-faq.md](docs/gemischte-belege-faq.md), Rechtsgrundlagen: [docs/rechtsgrundlagen-gemischte-belege.md](docs/rechtsgrundlagen-gemischte-belege.md).
+
 ## Remote-Deployment (Docker)
 
 Für Clients, die keinen lokalen Prozess starten können (z. B. Claude auf dem Handy), läuft der Server
@@ -133,6 +145,7 @@ Rechtsgrundlagen: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-r
 | Kontakte (Debitoren/Kreditoren) | `list_contacts`, `create_contacts`, `update_contact` |
 | Buchungskonten | `list_posting_accounts`, `manage_posting_account` |
 | Belege | `list_receipts`, `get_receipt`, `create_receipts`, `upload_receipt`, `set_receipt_deleted`, `get_receipt_transactions`, `pair_receipt_family`, `get_receipt_overview` (Stand eines Belegs: zugeordnete Zahlungen, Buchungen, offener Betrag), `check_receipt_fields` (heuristische Prüfung der Pflichtangaben, § 14 Abs. 4 UStG) |
+| Gemischte Belege | `prepare_mixed_receipt`, `generate_mixed_receipt`, `generate_and_upload_mixed_receipt` (Auslagenbeleg mit geschwärzten privaten Positionen) |
 | Transaktionen | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts`, `delete_transaction` |
 | Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_invoice_correction` |

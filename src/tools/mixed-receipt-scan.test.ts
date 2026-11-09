@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertUsableBands,
   findLines,
+  findTallBands,
   isBlack,
   parseLineSpec,
   readBilevelScan,
@@ -22,6 +23,30 @@ async function reason(bytes: Uint8Array): Promise<string> {
     return error instanceof UnsupportedScanError ? error.reason : `other: ${String(error)}`;
   }
 }
+
+describe("stream size limit", () => {
+  it("rejects a stream that inflates to far more than the image needs", async () => {
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), extraBytes: 200000 }))).toBe("filter");
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), extraBytes: 1000 }))).toBe("accepted");
+  });
+});
+
+describe("geometry guard", () => {
+  it("rejects a rotated page", async () => {
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), rotate: 90 }))).toBe("geometry");
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), rotate: 180 }))).toBe("geometry");
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), rotate: 360 }))).toBe("accepted");
+  });
+
+  it("rejects an image whose aspect ratio differs from the page's", async () => {
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), pageScale: { w: 1, h: 1.1 } }))).toBe("geometry");
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5), pageScale: { w: 1.01, h: 1 } }))).toBe("accepted");
+  });
+
+  it("accepts the normal fixture", async () => {
+    expect(await reason(await makeFakeScanPdf({ inkRows: inkLines(5) }))).toBe("accepted");
+  });
+});
 
 describe("readBilevelScan", () => {
   it("reads a one-page 1-bit DeviceGray scan", async () => {
@@ -77,9 +102,11 @@ describe("assertUsableBands", () => {
     expect(() => assertUsableBands([band(1, 0), band(2, 50), band(3, 100), band(4, 150)])).toThrow(/Nur 4 Textzeilen/);
   });
 
-  it("rejects a band more than three times the median height and names it", () => {
+  it("no longer aborts on a tall band; findTallBands names it", () => {
     const bands = [band(1, 0), band(2, 50), band(3, 100, 100), band(4, 250), band(5, 300)];
-    expect(() => assertUsableBands(bands)).toThrow(/Zeile\(n\) 3/);
+    expect(() => assertUsableBands(bands)).not.toThrow();
+    expect(findTallBands(bands).map((b) => b.nr)).toEqual([3]);
+    expect(findTallBands([band(1, 0), band(2, 50), band(3, 100), band(4, 150), band(5, 200)])).toEqual([]);
   });
 
   it("accepts normal receipts", () => {
