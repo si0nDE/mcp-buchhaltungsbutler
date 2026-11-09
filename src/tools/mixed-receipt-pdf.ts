@@ -149,16 +149,18 @@ export async function renderMixedReceiptPdf(sheet: MixedReceiptSheet, redactedSc
   y -= 12;
 
   // Result panel
-  const panelHeight = 62;
+  const c2 = X + colWidth / 2 + 6;
+  const refundLines = wrapText(`Erstattung an ${sheet.paidBy}`, font, 9.5, c2 - X - 22);
+  const extra = (Math.max(1, refundLines.length) - 1) * 12;
+  const panelHeight = 62 + extra;
   need(panelHeight + 16);
   page.drawRectangle({ x: X, y: y - panelHeight, width: colWidth, height: panelHeight, color: PANEL });
   page.drawRectangle({ x: X, y: y - panelHeight, width: 3, height: panelHeight, color: BLACK });
   page.drawText("Ergebnis", { x: X + 16, y: y - 15, size: 8.5, font, color: GRAY });
-  const c2 = X + colWidth / 2 + 6;
-  page.drawText(wrapText(`Erstattung an ${sheet.paidBy}`, font, 9.5, c2 - X - 22)[0] ?? "", { x: X + 16, y: y - 32, size: 9.5, font, color: BLACK });
-  page.drawText(formatEuro(sheet.amounts.reimbursement), { x: X + 16, y: y - 50, size: 14, font: bold, color: BLACK });
-  page.drawText("Vorsteuer (§ 35 UStDV)", { x: c2, y: y - 32, size: 9.5, font, color: BLACK });
-  page.drawText(formatEuro(sheet.amounts.inputVatTotal), { x: c2, y: y - 50, size: 14, font: bold, color: BLACK });
+  refundLines.forEach((l, i) => page.drawText(l, { x: X + 16, y: y - 32 - i * 12, size: 9.5, font, color: BLACK }));
+  page.drawText(formatEuro(sheet.amounts.reimbursement), { x: X + 16, y: y - 50 - extra, size: 14, font: bold, color: BLACK });
+  page.drawText("Vorsteuer (§ 35 UStDV)", { x: c2, y: y - 32 - extra, size: 9.5, font, color: BLACK });
+  page.drawText(formatEuro(sheet.amounts.inputVatTotal), { x: c2, y: y - 50 - extra, size: 14, font: bold, color: BLACK });
   y -= panelHeight + 16;
   const check = wrapText(
     `Abgleich: Bon gesamt ${formatEuro(sheet.receiptTotal)} · davon geschäftlich ${formatEuro(sheet.amounts.reimbursement)} · privat ${formatEuro(sheet.amounts.privateGross)} (geschwärzt)`,

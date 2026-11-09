@@ -94,4 +94,64 @@ describe("renderMixedReceiptPdf", () => {
     await expect(renderMixedReceiptPdf(sheet({ positions: many, amounts }), scan)).rejects.toThrow(SheetOverflowError);
     await expect(renderMixedReceiptPdf(sheet({ positions: many, amounts }), scan)).rejects.toThrow(/passt nicht auf eine Seite/);
   });
+  const longScan = () => makeFakeScanPdf({ width: 1800, height: 6000, inkRows: inkLines(10) });
+
+  it("prints the full hint sentence", async () => {
+    const { pdf } = await renderMixedReceiptPdf(sheet(), await longScan());
+    const text = await textOf(pdf);
+    expect(text).toContain("Das Original ist unverändert in BuchhaltungsButler archiviert");
+    expect(text).toContain("Rg. BEISPIEL-0815");
+  });
+
+  it("wraps a long name in the result panel instead of cutting it", async () => {
+    const { pdf } = await renderMixedReceiptPdf(sheet({ paidBy: "Erika Beispielmann-Musterfrau" }), await longScan());
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+    const text = await textOf(pdf);
+    expect(text).toContain("Erstattung an");
+    expect(text).toContain("Beispielmann-Musterfrau");
+    expect(text.slice(text.indexOf("Erstattung an"))).toContain("Beispielmann-Musterfrau");
+  });
+
+  it("prints one Summe line for a single VAT rate", async () => {
+    const only7 = [positions[0]!];
+    const amounts = computeMixedReceipt(only7, 23.45, vatLines);
+    const text = await textOf((await renderMixedReceiptPdf(sheet({ positions: only7, amounts }), await longScan())).pdf);
+    expect(text).toContain("Summe 7 %");
+    expect(text).not.toContain("Summe 19 %");
+  });
+
+  it("prints three Summe lines for 0, 7 and 19 percent", async () => {
+    const three = [...positions, { description: "Zeitschrift", gross: 2.0, vat_rate: 0 as const }];
+    const lines3 = [{ vat_rate: 0 as const, net: 2.0, vat: 0 }, ...vatLines];
+    const amounts = computeMixedReceipt(three, 25.45, lines3);
+    const text = await textOf((await renderMixedReceiptPdf(sheet({ positions: three, amounts, receiptTotal: 25.45 }), await longScan())).pdf);
+    for (const r of ["Summe 0 %", "Summe 7 %", "Summe 19 %"]) expect(text, r).toContain(r);
+  });
+
+  it("prints a negative position with its sign", async () => {
+    const neg = [...positions, { description: "Pfandrückgabe", gross: -0.75, vat_rate: 19 as const }];
+    const amounts = computeMixedReceipt(neg, 23.45, vatLines);
+    const text = await textOf((await renderMixedReceiptPdf(sheet({ positions: neg, amounts }), await longScan())).pdf);
+    expect(text).toContain("Pfandrückgabe");
+    expect(text).toContain("-0,75 €");
+  });
+
+  it("fits 7 short positions on one page (8 overflow with the current layout)", async () => {
+    const eight = Array.from({ length: 7 }, (_, i) => ({ description: `Artikel ${i + 1}`, gross: 0.5, vat_rate: 7 as const }));
+    const amounts = computeMixedReceipt(eight, 23.45, vatLines);
+    const { pdf } = await renderMixedReceiptPdf(sheet({ positions: eight, amounts }), await longScan());
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+    expect(await textOf(pdf)).toContain("Artikel 7");
+  });
+
+  it("refuses overflow also with the receipt on page 2", async () => {
+    const scan = await makeFakeScanPdf({ width: 1800, height: 30000, inkRows: inkLines(10) });
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      description: `Artikel ${i + 1} ${"mit sehr langer Bezeichnung ".repeat(8)}`,
+      gross: 0.5,
+      vat_rate: 7 as const,
+    }));
+    const amounts = computeMixedReceipt(many, 23.45, vatLines);
+    await expect(renderMixedReceiptPdf(sheet({ positions: many, amounts }), scan)).rejects.toThrow(SheetOverflowError);
+  });
 });
