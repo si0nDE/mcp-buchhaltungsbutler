@@ -274,6 +274,11 @@ export const SERVER_INSTRUCTIONS = [
   "- PayPal Business Debit cashback (to_from 'PayPal Inc Debit Card', type 'Cash Back Bonus'): one split on Sonstige Erträge " +
     "2700 | 4830, vat 0_none, no receipt, text 'PayPal Business Debit Cashback' - not steuerbar, no Vorsteuer correction " +
     "(get_booking_guide paypal_cashback). list_transactions/get_transaction flag it as booking_hints.",
+  "- Sale of a business or of a customer base: only a Geschäftsveräußerung im Ganzen (§ 1 Abs. 1a UStG: the whole business or a Teilbetrieb " +
+    "goes to a continuing Unternehmer) is not steuerbar (0_none on 8829/8837, invoice without VAT, no USt-VA field). Handing over just the " +
+    "customer base against a Sockelbetrag/Earn-Out-Provision with the seller's cooperation is a taxable service at 19 % (19_vat, Kz 81). " +
+    "Earn-Out payments are income tax at Zufluss without §§ 16, 34 EStG either way (get_booking_guide geschaeftsveraeusserung; " +
+    "the booking tools, create_invoice and list_transactions ask back in both directions).",
   "- Before booking a payment: get_booking_guide zahlung_buchen. BHB has no booking flag on transactions; get_transaction and " +
     "list_transactions (with_posting_status, booked) return posting_status {booked, posting_ids, splits, fixed}, booked null = unknown " +
     "(never treat as open). check_receipt_fields reports conspicuous mandatory invoice details, never an approval.",

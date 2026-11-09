@@ -3,6 +3,7 @@ import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { trimList } from "../formatting/trim.js";
 import { assertTransactionEntry } from "./bhb-systematik.js";
 import { cashbackHint, cashbackHintText, cashbackUnconfirmedText, resolveCashback } from "./cashback.js";
+import { geschaeftsveraeusserungTransactionHint, geschaeftsveraeusserungTransactionHintText } from "./geschaeftsveraeusserung.js";
 import { getChart } from "./posting-accounts.js";
 import { attachPostingStatus, postingStatusNote } from "./posting-status.js";
 import { type CallToolResult, defineTool, LIST_OUTPUT_SHAPE, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -13,18 +14,25 @@ const QUERY_SWEEP_MAX_PAGES = 20;
 const SUMMARY_FIELDS = ["id_by_customer", "to_from", "amount", "booking_date", "purpose"] as const;
 const QUERY_FIELDS = ["to_from", "purpose", "payment_reference"];
 
-// Erkannte Sonderfälle (bisher: PayPal-Cashback) als Textblock und structuredContent.booking_hints anhängen.
-// Die Liste liefert type nicht: Kandidaten schlägt resolveCashback einzeln nach (höchstens 25 Abfragen je Aufruf).
+// Erkannte Sonderfälle (PayPal-Cashback, Zahlungen zu einer Geschäftsveräußerung oder Kundenstamm-Provision) als Textblock
+// und structuredContent.booking_hints anhängen. Die Liste liefert type nicht: Cashback-Kandidaten schlägt resolveCashback
+// einzeln nach (höchstens 25 Abfragen je Aufruf); der Geschäftsveräußerungs-Hinweis liest nur den Verwendungszweck.
 async function withCashbackHint(client: BBClient, response: CallToolResult, rows: Record<string, unknown>[]): Promise<CallToolResult> {
+  const hints: Array<Record<string, unknown>> = [];
   const { confirmed, unconfirmed } = await resolveCashback(client, rows);
   if (unconfirmed.length > 0) response.content.push({ type: "text", text: cashbackUnconfirmedText(unconfirmed) });
-  if (confirmed.length === 0) return response;
-  const chart = await getChart(client).catch(() => "unknown" as const);
-  response.content.push({ type: "text", text: cashbackHintText(confirmed, chart) });
-  response.structuredContent = {
-    ...response.structuredContent,
-    booking_hints: [{ ...cashbackHint(confirmed, chart), ...(unconfirmed.length ? { unconfirmed_ids: unconfirmed } : {}) }],
-  };
+  if (confirmed.length > 0) {
+    const chart = await getChart(client).catch(() => "unknown" as const);
+    response.content.push({ type: "text", text: cashbackHintText(confirmed, chart) });
+    hints.push({ ...cashbackHint(confirmed, chart), ...(unconfirmed.length ? { unconfirmed_ids: unconfirmed } : {}) });
+  }
+  const gig = geschaeftsveraeusserungTransactionHint(rows);
+  if (gig) {
+    response.content.push({ type: "text", text: geschaeftsveraeusserungTransactionHintText(gig) });
+    hints.push(gig);
+  }
+  if (hints.length === 0) return response;
+  response.structuredContent = { ...response.structuredContent, booking_hints: hints };
   return response;
 }
 

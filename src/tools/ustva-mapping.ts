@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { anlagenErloesUstVaHinweis } from "./geschaeftsveraeusserung.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
 // Zuordnung von Buchungskonten zu den Positionen (Kennziffern) der Umsatzsteuer-Voranmeldung nach BuchhaltungsButlers
@@ -183,6 +184,7 @@ export function createUstVaTools(): [ToolDef] {
         ...(treffer.length === 0
           ? {
               hinweis:
+                (args.account !== undefined ? anlagenErloesUstVaHinweis(args.account) : undefined) ??
                 "Kein Konto mit fester Position gefunden. Das heißt: eine Buchung auf diesem Konto wird nach ihrem Steuerschlüssel " +
                 "geschlüsselt (siehe get_ustva_position ohne Parameter) oder gar nicht in die USt-VA übernommen.",
             }

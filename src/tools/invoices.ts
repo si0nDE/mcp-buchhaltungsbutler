@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { supplyDateWarnings, unbookableRateWarnings, withWarnings } from "./bhb-systematik.js";
+import { geschaeftsveraeusserungInvoiceWarnings } from "./geschaeftsveraeusserung.js";
 import { kleinunternehmerInvoiceCheck, kleinunternehmerStatus } from "./kleinunternehmer.js";
 import { loadPolicy, type Policy } from "./policy.js";
 import {
@@ -188,7 +189,11 @@ export function createInvoicesTools(client: BBClient, policyLoader: () => Promis
           ? kleinunternehmerInvoiceCheck({ type: fields.type, items, e_invoice, final_provisions: fields.final_provisions, correspondence: fields.correspondence })
           : { warnings: [] };
       if (kuCheck.error) throw new Error(kuCheck.error);
-      const kuWarnings = [...ku.warnings, ...kuCheck.warnings];
+      const kuWarnings = [
+        ...ku.warnings,
+        ...kuCheck.warnings,
+        ...geschaeftsveraeusserungInvoiceWarnings({ items, final_provisions: fields.final_provisions, correspondence: fields.correspondence }),
+      ];
       if (dry_run) {
         const preview = recurringDryRun({ ...fields, items, draft });
         const previewWarnings = Array.isArray(preview.warnings) ? (preview.warnings as string[]) : [];

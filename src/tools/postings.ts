@@ -27,6 +27,7 @@ import { thirdPartyPaymentWarnings } from "./third-party-payment.js";
 import { cashbackPostingWarnings, fetchCashbackIds } from "./cashback.js";
 import { receiptCheckWarnings } from "./receipt-checks.js";
 import { kleinunternehmerPostingWarnings, kleinunternehmerStatus } from "./kleinunternehmer.js";
+import { geschaeftsveraeusserungPostingWarnings, mayNeedGigCheck } from "./geschaeftsveraeusserung.js";
 import { loadPolicy, type Policy } from "./policy.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
@@ -558,6 +559,9 @@ export function createPostingsTools(
   client: BBClient,
   policyLoader: () => Promise<Policy> = loadPolicy
 ): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
+  // Geschäftsveräußerung / Kundenstamm-Provision: Rückfragen in beide Richtungen, nie eine Ablehnung (get_booking_guide geschaeftsveraeusserung).
+  const gigWarnings = async (splits: Array<{ postingaccount: number; vat: string; postingtext?: string; label: string }>): Promise<string[]> =>
+    mayNeedGigCheck(splits) ? geschaeftsveraeusserungPostingWarnings(splits, await getChart(client).catch(() => "unknown" as const)) : [];
   // Kleinunternehmer laut Hausregel (set_policy): Vorsteuer- und Umsatzsteuer-Codes werden gemeldet, nicht abgelehnt.
   const kuWarnings = async (vats: string[]): Promise<string[]> => {
     const ku = await kleinunternehmerStatus(policyLoader);
@@ -716,6 +720,9 @@ export function createPostingsTools(
       const guardWarnings = [
         ...guards.flatMap((g) => g.warnings),
         ...(await kuWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.vat)))),
+        ...(await gigWarnings(
+          args.receipts.flatMap((e) => e.splits.map((s) => ({ postingaccount: s.postingaccount, vat: s.vat, postingtext: s.postingtext, label: `Beleg ${e.receipt_id_by_customer}` })))
+        )),
       ];
       const receipts = args.receipts.map(({ splits, ...rest }) => ({
         ...omitAuditFields(rest),
@@ -825,6 +832,11 @@ export function createPostingsTools(
       const guardWarnings = [
         ...guards.flatMap((g) => g.warnings),
         ...(await kuWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.vat)))),
+        ...(await gigWarnings(
+          args.transactions.flatMap((e) =>
+            e.splits.map((s) => ({ postingaccount: s.postingaccount, vat: s.vat, postingtext: s.postingtext, label: `Transaktion ${e.transaction_id_by_customer}` }))
+          )
+        )),
       ];
       const transactions = args.transactions.map(({ splits, ...rest }) => ({
         ...omitAuditFields(rest),
@@ -973,7 +985,15 @@ export function createPostingsTools(
           splits: [{ vat: f.vat, receipt_id_by_customer: f.receipt_id_by_customer }],
         }))
       );
-      const freeKuWarnings = await kuWarnings(args.free_postings.map((f) => f.vat));
+      const freeKuWarnings = [
+        ...(await kuWarnings(args.free_postings.map((f) => f.vat))),
+        ...(await gigWarnings(
+          args.free_postings.flatMap((f, i) => [
+            { postingaccount: f.postingaccount_debit, vat: f.vat, postingtext: f.postingtext, label: `Freie Buchung ${i + 1} (Soll)` },
+            { postingaccount: f.postingaccount_credit, vat: f.vat, postingtext: f.postingtext, label: `Freie Buchung ${i + 1} (Haben)` },
+          ])
+        )),
+      ];
       if (args.dry_run) {
         return dryRunResult(
           client,

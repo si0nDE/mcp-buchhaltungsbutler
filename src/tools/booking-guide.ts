@@ -860,6 +860,51 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
   },
   {
+    id: "geschaeftsveraeusserung",
+    titel: "Geschäftsveräußerung im Ganzen (§ 1 Abs. 1a UStG) und Kundenstamm gegen Earn-Out-Provision",
+    quelle:
+      "Übergabe des Teams (09.11.2026): § 1 Abs. 1a, § 14c, § 15a Abs. 10, § 19 Abs. 2 UStG und § 24 Nr. 2, § 34 Abs. 2 EStG auf gesetze-im-internet.de, " +
+      "UStAE Abschnitte 1.5, 9.1 Abs. 3, 14c.1 Abs. 10 und 11, 15.17 Abs. 3, 15a.2 Abs. 3, 15a.10 (Gesamtfassung Stand 19.10.2026), R 4.5 Abs. 6, R 16 Abs. 3 und 11, " +
+      "H 16 (11) EStR/EStH 2025, R 7.1 Abs. 3 GewStR 2024 (BMF-Handbücher), BFH 09.11.2023 IV R 9/21 (nichtamtlicher Volltext), SKR03-Katalog von BHB. " +
+      "Vermerk mit Quellenprotokoll: docs/rechtsgrundlagen-geschaeftsveraeusserung-earn-out.md. Keine Steuerberatung.",
+    regeln: [
+      "Nicht steuerbar ist der Kaufpreis nur bei einer Geschäftsveräußerung im Ganzen (§ 1 Abs. 1a UStG): Die übertragenen Gegenstände müssen ein hinreichendes Ganzes bilden, mit dem ein Unternehmer die bisherige Tätigkeit fortführt (UStAE 1.5 Abs. 1). Unwesentliche Wirtschaftsgüter dürfen ausgenommen, wesentliche auch langfristig vermietet werden (Abs. 3). Teilbetrieb genügt (Abs. 6), Übertragung in Teilakten auch (Abs. 5), der Veräußerer muss nicht aufhören (Abs. 1a Satz 4), ein Wettbewerbsverbot im Kaufvertrag ist unschädlich (Abs. 4 Satz 8).",
+      "Ein Earn-Out (umsatz- oder gewinnabhängiger Kaufpreisteil über mehrere Jahre) ist Entgelt für denselben Umsatz wie der Festpreis: bei einer Geschäftsveräußerung nicht steuerbar, keine Kennziffer in der USt-VA, auch nicht Kz 45, nichts nach § 17 UStG zu berichtigen.",
+      "Gegenfall Kundenstamm: Wird nur der Kundenstamm übergeleitet (Kundenverträge enden, der Erwerber schließt Neuverträge, Anlagen und Forderungen bleiben), schuldet der Veräußerer Übergabe- oder Zuführungsleistungen oder hängt die Provision an seiner Mitwirkung, ist das keine Geschäftsveräußerung, sondern eine steuerpflichtige sonstige Leistung zu 19 % (UStAE 1.5 Abs. 1 Satz 5: Leistungen mit eigenständiger wirtschaftlicher Bedeutung). Rechnung mit Umsatzsteuer, Kz 81, Erwerber hat den Vorsteuerabzug.",
+      "Zwei Prüffragen vor dem Buchen: (1) Steht die Zahlung im Vertrag als Kaufpreis für einen Betrieb oder Teilbetrieb, der als Ganzes übergeht? (2) Schuldet der Veräußerer dafür keine weitere Tätigkeit (Wettbewerbsverbot ausgenommen)? Zweimal Ja: 0_none. Einmal Nein: 19_vat. Mischfälle (Kaufpreis plus gesondert vergütete Übergangsberatung) werden getrennt abgerechnet.",
+      "Rechnung bei Geschäftsveräußerung ohne Steuerausweis mit Hinweis auf § 1 Abs. 1a UStG. Ausgewiesene Steuer wird nach § 14c Abs. 1 UStG geschuldet, Berichtigung nur mit berichtigter Rechnung und beseitigter Gefährdung (UStAE 14c.1 Abs. 11), der Erwerber darf sie nicht abziehen (14c.1 Abs. 10). Nennt der Vertrag die Umsatzsteuer nur für einen Teil der Vergütung, die Nettoabrede für den Rest schriftlich klarstellen.",
+      "Vorsteuer aus Kosten der Veräußerung (Berater, Vermittler, Anwalt) bleibt abziehbar nach dem Verhältnis der Gesamttätigkeit (UStAE 1.5 Abs. 7, 15.17 Abs. 3 Satz 4; EuGH C-408/98): 19_pre bei rein steuerpflichtigen Umsätzen. § 15a UStG: keine Berichtigung beim Veräußerer, der Erwerber tritt in den Zeitraum ein, der Veräußerer liefert die Angaben (§ 15a Abs. 10, UStAE 15a.10).",
+      "Ertragsteuer Festpreis: Veräußerungsgewinn nach § 16 EStG im Jahr der Übertragung, Freibetrag § 16 Abs. 4 und Tarifermäßigung § 34 EStG möglich. Bei EÜR fingierter Wechsel zum Bestandsvergleich mit Übergangsgewinn als laufendem Gewinn (R 4.5 Abs. 6 EStR); Schlussrechnung macht der Steuerberater.",
+      "Ertragsteuer Earn-Out: erst bei Zufluss als nachträgliche Betriebseinnahme (§ 24 Nr. 2 EStG), ohne Rückwirkung auf den Veräußerungsgewinn, ohne § 16 Abs. 4 und § 34 EStG, kein Wahlrecht (BFH 09.11.2023, IV R 9/21; H 16 (11) EStH). Dasselbe gilt für variable Vergütungen im Gegenfall, dort als laufende Betriebseinnahmen.",
+      "Gewerbesteuer: Veräußerungs- und Aufgabegewinn sowie nachträgliche Einkünfte einer natürlichen Person gehören nicht zum Gewerbeertrag (R 7.1 Abs. 3 Satz 1 und 2 GewStR), der Übergangsgewinn schon (Satz 7). Im Gegenfall sind die Provisionen gewerbesteuerpflichtig, solange der Betrieb fortbesteht (Freibetrag § 11 Abs. 1 GewStG 24.500 €).",
+      "Kleinunternehmergrenze: nicht steuerbare Umsätze und Umsätze mit Anlagevermögen zählen nicht zum Gesamtumsatz (§ 19 Abs. 2 UStG); die steuerpflichtige Kundenstamm-Provision zählt.",
+    ],
+    buchungen: [
+      "Geschäftsveräußerung, Veräußerer SKR03 (EÜR): Zahlung Festpreis Bank an 8829 (Sachanlagen, Buchgewinn; 8800 bei Buchverlust) und 8837 (immaterielle Werte wie Kundenstamm, Firmenwert; 8817 bei Buchverlust), vat 0_none, Buchungstext mit 'Geschäftsveräußerung § 1 Abs. 1a UStG, Kaufpreis fest, Vertrag vom ...'. Earn-Out bei jedem Zufluss auf 8837 oder ein eigenes Konto, 0_none, Text mit Periode und 'nachträgliche Betriebseinnahme § 24 Nr. 2 EStG'. Veräußerungskosten (Vermittler, Anwalt) mit 19_pre auf ein eigenes Konto oder 2309, nicht auf laufende Beratungskonten. Einbehalte des Erwerbers als negativer Split mit eigenem Beleg.",
+      "Gegenfall Kundenstamm gegen Provision: Ausgangsrechnung mit 19 % je Abrechnungsperiode (Leistungszeitraum nennen), Zahlung Bank an Erlöskonto 19 % mit 19_vat; empfohlen ein eigenes Erlöskonto (z. B. 'Provisionserlöse Kundenstammübertragung') statt 8400, damit die Reihe in BWA und Steuerschätzung erkennbar bleibt. Der Bericht des Erwerbers (Umsatz je Kunde, Rohertrag) ist als Anlage zum Beleg die Aufzeichnung der Bemessungsgrundlage (§ 22 UStG). Ratenaufschläge auf Sockelbeträge sind Entgelt, kein steuerfreier Zins.",
+      "Beispiel des Konnektors (erfunden): Betrieb verkauft zum 30.06. für 60.000 € fest (10.000 € Hardware auf 8829, 50.000 € Kundenstamm auf 8837, je 0_none), Vermittler 3.600 € netto plus 684 € Vorsteuer (19_pre) vom Erwerber einbehalten, Restbuchwerte 3.200 € über die Anlagenverwaltung auf 2315. Earn-Out Q3 2.750 € auf 8837, 0_none, laufend im Zuflussjahr, nicht begünstigt, nicht gewerbesteuerbar.",
+    ],
+    ablauf: [
+      "Vertrag lesen und die zwei Prüffragen beantworten; Ergebnis als Kommentar (add_comment) an die erste Zahlung hängen.",
+      "Aufteilung des Festpreises auf Sachanlagen, immaterielle Werte und Warenbestand laut Vertrag oder Steuerberater; ohne Aufteilung zunächst alles auf 8837 mit Vermerk 'Aufteilung offen'.",
+      "Rechnung erstellen (create_invoice): bei Geschäftsveräußerung Steuersatz 0 mit Hinweistext in final_provisions, im Gegenfall 19 %.",
+      "Zahlungen buchen (add_transaction_postings), Anlagen in der Anlagenverwaltung ausbuchen (Thema anlagen_browser), Veräußerungskosten buchen.",
+      "Monatsabschluss: In der USt-VA darf aus 0_none-Buchungen nichts stehen; audit_vat_period und die USt-VA-Vorschau prüfen.",
+      "Übergabe an den Steuerberater: Summen- und Saldenliste, Kontenblätter der 88xx- und 23xx-Konten, offene Belege zum Stichtag (Übergangsgewinn), Liste der Wirtschaftsgüter mit laufendem § 15a-Zeitraum.",
+    ],
+    achtung: [
+      "8820, 8801 und 8850 sind nach ihrem Namen Automatikkonten 19/16 %: nicht mit 0_none bebuchen, dafür 8829/8800/8837/8817.",
+      "Restbuchwerte (2315/2316 bzw. 2310/2311) entstehen nur über das Ausbuchen in der Anlagenverwaltung; manuelle Abgangsbuchungen per API führen zu Doppelabgängen (Thema abschreibung).",
+      "Übergangsgewinn bei EÜR wird laufend und gewerbesteuerpflichtig versteuert, nicht begünstigt; nach Sekundärquellen keine Verteilung auf drei Jahre (H 4.5 (6) EStH, nicht im Original gelesen).",
+      "Das Urteil IV R 9/21 betrifft einen Mitunternehmeranteil; die Übertragung auf den Einzelbetrieb ist Schlussfolgerung über dieselben Normen und bei Fachautoren unbestritten, aber nicht vom BFH für den Einzelbetrieb entschieden.",
+      "Eigene Konten (manage_posting_account) nur mit dem Steuerberater anlegen (DATEV-Übernahme); die Nummern 8830 bis 8836 sind im BHB-Katalog frei, die DATEV-Belegung wurde nicht geprüft.",
+      "Ob BHBs BWA die 88xx-Konten als Umsatz führt, ist nicht geprüft; die Steuerschätzung (get_tax_position) rechnet Veräußerungserlöse heute wie laufende Erlöse und kennt §§ 16, 34 EStG nicht.",
+    ],
+    konnektor: [
+      "add_receipt_postings, add_transaction_postings, add_free_postings: Rückfrage in beide Richtungen bei Erlösbuchungen mit 'Geschäftsveräußerung', 'Earn-Out', 'Kundenstamm' im Buchungstext (19_vat wie 0_none) und bei 0_none auf 8820/8801/8850. create_invoice: Prüffragen bei solchen Positionen, Textvorschlag für den § 1 Abs. 1a-Hinweis. list_transactions/get_transaction: booking_hints bei passendem Verwendungszweck. get_ustva_position: Auskunft für 8800/8817/8829/8837.",
+    ],
+  },
+  {
     id: "auswertungen",
     titel: "Auswertungen: BWA, SuSa, EÜR, Bilanz, GuV, Kontostand, Kassenbuch",
     quelle: "Leere oder fehlerhafte Auswertungen (11431990158365); Eine Einnahmenüberschussrechnung (EÜR) erstellen (11474039285405); Eine BWA erstellen (11473653935005); Summen- und Saldenliste (11474193643293); Zahlungskonten über Kontostand berechnen plausibilisieren (11474253173021); Monatsabschluss-Checkliste (Beta) (38676182512029)",
