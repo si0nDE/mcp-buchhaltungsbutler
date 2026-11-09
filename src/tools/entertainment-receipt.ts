@@ -595,7 +595,7 @@ const uploadShape = {
 
 const AMOUNT_TOLERANCE = 0.01;
 
-const toId = (value: unknown): string | number | undefined => {
+export const toId = (value: unknown): string | number | undefined => {
   if (typeof value === "number") return value;
   if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
   return typeof value === "string" ? value : undefined;
@@ -604,12 +604,12 @@ const toId = (value: unknown): string | number | undefined => {
 // BuchhaltungsButler's upload response carries id_by_customer and the internal
 // filename at the TOP level (per spec: ReceiptsUpload_Success), not under
 // `data`. Older code/tests assumed `data.id_by_customer`, so both are read.
-interface UploadResponse {
+export interface UploadResponse {
   id_by_customer?: string | number;
   filename?: string;
   data?: { id_by_customer?: string | number; filename?: string };
 }
-const readUploadedId = (r: UploadResponse): string | number | undefined =>
+export const readUploadedId = (r: UploadResponse): string | number | undefined =>
   r.id_by_customer ?? r.data?.id_by_customer;
 const readUploadedFilename = (r: UploadResponse): string | undefined => r.filename ?? r.data?.filename;
 

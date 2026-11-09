@@ -10,6 +10,7 @@ import { createBankOverviewTools } from "./bank-overview.js";
 import { createTaxPositionTools } from "./tax-position.js";
 import { createCostLocationsTools } from "./cost-locations.js";
 import { createEntertainmentReceiptTools } from "./entertainment-receipt.js";
+import { createMixedReceiptTools } from "./mixed-receipt.js";
 import { createTravelExpenseTools } from "./travel-expense-report.js";
 import { createInvoicesTools } from "./invoices.js";
 import { createMonthEndTools } from "./month-end.js";
@@ -35,6 +36,7 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createContactsTools(client),
     ...createEntertainmentReceiptTools(client),
     ...createTravelExpenseTools(client),
+    ...createMixedReceiptTools(client),
     ...createPostingAccountsTools(client),
     ...createReceiptsTools(client),
     ...createReceiptFamilyTools(client),

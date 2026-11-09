@@ -1,0 +1,343 @@
+import { z } from "zod";
+import type { BBClient } from "../bb-client/client.js";
+import { receiptDisplayRef } from "../formatting/display-ref.js";
+import { readUploadedId, toId, type UploadResponse } from "./entertainment-receipt.js";
+import { MAX_ORIGINAL_BYTES, sha256Hex } from "./entertainment-receipt-append.js";
+import { computeMixedReceipt, type MixedReceiptAmounts } from "./mixed-receipt-calc.js";
+import { renderMixedReceiptPdf } from "./mixed-receipt-pdf.js";
+import { renderPreview } from "./mixed-receipt-preview.js";
+import { renderPdfPagesToPng } from "./mixed-receipt-render.js";
+import { assertUsableBands, findLines, parseLineSpec, readBilevelScan, redactLines, writeScan } from "./mixed-receipt-scan.js";
+import { defineTool, OBJECT_OUTPUT_SHAPE, ok, withImages, type ToolDef } from "./types.js";
+
+const MIN_OCCASION_LENGTH = 15;
+
+const QUESTIONS = [
+  "Welche Zeilen sind geschäftlich? Zeilennummern aus dem Bild; alle übrigen Artikelzeilen werden geschwärzt (Kopf, Summe, MwSt-Zeilen, Zahlungs- und TSE-Daten bleiben sichtbar).",
+  "Wie sind Pfand, Pfandrückgabe und Rabatte zuzuordnen (gehören sie zu geschäftlichen Artikeln)?",
+  "Wie lautet die Bonnummer so, wie BuchhaltungsButler sie führt? Bei Discountern die Zeile mit Filial-/Kassenkennung, nicht die Beleg-Nr. der Kartenzahlung.",
+  "Wer hat ausgelegt (Name), und wofür ist der Einkauf (konkreter Anlass)?",
+  "Bonsumme und MwSt-Zeilen (Netto und Steuer je Steuersatz) vom Bon ablesen und vom Nutzer bestätigen lassen.",
+  "Hat die auslegende Person den Beleg bestätigt? Nur dann confirmation angeben, sonst steht 'Bestätigung ausstehend' auf dem Beleg.",
+];
+
+const vatRate = z.union([z.literal(0), z.literal(7), z.literal(19)]);
+const sourceId = z.number().int().describe("id_by_customer of the original receipt in BuchhaltungsButler (list_receipts).");
+
+const generateShape = {
+  source_receipt_id_by_customer: sourceId,
+  redact_lines: z
+    .array(z.union([z.number().int(), z.string()]))
+    .min(1)
+    .describe("Line numbers from prepare_mixed_receipt's image to black out, single numbers or ranges like \"5-16\". Every private article line, given explicitly."),
+  positions: z
+    .array(
+      z.object({
+        description: z.string().min(1),
+        quantity_text: z.string().optional().describe("e.g. \"2 × 0,85 €\""),
+        gross: z.number().describe("Gross euro amount; negative for Pfandrückgabe or Rabatt."),
+        vat_rate: vatRate,
+      })
+    )
+    .min(1)
+    .max(10)
+    .describe("Business positions only, as confirmed by the user. Pfand and Rabatt of business articles as their own positions."),
+  receipt_total: z.number().describe("Total of the whole receipt (business and private), gross."),
+  receipt_vat_lines: z
+    .array(z.object({ vat_rate: vatRate, net: z.number(), vat: z.number() }))
+    .min(1)
+    .describe("The receipt's VAT summary lines (net and tax per rate) as printed."),
+  merchant: z.object({ name: z.string().min(1), address: z.string().min(1) }),
+  receipt_number: z.string().min(1).describe("Receipt number as BuchhaltungsButler keeps it (for discounters the line with store/register id, not the card payment's Beleg-Nr.)."),
+  receipt_datetime: z.string().regex(/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/).describe("YYYY-MM-DD or YYYY-MM-DD HH:MM as printed on the receipt."),
+  payment_method: z.string().optional(),
+  paid_by: z.string().min(1).describe("Person who paid privately and gets reimbursed."),
+  occasion: z.string().describe("Concrete business purpose, at least 15 characters (e.g. 'Milch für Kaffee bei Kundenbesprechungen im Büro')."),
+  company_name: z.string().min(1),
+  company_address: z.string().min(1),
+  confirmation: z
+    .object({ name: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
+    .optional()
+    .describe("Only if the paying person explicitly confirmed the receipt; otherwise omit."),
+};
+
+type GenerateArgs = z.infer<z.ZodObject<typeof generateShape>>;
+
+const isDeleted = (row: Record<string, unknown>) => row.deleted === "1" || row.deleted === 1 || row.deleted === true;
+const germanDate = (iso: string) => iso.split("-").reverse().join(".");
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+interface LoadedOriginal {
+  row: Record<string, unknown>;
+  bytes: Uint8Array;
+  sha256: string;
+  displayRef: string;
+}
+
+async function loadOriginal(client: BBClient, id: number): Promise<LoadedOriginal> {
+  let row: Record<string, unknown> | undefined;
+  try {
+    const result = await client.call<{ data?: Record<string, unknown> }>("receiptsGetIdByCustomer", { get_file: true }, { idSuffix: id });
+    row = result.data;
+  } catch (error) {
+    throw new Error(`Original-Beleg ${id} konnte nicht geladen werden (${message(error)}). id_by_customer per list_receipts prüfen. Es wurde nichts erzeugt.`);
+  }
+  if (!row) throw new Error(`Original-Beleg ${id} nicht gefunden. id_by_customer per list_receipts prüfen. Es wurde nichts erzeugt.`);
+  const { file_content: file, ...meta } = row;
+  const displayRef = receiptDisplayRef(meta);
+  if (isDeleted(meta)) {
+    throw new Error(`${displayRef} ist in BuchhaltungsButler gelöscht. Den richtigen Beleg wählen oder ihn erst wiederherstellen (set_receipt_deleted, deleted: false). Es wurde nichts erzeugt.`);
+  }
+  if (typeof file !== "string" || file === "") throw new Error(`${displayRef} hat keine Datei. Es wurde nichts erzeugt.`);
+  if ((file.length * 3) / 4 > MAX_ORIGINAL_BYTES) throw new Error(`${displayRef} ist größer als 15 MB. Es wurde nichts erzeugt.`);
+  const bytes = new Uint8Array(Buffer.from(file, "base64"));
+  return { row: meta, bytes, sha256: sha256Hex(bytes), displayRef };
+}
+
+async function scanWithLines(original: LoadedOriginal) {
+  const scan = await readBilevelScan(original.bytes);
+  const bands = findLines(scan);
+  assertUsableBands(bands);
+  return { scan, bands };
+}
+
+function amountsView(a: MixedReceiptAmounts) {
+  return {
+    rates: a.rates,
+    reimbursement: a.reimbursement,
+    net_total: a.netTotal,
+    input_vat_total: a.inputVatTotal,
+    receipt_total: a.receiptTotal,
+    private_gross: a.privateGross,
+  };
+}
+
+function bookingHint(a: MixedReceiptAmounts, paidBy: string) {
+  return {
+    auslagenkonto: `Neuen Beleg dem Auslagenkonto von ${paidBy} zuweisen ('Beleg erzeugt Zahlung'); ohne Auslagenkonto get_booking_guide auslagen.`,
+    splits: a.rates.map((r) => ({
+      vat_rate: r.vat_rate,
+      gross: r.gross,
+      vat_code: r.vat_rate === 0 ? "0_none" : `${r.vat_rate}_pre`,
+      konto_vorschlag: "4653/6643 Aufmerksamkeiten (Kaffee, Milch, Getränke im Büro) oder 4980/6850 Sonstiger Betriebsbedarf; das Konto legt der Steuerberater fest.",
+    })),
+    original: "Das Original nie buchen. Erst nach Rückfrage beim Nutzer mit set_receipt_deleted soft-löschen; es bleibt in BuchhaltungsButler archiviert.",
+  };
+}
+
+async function buildMixedReceipt(client: BBClient, args: GenerateArgs) {
+  if (args.occasion.trim().length < MIN_OCCASION_LENGTH) {
+    throw new Error(`Anlass "${args.occasion}" ist zu knapp (mindestens ${MIN_OCCASION_LENGTH} Zeichen): konkret sagen, wofür der Einkauf ist. Es wurde nichts erzeugt.`);
+  }
+  const amounts = computeMixedReceipt(args.positions, args.receipt_total, args.receipt_vat_lines);
+  const original = await loadOriginal(client, args.source_receipt_id_by_customer);
+  const { scan, bands } = await scanWithLines(original);
+  const lines = parseLineSpec(args.redact_lines, bands.length);
+  const { bits, blocks } = redactLines(scan, bands, lines);
+  const redactedScan = await writeScan(scan, bits);
+  const [date, time] = args.receipt_datetime.split(" ");
+  const { pdf, bonOnSecondPage } = await renderMixedReceiptPdf(
+    {
+      companyName: args.company_name,
+      companyAddress: args.company_address,
+      merchantName: args.merchant.name,
+      merchantAddress: args.merchant.address,
+      receiptNumber: args.receipt_number,
+      receiptDate: germanDate(date),
+      receiptTime: time,
+      receiptTotal: args.receipt_total,
+      paymentMethod: args.payment_method,
+      paidBy: args.paid_by,
+      occasion: args.occasion,
+      positions: args.positions,
+      amounts,
+      originalDisplayRef: original.displayRef,
+      originalSha256: original.sha256,
+      confirmation: args.confirmation ? { name: args.confirmation.name, date: germanDate(args.confirmation.date) } : undefined,
+    },
+    redactedScan
+  );
+  const pages = await renderPdfPagesToPng(pdf);
+  const bonParts = renderPreview(scan, bits, bands, { numbers: true });
+  const warnings = [...amounts.warnings];
+  if (!args.confirmation) warnings.push("Keine Bestätigung angegeben: Auf dem Beleg steht 'Bestätigung ausstehend'.");
+  const bhbNumber = typeof original.row.invoicenumber === "string" ? original.row.invoicenumber.trim() : "";
+  if (bhbNumber && bhbNumber !== args.receipt_number.trim()) {
+    warnings.push(`Bonnummer '${args.receipt_number}' weicht von der Rechnungsnummer des Originals in BHB ab ('${bhbNumber}'). Nutzer fragen, welche gilt.`);
+  }
+  return {
+    original,
+    amounts,
+    pdf,
+    date,
+    warnings,
+    blocks: blocks.map((b) => (b.from === b.to ? `${b.from}` : `${b.from}-${b.to}`)),
+    images: [
+      ...pages.map((png, i) => ({ png, info: { kind: "page", page: i + 1 } })),
+      ...bonParts.map((p) => ({ png: p.png, info: { kind: "bon", from_line: p.fromLine, to_line: p.toLine } })),
+    ],
+    bonOnSecondPage,
+  };
+}
+
+function fileSlug(name: string): string {
+  return name.normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "Haendler";
+}
+
+export function createMixedReceiptTools(client: BBClient): ToolDef[] {
+  const prepare = defineTool({
+    name: "prepare_mixed_receipt",
+    description:
+      "Step 1 for a receipt that mixes private and business items and was paid privately (Auslage): loads the original scan from " +
+      "BuchhaltungsButler, finds its text lines and returns the receipt as images with line numbers in the left margin, plus the " +
+      "questions to clarify with the user BEFORE generating (business lines, Pfand/Rabatt, receipt number as kept in BHB, who paid, " +
+      "occasion, VAT lines, confirmation). Ask them, never assume. v1 supports one-page black-and-white scans (PDF with one 1-bit " +
+      "image, no text layer); anything else is refused with the reason and the manual way. Read-only.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: { source_receipt_id_by_customer: sourceId },
+    async handler(args) {
+      const original = await loadOriginal(client, args.source_receipt_id_by_customer);
+      const { scan, bands } = await scanWithLines(original);
+      const parts = renderPreview(scan, scan.bits, bands, { numbers: true });
+      const r = original.row;
+      return withImages(
+        ok({
+          original: {
+            display_ref: original.displayRef,
+            id_by_customer: toId(r.id_by_customer) ?? args.source_receipt_id_by_customer,
+            invoicenumber: r.invoicenumber ?? null,
+            date: r.date ?? null,
+            amount: r.amount ?? null,
+            counterparty: r.counterparty ?? null,
+          },
+          original_sha256: original.sha256,
+          line_count: bands.length,
+          images: parts.map((p) => ({ kind: "bon", from_line: p.fromLine, to_line: p.toLine })),
+          questions: QUESTIONS,
+          next_step: "Fragen mit dem Nutzer klären, dann generate_mixed_receipt (Vorschau). Nichts annehmen.",
+        }),
+        parts.map((p) => p.png)
+      );
+    },
+  });
+
+  const generate = defineTool({
+    name: "generate_mixed_receipt",
+    description:
+      "Step 2: builds the A4 Auslagenbeleg (redacted receipt left; business positions, net/tax per rate per § 35 UStDV, reimbursement, " +
+      "who paid, occasion, hint on the unchanged original in BHB, SHA-256 of the original) and returns the rendered page(s) and the " +
+      "redacted receipt as images. Uploads nothing. Show the preview to the user; only after their approval call " +
+      "generate_and_upload_mixed_receipt with the same arguments and confirm: true. Read-only.",
+    annotations: { readOnlyHint: true, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: generateShape,
+    async handler(args) {
+      const built = await buildMixedReceipt(client, args);
+      return withImages(
+        ok({
+          status: "preview",
+          original: { display_ref: built.original.displayRef, id_by_customer: args.source_receipt_id_by_customer },
+          original_sha256: built.original.sha256,
+          redacted_blocks: built.blocks,
+          bon_on_second_page: built.bonOnSecondPage,
+          amounts: amountsView(built.amounts),
+          booking_hint: bookingHint(built.amounts, args.paid_by),
+          images: built.images.map((i) => i.info),
+          warnings: built.warnings,
+          next_step:
+            "Vorschau dem Nutzer zeigen. Erst nach seiner Freigabe generate_and_upload_mixed_receipt mit denselben Argumenten und confirm: true.",
+        }),
+        built.images.map((i) => i.png)
+      );
+    },
+  });
+
+  const generateAndUpload = defineTool({
+    name: "generate_and_upload_mixed_receipt",
+    description:
+      "Step 3, only after the user approved generate_mixed_receipt's preview: builds the same Auslagenbeleg, checks for another active " +
+      "receipt with the same receipt number, uploads it with explicit counterparty/date/amount (the reimbursement)/invoice_number and adds " +
+      "a comment to the original. Requires confirm: true. Never deletes the original: afterwards ask the user, and only on yes call " +
+      "set_receipt_deleted on it (it stays archived in BHB); then book the new receipt via the Auslagenkonto (booking_hint).",
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    outputSchema: OBJECT_OUTPUT_SHAPE,
+    inputSchema: {
+      ...generateShape,
+      confirm: z.boolean().describe("Must be true: the user approved the preview of generate_mixed_receipt."),
+    },
+    async handler(args) {
+      if (args.confirm !== true) {
+        throw new Error(
+          "confirm ist nicht true: Erst generate_mixed_receipt aufrufen, die Vorschau dem Nutzer zeigen und nach seiner Freigabe mit confirm: true hochladen. Es wurde nichts hochgeladen."
+        );
+      }
+      const built = await buildMixedReceipt(client, args);
+      const list = await client.call<{ data?: Array<Record<string, unknown>> }>("receiptsGet", {
+        list_direction: "inbound",
+        invoicenumber: args.receipt_number,
+        limit: 500,
+        offset: 0,
+      });
+      const duplicates = (list.data ?? []).filter((row) => toId(row.id_by_customer) !== args.source_receipt_id_by_customer && !isDeleted(row));
+      if (duplicates.length > 0) {
+        throw new Error(
+          `Es gibt schon einen aktiven Beleg mit der Bonnummer ${args.receipt_number}: ${duplicates.map((d) => receiptDisplayRef(d)).join("; ")}. ` +
+            "Doppelt hochladen kostet Kontingent und führt zu doppelter Vorsteuer. Es wurde nichts hochgeladen."
+        );
+      }
+      const uploadParams: Record<string, unknown> = {
+        file: Buffer.from(built.pdf).toString("base64"),
+        type: "invoice inbound",
+        file_name: `Auslagenbeleg_${built.date}_${fileSlug(args.merchant.name)}.pdf`,
+        counterparty: args.merchant.name,
+        invoice_number: args.receipt_number,
+        date: built.date,
+        amount: built.amounts.reimbursement,
+        currency: "EUR",
+      };
+      if (built.amounts.rates.length === 1) uploadParams.vat_rate = built.amounts.rates[0].vat_rate;
+      let newId: string | number | undefined;
+      try {
+        newId = toId(readUploadedId(await client.call<UploadResponse>("receiptsUpload", uploadParams)));
+      } catch (error) {
+        throw new Error(
+          `Upload fehlgeschlagen (${message(error)}). Nicht automatisch wiederholt (Duplikatgefahr: der Beleg kann trotzdem angelegt worden sein). ` +
+            `Vor einem neuen Versuch per list_receipts (Bonnummer ${args.receipt_number}) prüfen. Das Original ist unverändert.`
+        );
+      }
+      const newRef = receiptDisplayRef({ invoicenumber: args.receipt_number, counterparty: args.merchant.name, date: built.date, amount: built.amounts.reimbursement });
+      let commentAdded = false;
+      let commentError: string | undefined;
+      try {
+        await client.call("commentsAdd", {
+          comment_text: `Original zur geschwärzten Fassung ${newRef} (Auslagenbeleg), nicht ungültig. Nicht buchen.`,
+          receipt_id_by_customer: args.source_receipt_id_by_customer,
+        });
+        commentAdded = true;
+      } catch (error) {
+        commentError = message(error);
+      }
+      return ok({
+        status: "uploaded",
+        new_receipt_id_by_customer: newId ?? null,
+        new_receipt_display_ref: newRef,
+        original_receipt_id_by_customer: args.source_receipt_id_by_customer,
+        original_display_ref: built.original.displayRef,
+        original_deleted: false,
+        comment_added: commentAdded,
+        ...(commentError ? { comment_error: commentError } : {}),
+        amounts: amountsView(built.amounts),
+        booking_hint: bookingHint(built.amounts, args.paid_by),
+        warnings: built.warnings,
+        next_steps: [
+          "Nutzer fragen, ob das Original jetzt soft-gelöscht werden soll; nur nach Ja set_receipt_deleted (deleted: true) auf das Original. Es bleibt in BuchhaltungsButler archiviert.",
+          "Danach den neuen Beleg über das Auslagenkonto buchen (booking_hint).",
+          ...(commentAdded ? [] : [`Kommentar am Original fehlt: mit add_comment nachtragen ("Original zur geschwärzten Fassung ${newRef}").`]),
+        ],
+      });
+    },
+  });
+
+  return [prepare, generate, generateAndUpload];
+}

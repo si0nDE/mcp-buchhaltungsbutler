@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "./server.js";
 import type { BBClient } from "./bb-client/client.js";
+import { inkLines, makeFakeScanPdf } from "./tools/mixed-receipt-scan.fixture.js";
 
 async function connectedClient(client: BBClient) {
   const server = createServer(client);
@@ -17,11 +18,11 @@ function mockClient(result: unknown): BBClient {
 }
 
 describe("createServer", () => {
-  it("registers exactly 58 tools", () => {
+  it("registers exactly 61 tools", () => {
     const server = createServer(mockClient({}));
     const registeredTools = (server as unknown as { _registeredTools: Record<string, unknown> })
       ._registeredTools;
-    expect(Object.keys(registeredTools)).toHaveLength(58);
+    expect(Object.keys(registeredTools)).toHaveLength(61);
   });
 
   it("wires list_accounts through to the given client", async () => {
@@ -147,5 +148,22 @@ describe("createServer", () => {
 
     const sent = JSON.stringify((client.call as ReturnType<typeof vi.fn>).mock.calls);
     expect(sent).toContain('"amount":"52.33"');
+  });
+
+  it("returns prepare_mixed_receipt's preview as an MCP image block", async () => {
+    const file = Buffer.from(await makeFakeScanPdf({ inkRows: inkLines(8) })).toString("base64");
+    const client = mockClient({
+      success: true,
+      data: { id_by_customer: "42", invoicenumber: "BEISPIEL-0815", counterparty: "Beispielmarkt", date: "2026-10-01", amount: "23.45", deleted: "0", file_content: file },
+    });
+    const mcp = await connectedClient(client);
+    const result = (await mcp.callTool({ name: "prepare_mixed_receipt", arguments: { source_receipt_id_by_customer: 42 } })) as {
+      isError?: boolean;
+      content: Array<{ type: string; mimeType?: string }>;
+      structuredContent?: { data?: { line_count?: number } };
+    };
+    expect(result.isError).toBeFalsy();
+    expect(result.content.some((c) => c.type === "image" && c.mimeType === "image/png")).toBe(true);
+    expect(result.structuredContent?.data?.line_count).toBe(8);
   });
 });
