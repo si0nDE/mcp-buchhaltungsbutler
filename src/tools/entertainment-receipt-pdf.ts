@@ -213,10 +213,10 @@ export interface EntertainmentReceiptFields {
 }
 
 export const MARGIN = 56;
-const BLACK = rgb(0.1, 0.1, 0.1);
-const GRAY = rgb(0.46, 0.46, 0.46);
-const LIGHT_RULE = rgb(0.82, 0.82, 0.82);
-const PANEL = rgb(0.955, 0.955, 0.955);
+export const BLACK = rgb(0.1, 0.1, 0.1);
+export const GRAY = rgb(0.46, 0.46, 0.46);
+export const LIGHT_RULE = rgb(0.82, 0.82, 0.82);
+export const PANEL = rgb(0.955, 0.955, 0.955);
 // Minimum horizontal gap, in points, kept between a letterhead line's
 // left-aligned text (companyName/companyAddress) and its right-aligned
 // counterpart (title/sub) once both are measured at their actual rendered
