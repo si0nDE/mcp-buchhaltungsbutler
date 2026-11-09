@@ -1,5 +1,5 @@
 import { inflateSync } from "node:zlib";
-import { PDFDocument, PDFRawStream } from "pdf-lib";
+import { PDFArray, PDFDocument, PDFName, PDFRawStream } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import {
   assertUsableBands,
@@ -151,5 +151,32 @@ describe("redactLines and writeScan", () => {
       }
       expect(inflated.subarray(0, original.length).equals(original)).toBe(false);
     }
+  });
+
+  it("copies nothing but the image: no annotations, no Info metadata, no private strings", async () => {
+    const src = await PDFDocument.load(await makeFakeScanPdf({ inkRows: inkLines(5) }));
+    src.setTitle("Privat Rotwein Beispiel");
+    const annot = src.context.register(
+      src.context.obj({ Type: "Annot", Subtype: "FreeText", Rect: [0, 0, 10, 10], Contents: "Rotwein privat" })
+    );
+    src.getPage(0).node.set(PDFName.of("Annots"), src.context.obj([annot]));
+    const scan = await readBilevelScan(await src.save({ useObjectStreams: false }));
+    const { bits } = redactLines(scan, findLines(scan), [1]);
+    const out = await writeScan(scan, bits);
+
+    const doc = await PDFDocument.load(out);
+    expect(doc.getPageCount()).toBe(1);
+    const annots = doc.getPage(0).node.lookup(PDFName.of("Annots"));
+    expect(annots === undefined || (annots instanceof PDFArray && annots.size() === 0)).toBe(true);
+    expect(doc.getTitle()).toBeUndefined();
+    expect(Buffer.from(out).includes("Rotwein")).toBe(false);
+  });
+
+  it("keeps /Decode [1 0] semantics in the rebuilt image", async () => {
+    const scan = await readBilevelScan(await makeFakeScanPdf({ inkRows: inkLines(5), decodeInverted: true }));
+    const { bits } = redactLines(scan, findLines(scan), [1]);
+    const reread = await readBilevelScan(await writeScan(scan, bits));
+    expect(reread.blackBit).toBe(1);
+    expect(Buffer.from(reread.bits.subarray(0, reread.rowBytes * reread.height)).equals(Buffer.from(bits.subarray(0, scan.rowBytes * scan.height)))).toBe(true);
   });
 });

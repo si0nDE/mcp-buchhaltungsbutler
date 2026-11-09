@@ -1,8 +1,8 @@
-import { deflateSync, inflateSync } from "node:zlib";
-import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef, PDFStream } from "pdf-lib";
-import { extractReceiptText } from "./receipt-text-extraction.js";
+import { inflateSync } from "node:zlib";
+import { concatTransformationMatrix, drawObject, PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef, popGraphicsState, pushGraphicsState, PDFStream } from "pdf-lib";
+import { extractTextItems, getDocumentProxy } from "unpdf";
 
-export type UnsupportedReason = "not_pdf" | "page_count" | "image_count" | "text_layer" | "not_bilevel" | "filter";
+export type UnsupportedReason = "not_pdf" | "page_count" | "image_count" | "text_layer" | "not_bilevel" | "filter" | "unreadable";
 
 const REASON_TEXT: Record<UnsupportedReason, string> = {
   not_pdf: "Das Original ist keine PDF (Foto, Bild oder E-Rechnung)",
@@ -10,6 +10,7 @@ const REASON_TEXT: Record<UnsupportedReason, string> = {
   image_count: "Die Seite enthält nicht genau ein Bild",
   text_layer: "Die PDF hat eine Textebene (E-Bon oder Scan mit Texterkennung); geschwärzte Pixel ließen den Text darin stehen",
   not_bilevel: "Das Bild ist kein Schwarz-Weiß-Scan (Graustufe oder Farbe)",
+  unreadable: "Die PDF lässt sich nicht vollständig lesen, daher ist nicht prüfbar, ob sie Text enthält",
   filter: "Das Bild ist nicht mit Flate ohne Prädiktor komprimiert (z. B. CCITT oder JPEG)",
 };
 
@@ -72,9 +73,15 @@ export async function readBilevelScan(pdfBytes: Uint8Array): Promise<BilevelScan
     if (obj instanceof PDFRawStream && obj.dict.get(PDFName.of("Subtype")) === PDFName.of("Image")) images.push([ref, obj]);
   }
   if (images.length !== 1) throw new UnsupportedScanError("image_count");
-  if ((await extractReceiptText(Buffer.from(pdfBytes).toString("base64"))) !== undefined) {
-    throw new UnsupportedScanError("text_layer");
+  let hasText: boolean;
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(pdfBytes));
+    const { items } = await extractTextItems(pdf);
+    hasText = items.some((pageItems) => pageItems.some((item) => item.str.trim().length > 0));
+  } catch {
+    throw new UnsupportedScanError("unreadable");
   }
+  if (hasText) throw new UnsupportedScanError("text_layer");
   const [imageRef, image] = images[0];
   const dict = image.dict;
   const bpc = dict.lookup(PDFName.of("BitsPerComponent"));
@@ -188,12 +195,23 @@ export function redactLines(scan: BilevelScan, bands: Band[], lineNumbers: numbe
   return { bits, blocks };
 }
 
-// Replaces the image stream and rewrites the whole file: pdf-lib serialises only live objects, so the old pixels
-// are not kept as an earlier revision. Call once per readBilevelScan (the scan's document is modified).
+// Builds a fresh single-page PDF from the redacted pixels only. Nothing of the original file is copied (no
+// annotations, Info/XMP metadata, earlier objects), so no private content can survive next to the image.
 export async function writeScan(scan: BilevelScan, bits: Uint8Array): Promise<Uint8Array> {
-  const contents = new Uint8Array(deflateSync(bits));
-  const dict = scan.image.dict.clone(scan.doc.context);
-  dict.set(PDFName.of("Length"), PDFNumber.of(contents.length));
-  scan.doc.context.assign(scan.imageRef, PDFRawStream.of(dict, contents));
-  return scan.doc.save({ useObjectStreams: false });
+  const { width: pageW, height: pageH } = scan.doc.getPage(0).getSize();
+  const doc = await PDFDocument.create({ updateMetadata: false });
+  const page = doc.addPage([pageW, pageH]);
+  const dict: Record<string, unknown> = {
+    Type: "XObject",
+    Subtype: "Image",
+    Width: scan.width,
+    Height: scan.height,
+    ColorSpace: PDFName.of("DeviceGray"),
+    BitsPerComponent: 1,
+  };
+  if (scan.blackBit === 1) dict.Decode = [1, 0];
+  const ref = doc.context.register(doc.context.flateStream(bits.subarray(0, scan.rowBytes * scan.height), dict as never));
+  const name = page.node.newXObject("Im0", ref);
+  page.pushOperators(pushGraphicsState(), concatTransformationMatrix(pageW, 0, 0, pageH, 0, 0), drawObject(name), popGraphicsState());
+  return doc.save({ useObjectStreams: false });
 }
