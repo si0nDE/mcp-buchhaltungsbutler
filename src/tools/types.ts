@@ -49,3 +49,17 @@ export function defineTool<Shape extends ZodRawShape, OutputShape extends ZodRaw
 ): ToolDef {
   return tool as unknown as ToolDef;
 }
+
+// MCP image blocks travel next to the JSON text block. Handlers attach PNGs with withImages(); the server turns them
+// into content blocks (attachImages), so CallToolResult keeps its text-only content type that tests and callers rely on.
+export function withImages(result: CallToolResult, pngs: Uint8Array[]): CallToolResult {
+  return { ...result, images: pngs.map((png) => Buffer.from(png).toString("base64")) };
+}
+
+export function attachImages(result: CallToolResult): CallToolResult {
+  const images = result.images;
+  if (!Array.isArray(images) || images.length === 0) return result;
+  const { images: _images, ...rest } = result;
+  const blocks = images.map((data) => ({ type: "image", data: String(data), mimeType: "image/png" }));
+  return { ...rest, content: [...rest.content, ...(blocks as unknown as CallToolResult["content"])] } as CallToolResult;
+}

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BBClient } from "./bb-client/client.js";
 import { SERVER_INSTRUCTIONS } from "./tools/bhb-systematik.js";
 import { createAllTools } from "./tools/index.js";
+import { attachImages } from "./tools/types.js";
 import { VERSION } from "./version.js";
 
 export function createServer(client: BBClient): McpServer {
@@ -23,7 +24,7 @@ export function createServer(client: BBClient): McpServer {
         outputSchema: tool.outputSchema,
         annotations: tool.annotations,
       },
-      tool.handler
+      async (args: Parameters<typeof tool.handler>[0]) => attachImages(await tool.handler(args))
     );
   }
 
