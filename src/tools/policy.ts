@@ -14,11 +14,14 @@ export type ForeignSupplierRule = (typeof FOREIGN_SUPPLIER_RULES)[number];
 
 export interface Policy {
   vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: ForeignSupplierRule };
+  // Kleinunternehmer nach § 19 UStG: true, false oder null (nicht festgelegt). Die BHB-API liefert den Status nicht.
+  tax_profile: { kleinunternehmer: boolean | null };
   history: Array<{ at: string; change: Record<string, unknown>; reason: string }>;
 }
 
 export const DEFAULT_POLICY: Policy = {
   vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "ask" },
+  tax_profile: { kleinunternehmer: null },
   history: [],
 };
 
@@ -42,11 +45,23 @@ export async function loadPolicy(path = policyFilePath()): Promise<Policy> {
   if (rule !== undefined && !FOREIGN_SUPPLIER_RULES.includes(rule)) {
     throw new Error(`Policy-Datei ${path}: unbekannter Wert "${String(rule)}" (erlaubt: ${FOREIGN_SUPPLIER_RULES.join(", ")}).`);
   }
+  const ku = parsed.tax_profile?.kleinunternehmer;
+  if (ku !== undefined && ku !== null && typeof ku !== "boolean") {
+    throw new Error(`Policy-Datei ${path}: tax_profile.kleinunternehmer muss true, false oder null sein, ist "${String(ku)}".`);
+  }
   return {
     vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: rule ?? "ask" },
+    tax_profile: { kleinunternehmer: ku ?? null },
     history: Array.isArray(parsed.history) ? parsed.history : [],
   };
 }
+
+const kuText = (ku: boolean | null) =>
+  ku === true
+    ? "Kleinunternehmer nach § 19 UStG: create_invoice lehnt Steuerausweis ab (§ 14c UStG) und prüft den Hinweis auf die Steuerbefreiung, Buchungen mit Vorsteuer oder Umsatzsteuer werden gemeldet (get_booking_guide kleinunternehmer)."
+    : ku === false
+      ? "Regelbesteuerung (kein Kleinunternehmer)."
+      : "Nicht festgelegt: keine Kleinunternehmer-Prüfung. Den Nutzer fragen, wenn es darauf ankommt.";
 
 const RULE_TEXT: Record<ForeignSupplierRule, string> = {
   ask: "Jeder Fall wird als Entscheidung gemeldet.",
@@ -60,7 +75,8 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
     name: "get_policy",
     description:
       "Read the house rules (Hausregeln) of this client for legal questions without a clear answer, e.g. foreign suppliers that show German VAT without a " +
-      "reverse-charge note. audit_vat_period respects them. Default 'ask' = report every case as a decision. Read-only.",
+      "reverse-charge note (audit_vat_period respects it; default 'ask' = report every case as a decision), and the tax profile: kleinunternehmer " +
+      "(§ 19 UStG; true, false or null = not set; the BHB API does not expose it). Read-only.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {},
@@ -70,7 +86,9 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
         file: policyFilePath(),
         vat_policy: policy.vat_policy,
         meaning: RULE_TEXT[policy.vat_policy.foreign_supplier_domestic_vat_no_rc_hint],
-        allowed_values: { foreign_supplier_domestic_vat_no_rc_hint: FOREIGN_SUPPLIER_RULES },
+        tax_profile: policy.tax_profile,
+        tax_profile_meaning: kuText(policy.tax_profile.kleinunternehmer),
+        allowed_values: { foreign_supplier_domestic_vat_no_rc_hint: FOREIGN_SUPPLIER_RULES, kleinunternehmer: [true, false, null] },
         history: policy.history.slice(-10),
       });
     },
@@ -80,34 +98,48 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
     name: "set_policy",
     description:
       "Change a house rule. Only after the user decided it explicitly, never on your own judgment: confirm must be true, reason says who decided what " +
-      "(it goes into the change history). foreign_supplier_domestic_vat_no_rc_hint: 'ask' (default), 'as_invoiced' (book as invoiced, Vorsteuer, no § 13b) or " +
-      "'reverse_charge_strict' (§ 13b by law, invoiced VAT not deductible). Writes the policy file (BHB_POLICY_FILE); the file must persist (volume in a container).",
+      "(it goes into the change history). Give at least one of: foreign_supplier_domestic_vat_no_rc_hint: 'ask' (default), 'as_invoiced' (book as invoiced, " +
+      "Vorsteuer, no § 13b) or 'reverse_charge_strict' (§ 13b by law, invoiced VAT not deductible); kleinunternehmer: true (§ 19 UStG applies), false " +
+      "(Regelbesteuerung) or null (unknown). Set kleinunternehmer only from the user's or Steuerberater's statement, never from the bookings; when the limit " +
+      "is exceeded mid-year or the user waived § 19 (Verzicht), set it to false. Writes the policy file (BHB_POLICY_FILE); the file must persist (volume in a container).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
-      foreign_supplier_domestic_vat_no_rc_hint: z.enum(FOREIGN_SUPPLIER_RULES),
+      foreign_supplier_domestic_vat_no_rc_hint: z.enum(FOREIGN_SUPPLIER_RULES).optional(),
+      kleinunternehmer: z.boolean().nullable().optional().describe("§ 19 UStG: true = Kleinunternehmer, false = Regelbesteuerung, null = nicht festgelegt."),
       reason: z.string().min(5).describe("Who decided what and why, e.g. 'GF 11.10.2026: wie ausgewiesen buchen, Differenz ca. 12 € je Quartal'."),
       confirm: z.boolean().describe("Must be true: the user confirmed the change."),
     },
     async handler(args) {
       if (args.confirm !== true) throw new Error("set_policy ändert eine Hausregel nur mit confirm: true nach ausdrücklicher Entscheidung des Nutzers.");
+      if (args.foreign_supplier_domestic_vat_no_rc_hint === undefined && args.kleinunternehmer === undefined) {
+        throw new Error("set_policy braucht mindestens einen Wert: foreign_supplier_domestic_vat_no_rc_hint oder kleinunternehmer.");
+      }
       const path = policyFilePath();
       const before = await loadPolicy(path);
-      const previous = before.vat_policy.foreign_supplier_domestic_vat_no_rc_hint;
+      const change: Record<string, unknown> = {};
+      const rule = args.foreign_supplier_domestic_vat_no_rc_hint ?? before.vat_policy.foreign_supplier_domestic_vat_no_rc_hint;
+      if (args.foreign_supplier_domestic_vat_no_rc_hint !== undefined) {
+        change.foreign_supplier_domestic_vat_no_rc_hint = { from: before.vat_policy.foreign_supplier_domestic_vat_no_rc_hint, to: rule };
+      }
+      const ku = args.kleinunternehmer === undefined ? before.tax_profile.kleinunternehmer : args.kleinunternehmer;
+      if (args.kleinunternehmer !== undefined) change.kleinunternehmer = { from: before.tax_profile.kleinunternehmer, to: ku };
       const next: Policy = {
-        vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: args.foreign_supplier_domestic_vat_no_rc_hint },
-        history: [
-          ...before.history,
-          {
-            at: new Date().toISOString(),
-            change: { foreign_supplier_domestic_vat_no_rc_hint: { from: previous, to: args.foreign_supplier_domestic_vat_no_rc_hint } },
-            reason: args.reason,
-          },
-        ],
+        vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: rule },
+        tax_profile: { kleinunternehmer: ku },
+        history: [...before.history, { at: new Date().toISOString(), change, reason: args.reason }],
       };
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, JSON.stringify(next, null, 2) + "\n", "utf8");
-      return ok({ file: path, vat_policy: next.vat_policy, previous, meaning: RULE_TEXT[args.foreign_supplier_domestic_vat_no_rc_hint] });
+      return ok({
+        file: path,
+        vat_policy: next.vat_policy,
+        tax_profile: next.tax_profile,
+        previous: before.vat_policy.foreign_supplier_domestic_vat_no_rc_hint,
+        change,
+        meaning: RULE_TEXT[rule],
+        tax_profile_meaning: kuText(ku),
+      });
     },
   });
 

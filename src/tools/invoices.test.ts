@@ -166,3 +166,44 @@ describe("invoices tools", () => {
     expect(client.call).not.toHaveBeenCalled();
   });
 });
+
+describe("create_invoice: Kleinunternehmer laut Hausregel (§ 19 UStG)", () => {
+  const ku = (kleinunternehmer: boolean | null) => async () => ({
+    vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "ask" as const },
+    tax_profile: { kleinunternehmer },
+    history: [],
+  });
+  const base = { type: "invoice" as const, show_prices_type: "net" as const, company_name: "Muster GmbH", date: "2026-11-09", draft: false };
+
+  it("lehnt Steuerausweis ab, bevor BHB einen Aufruf sieht", async () => {
+    const client = mockClient({ success: true });
+    const [createInvoice] = createInvoicesTools(client, ku(true));
+    await expect(
+      createInvoice.handler({ ...base, items: [{ name: "Beratung", amount: "1", unit: "Std.", vat: "19", single_price: "100.00" }] })
+    ).rejects.toThrow(/§ 14c UStG/);
+    expect(client.call).not.toHaveBeenCalled();
+  });
+
+  it("ohne Hinweis auf die Steuerbefreiung: Rechnung entsteht, mit Warnung und Textvorschlag, auch im dry_run", async () => {
+    const client = mockClient({ success: true, id_by_customer: "7" });
+    const [createInvoice] = createInvoicesTools(client, ku(true));
+    const item = { name: "Beratung", amount: "1", unit: "Std.", vat: "0", single_price: "100.00" };
+    const dry = JSON.parse((await createInvoice.handler({ ...base, items: [item], dry_run: true })).content[0].text);
+    expect(dry.warnings.join(" ")).toMatch(/§ 34a/);
+    expect(client.call).not.toHaveBeenCalled();
+    const res = JSON.parse((await createInvoice.handler({ ...base, items: [item] })).content[0].text);
+    expect(client.call).toHaveBeenCalledWith("invoicesCreate", expect.anything());
+    expect(res.warnings.join(" ")).toMatch(/Kleinunternehmer/);
+  });
+
+  it("mit Hinweis keine Warnung; ohne festgelegten Status oder bei Regelbesteuerung keine Prüfung", async () => {
+    const item = { name: "Beratung", amount: "1", unit: "Std.", vat: "0", single_price: "100.00" };
+    const [mitHinweis] = createInvoicesTools(mockClient({ success: true }), ku(true));
+    const r = JSON.parse((await mitHinweis.handler({ ...base, items: [item], final_provisions: "Gemäß § 19 UStG steuerfrei." })).content[0].text);
+    expect(r.warnings).toBeUndefined();
+    for (const status of [null, false]) {
+      const [tool] = createInvoicesTools(mockClient({ success: true }), ku(status));
+      await expect(tool.handler({ ...base, items: [{ ...item, vat: "19" }] })).resolves.toBeDefined();
+    }
+  });
+});

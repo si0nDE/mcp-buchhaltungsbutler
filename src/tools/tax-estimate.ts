@@ -4,7 +4,8 @@
 // gibt keine Hinzurechnungen und Kürzungen zur Gewerbesteuer, keinen Verlustvortrag, keine Vorauszahlungen, keine persönlichen
 // Verhältnisse. Wo etwas von der Person abhängt (Einkommensteuer des Einzelunternehmers, Kirchensteuer), steht
 // eine Orientierung oder nichts. Gesetzesstand 2026: Einkommensteuertarif nach § 32a Abs. 1 EStG (Wortlaut geprüft), Gewerbesteuer
-// Messzahl 3,5 % und Freibetrag 24.500 € für Personenunternehmen, Körperschaftsteuer 15 %, Soli 5,5 % (auf die Einkommensteuer erst über der
+// Messzahl 3,5 % und Freibetrag 24.500 € für Personenunternehmen, Mindesthebesatz 200 % bis 2026 und 280 % ab 2027 (§ 16 Abs. 4 GewStG),
+// Körperschaftsteuer nach § 23 Abs. 1 KStG (15 % bis 2027, dann gestuft bis 10 % ab 2032), Soli 5,5 % (auf die Einkommensteuer erst über der
 // Freigrenze 20.350 €, Milderungszone 11,9 %, SolZG § 3 Abs. 3 und § 4, Wortlaut geprüft), Kapitalertragsteuer 25 %.
 
 export type Rechtsform = "einzelunternehmen" | "personengesellschaft" | "kapitalgesellschaft";
@@ -38,6 +39,19 @@ export function incomeTax2026(zve: number): number {
 
 const GEWST_FREIBETRAG = 24500;
 const GEWST_MESSZAHL = 0.035;
+
+// § 16 Abs. 4 Satz 2 GewStG: 280 Prozent, wenn die Gemeinde keinen höheren Hebesatz bestimmt hat; nach § 36 Abs. 5b GewStG erstmals
+// für den Erhebungszeitraum 2027 (Gesetz vom 29.06.2026, BGBl. 2026 I Nr. 197). Bis 2026 200 Prozent. Amtlicher Text gelesen 09.11.2026.
+export function mindestHebesatz(erhebungszeitraum: number): number {
+  return erhebungszeitraum >= 2027 ? 280 : 200;
+}
+
+// § 23 Abs. 1 KStG: 15 % bis Veranlagungszeitraum 2027, dann 14/13/12/11 % und ab 2032 10 %. Amtlicher Text gelesen 09.11.2026.
+export function koerperschaftsteuerSatz(veranlagungszeitraum: number): number {
+  if (veranlagungszeitraum <= 2027) return 0.15;
+  if (veranlagungszeitraum >= 2032) return 0.1;
+  return (15 - (veranlagungszeitraum - 2027)) / 100;
+}
 
 export interface Gewerbesteuer {
   gewerbeertrag: number;
@@ -78,10 +92,12 @@ export interface Estimate {
 
 export const ESTIMATE_KEYS = ["gewerbesteuer", "einkommensteuer", "koerperschaftsteuer", "soli", "kirchensteuer", "kapitalertragsteuer"] as const;
 
-export function estimateTaxes(gewinn: number, rechtsform: Rechtsform, hebesatzPct: number, ausschuettung = 0, kirchensteuerPct = 0): Estimate {
-  const g = gewerbesteuer(gewinn, rechtsform, hebesatzPct);
+// jahr: Veranlagungs- und Erhebungszeitraum; bestimmt den Körperschaftsteuersatz und den Mindesthebesatz (der angegebene Hebesatz
+// gilt höchstens bis zum gesetzlichen Mindestsatz hinunter). Der Einkommensteuertarif ist der von 2026 (andere Jahre nicht geprüft).
+export function estimateTaxes(gewinn: number, rechtsform: Rechtsform, hebesatzPct: number, ausschuettung = 0, kirchensteuerPct = 0, jahr = 2026): Estimate {
+  const g = gewerbesteuer(gewinn, rechtsform, Math.max(hebesatzPct, mindestHebesatz(jahr)));
   if (rechtsform === "kapitalgesellschaft") {
-    const kst = r2(Math.max(0, gewinn) * 0.15);
+    const kst = r2(Math.max(0, gewinn) * koerperschaftsteuerSatz(jahr));
     return {
       gewerbesteuer: g.steuer,
       einkommensteuer: null,
@@ -143,10 +159,11 @@ export interface TaxAssumptions {
 // Quartalsende minus Schätzung zum Vorquartalsende.
 export function buildPeriods(months: MonthInput[], a: TaxAssumptions, fullMonthsInYear = 12): PeriodRow[] {
   const canEstimate = a.rechtsform !== null && a.hebesatzPct !== null;
+  const jahr = Number(months[0]?.schluessel.slice(0, 4)) || 2026;
   const cum: number[] = [];
   months.reduce((t, m, i) => (cum[i] = t + m.gewinn), 0);
   const est = (i: number, withDividend: boolean): Estimate | null =>
-    !canEstimate || i < 0 ? null : estimateTaxes(cum[i], a.rechtsform as Rechtsform, a.hebesatzPct as number, withDividend ? a.ausschuettung : 0, a.kirchensteuerPct ?? 0);
+    !canEstimate || i < 0 ? null : estimateTaxes(cum[i], a.rechtsform as Rechtsform, a.hebesatzPct as number, withDividend ? a.ausschuettung : 0, a.kirchensteuerPct ?? 0, jahr);
   const zero: Estimate = { gewerbesteuer: 0, einkommensteuer: 0, koerperschaftsteuer: 0, soli: 0, kirchensteuer: 0, kapitalertragsteuer: 0 };
   const delta = (to: number, from: number, withDividend: boolean): Partial<Record<(typeof ESTIMATE_KEYS)[number], number | null>> => {
     const b = est(to, withDividend);

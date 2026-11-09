@@ -160,6 +160,7 @@ describe("audit_vat_period with read_receipt_text and a house rule", () => {
     } as unknown as BBClient;
     const [tool] = createVatAuditTools(c, async () => ({
       vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "as_invoiced" },
+      tax_profile: { kleinunternehmer: null },
       history: [],
     }));
     const res = JSON.parse(

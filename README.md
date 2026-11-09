@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes the [BuchhaltungsButler](htt
 
 ## Built for agents, not just wrapped from the API
 
-- **58 tools covering all 58 endpoints** — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
+- **58 tools covering 58 of the 61 endpoints** (the three `/settings/delete/*` endpoints added to the live API documentation in November 2026 have no tool yet) — batch, list, and singular variants of the same action are merged into one tool, so your context window isn't full of near-duplicate tool definitions.
 - **Lean by default** — list tools return trimmed, LLM-friendly fields out of the box; pass `full: true` whenever you need the complete record.
 - **No array-juggling** — invoice line items, posting splits, and other API quirks are exposed as clean, ordinary objects. No more keeping five parallel arrays in sync by hand.
 - **Always in sync with the spec** — endpoint definitions are generated straight from BuchhaltungsButler's official API spec, not hand-maintained.

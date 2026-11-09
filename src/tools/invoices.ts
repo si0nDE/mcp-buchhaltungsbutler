@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { supplyDateWarnings, unbookableRateWarnings, withWarnings } from "./bhb-systematik.js";
+import { kleinunternehmerInvoiceCheck, kleinunternehmerStatus } from "./kleinunternehmer.js";
+import { loadPolicy, type Policy } from "./policy.js";
 import {
   assertRecurring,
   RECURRING_DESCRIPTION,
@@ -93,7 +95,7 @@ const sharedInvoiceFields = {
   language: z.enum(["de_DE", "en_US"]).optional(),
 };
 
-export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
+export function createInvoicesTools(client: BBClient, policyLoader: () => Promise<Policy> = loadPolicy): [ToolDef, ToolDef] {
   // invoicenumber/due_days/payment_reference are accepted by invoicesCreate and
   // invoicesCreateEInvoice, but NOT by invoicesCreateDraft - stripped below when draft.
   const createInvoiceShape = {
@@ -151,7 +153,9 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       "booked afterwards. e_invoice: true creates a structured e-invoice (ZUGFeRD/XRechnung) via the e-invoice endpoint: use it for business customers (B2B), " +
       "a plain PDF is fine for consumers (B2C); it needs street, zip, city, country and email, no draft, and items with vat 0 need a tax_type; the company master data " +
       "(address, tax number or USt-ID) must be complete in the account. A period of service must be given as its last day. It sends nothing. " +
-      "Verified 2026-10-30: an e-invoice plan with recurring_date_end works, the first invoice is ZUGFeRD and a recurring invoice; a later run was not observed.",
+      "Verified 2026-10-30: an e-invoice plan with recurring_date_end works, the first invoice is ZUGFeRD and a recurring invoice; a later run was not observed. " +
+      "Kleinunternehmer (house rule set_policy kleinunternehmer: true): an invoice or credit with a VAT rate is refused (§ 14c UStG), and a missing note " +
+      "on the Steuerbefreiung (§ 34a UStDV) is warned about with a suggested final_provisions text (get_booking_guide kleinunternehmer).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: createInvoiceShape,
@@ -178,7 +182,18 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
         if (items.some((i) => i.tax_type !== undefined)) throw new Error("tax_type gehört nur zu e_invoice: true.");
       }
       const taxes = e_invoice ? items.map((i, n) => eInvoiceTax(i, n)) : [];
-      if (dry_run) return ok(recurringDryRun({ ...fields, items, draft }));
+      const ku = await kleinunternehmerStatus(policyLoader);
+      const kuCheck =
+        ku.status === true
+          ? kleinunternehmerInvoiceCheck({ type: fields.type, items, e_invoice, final_provisions: fields.final_provisions, correspondence: fields.correspondence })
+          : { warnings: [] };
+      if (kuCheck.error) throw new Error(kuCheck.error);
+      const kuWarnings = [...ku.warnings, ...kuCheck.warnings];
+      if (dry_run) {
+        const preview = recurringDryRun({ ...fields, items, draft });
+        const previewWarnings = Array.isArray(preview.warnings) ? (preview.warnings as string[]) : [];
+        return ok(kuWarnings.length === 0 ? preview : { ...preview, warnings: [...previewWarnings, ...kuWarnings] });
+      }
       assertRecurring({ ...fields, draft, confirm_creates_first_invoice, allow_open_ended });
       const flattened = e_invoice
         ? flattenItems(items, [
@@ -190,7 +205,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       if (draft) {
         const payload = { ...fields, ...flattened };
         const result = await client.call("invoicesCreateDraft", payload);
-        return ok(withWarnings(result, [...supplyDateWarnings(fields), ...unbookableRateWarnings(items)]));
+        return ok(withWarnings(result, [...supplyDateWarnings(fields), ...unbookableRateWarnings(items), ...kuWarnings]));
       }
 
       const payload = {
@@ -219,6 +234,7 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
           ...supplyDateWarnings(fields),
           ...unbookableRateWarnings(items),
           ...(fields.recurring_interval !== undefined ? [recurringCreatedWarning(fields.recurring_date_end)] : []),
+          ...kuWarnings,
         ])
       );
     },
@@ -234,7 +250,9 @@ export function createInvoicesTools(client: BBClient): [ToolDef, ToolDef] {
       "corrections. For a partial credit or other terms use create_invoice with type credit instead. The correction is an " +
       "additional document with its own number that stays active. To cancel an outbound invoice without a counter-document " +
       "(like \"Stornieren\" in the BHB UI) use set_receipt_deleted. When the user says \"stornieren\", ask which one they want " +
-      "(get_booking_guide rechnungen_erstellen).",
+      "(get_booking_guide rechnungen_erstellen). E-Rechnung: if the original had to be an e-invoice, the correction must be one " +
+      "too, with the invoice type for a correction (BMF 15.10.2026, Rn. 20); whether BHB sets that type is unchecked, so have the " +
+      "user look at the correction in BHB (get_booking_guide rechnungen_erstellen).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: { receipt_id_by_customer: z.number().int() },

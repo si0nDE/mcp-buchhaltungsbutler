@@ -3,7 +3,7 @@ import type { BBClient, BBListResult } from "../bb-client/client.js";
 import { createReportRunner, type RunnerOptions } from "./report-runner.js";
 import { openReceiptRows, type OpenReceipt } from "./liquidity.js";
 import { seriesMonths } from "./controlling.js";
-import { buildPeriods, normalizeRechtsform, type MonthInput } from "./tax-estimate.js";
+import { buildPeriods, koerperschaftsteuerSatz, mindestHebesatz, normalizeRechtsform, type MonthInput } from "./tax-estimate.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 import { finishWithExport } from "./export-file.js";
 
@@ -127,7 +127,14 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
     inputSchema: {
       as_of: z.string().optional().describe("YYYY-MM-DD, Stichtag. Standard: heute."),
       rechtsform: z.string().optional().describe("Unternehmensform wie in BHB unter Unternehmensdaten, z. B. Einzelunternehmen, GbR, GmbH, UG. Ohne Angabe keine Steuerschätzung."),
-      hebesatz_pct: z.number().min(200).max(900).optional().describe("Gewerbesteuer-Hebesatz der Gemeinde in Prozent (gesetzlicher Mindestsatz 200). Ohne Angabe keine Steuerschätzung."),
+      hebesatz_pct: z
+        .number()
+        .min(200)
+        .max(900)
+        .optional()
+        .describe(
+          "Gewerbesteuer-Hebesatz der Gemeinde in Prozent. Gesetzlicher Mindestsatz 200 bis Erhebungszeitraum 2026, 280 ab 2027 (§ 16 Abs. 4 Satz 2 GewStG); liegt die Angabe darunter, rechnet die Schätzung mit dem Mindestsatz und warnt. Ohne Angabe keine Steuerschätzung."
+        ),
       ausschuettung: z.number().min(0).optional().describe("Nur Kapitalgesellschaft: geplante Ausschüttung im Jahr, für die Kapitalertragsteuer."),
       kirchensteuer_pct: z.number().min(0).max(9).optional().describe("Nur Einzelunternehmen: Kirchensteuersatz in Prozent der Einkommensteuer (Bayern und Baden-Württemberg 8, sonst 9). Ohne Angabe keine Kirchensteuer."),
       save_as: z.string().optional().describe("Dateiname (ohne Pfad): das volle Ergebnis wird als JSON unter ~/.mcp-buchhaltungsbutler/exports/ gespeichert und nur eine Kurzfassung zurückgegeben. Für Artefakte und große Auswertungen."),
@@ -174,6 +181,16 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
       if (truncated) warnings.push("Offene Belege: Abfrage nach 20 Seiten abgebrochen, Steuerbehörden-Belege unvollständig.");
       if (args.rechtsform !== undefined && rechtsform === null) warnings.push(`Unternehmensform "${args.rechtsform}" nicht erkannt (Einzelunternehmen, Freiberufler, GbR, OHG, KG, GmbH, UG, AG): keine Steuerschätzung.`);
       if (rechtsform === null || args.hebesatz_pct === undefined) warnings.push("Keine Steuerschätzung: rechtsform und hebesatz_pct fehlen.");
+      const jahr = Number(asOf.slice(0, 4));
+      const minHebesatz = mindestHebesatz(jahr);
+      const hebesatzGerechnet = args.hebesatz_pct === undefined ? null : Math.max(args.hebesatz_pct, minHebesatz);
+      if (args.hebesatz_pct !== undefined && args.hebesatz_pct < minHebesatz)
+        warnings.push(
+          `Hebesatz ${args.hebesatz_pct} % liegt unter dem gesetzlichen Mindesthebesatz ${minHebesatz} % für ${jahr} (§ 16 Abs. 4 Satz 2 GewStG, ab Erhebungszeitraum 2027 280 %): die Schätzung rechnet mit ${minHebesatz} %. Den Hebesatz der Gemeinde für ${jahr} prüfen.`
+        );
+      if (rechtsform === "einzelunternehmen" && args.hebesatz_pct !== undefined && jahr !== 2026)
+        warnings.push(`Einkommensteuer geschätzt mit dem Einkommensteuertarif 2026 (§ 32a EStG); der Tarif für ${jahr} nicht geprüft. Nur als Orientierung verwenden.`);
+      const kstPct = Math.round(koerperschaftsteuerSatz(jahr) * 100);
 
       return finishWithExport(args.save_as, {
         as_of: asOf,
@@ -189,6 +206,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
         annahmen: {
           rechtsform,
           hebesatz_pct: args.hebesatz_pct ?? null,
+          hebesatz_pct_gerechnet: hebesatzGerechnet,
           ausschuettung: args.ausschuettung ?? 0,
           kirchensteuer_pct: args.kirchensteuer_pct ?? null,
           gewinn: "Haben minus Soll der Konten der Klassen Einnahmen, Betriebsausgabe und Abschreibungen je Monat (Privatkonten zählen nicht)",
@@ -198,7 +216,7 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
         hinweise: [
           "Umsatzsteuer-Zahllast = Summe der Haben-Salden der Konten Umsatzsteuer abzüglich der Soll-Salden von Vorsteuer, Vorauszahlungen/Erstattungen und 'Umsatzsteuer frühere Jahre'. Positiv: noch zu zahlen, negativ: Guthaben. Maßgeblich ist die Umsatzsteuer-Voranmeldung; die Zahl hier ist der gebuchte Stand und hängt davon ab, dass Zahlungen ans Finanzamt gebucht sind.",
           "Ist-/Soll-Versteuerung wird erst bei der Auswertung berechnet, nicht gebucht: der Stand gilt für die Besteuerungsart, die zum Stichtag eingestellt ist.",
-          "Die weiteren Steuerkonten stehen so da, wie sie gebucht sind (Salden, Soll positiv). Daneben steht, wenn rechtsform und hebesatz_pct angegeben sind, in perioden eine überschlägige Schätzung (~): Gewinn laut Buchungen, ohne Hinzurechnungen und Kürzungen zur Gewerbesteuer, ohne Verlustvortrag, Vorauszahlungen und persönliche Verhältnisse. Einzelunternehmen: Gewerbesteuer (Freibetrag 24.500 €, Messzahl 3,5 %) und Einkommensteuer auf den Gewinn allein nach § 32a EStG 2026 abzüglich Anrechnung der Gewerbesteuer; Soli darauf ab der Freigrenze von 20.350 € Einkommensteuer (Milderungszone 11,9 %), Kirchensteuer nur mit angegebenem Satz. Kapitalgesellschaft: Gewerbesteuer ohne Freibetrag, Körperschaftsteuer 15 %, Soli 5,5 % darauf, Kapitalertragsteuer 25 % plus Soli auf eine angegebene Ausschüttung. Die Schätzung ersetzt keine Steuererklärung.",
+          `Die weiteren Steuerkonten stehen so da, wie sie gebucht sind (Salden, Soll positiv). Daneben steht, wenn rechtsform und hebesatz_pct angegeben sind, in perioden eine überschlägige Schätzung (~): Gewinn laut Buchungen, ohne Hinzurechnungen und Kürzungen zur Gewerbesteuer, ohne Verlustvortrag, Vorauszahlungen und persönliche Verhältnisse. Einzelunternehmen: Gewerbesteuer (Freibetrag 24.500 €, Messzahl 3,5 %) und Einkommensteuer auf den Gewinn allein nach § 32a EStG 2026 abzüglich Anrechnung der Gewerbesteuer; Soli darauf ab der Freigrenze von 20.350 € Einkommensteuer (Milderungszone 11,9 %), Kirchensteuer nur mit angegebenem Satz. Kapitalgesellschaft: Gewerbesteuer ohne Freibetrag, Körperschaftsteuer ${kstPct} % (§ 23 Abs. 1 KStG: 15 % bis 2027, dann je Jahr ein Punkt weniger bis 10 % ab 2032), Soli 5,5 % darauf, Kapitalertragsteuer 25 % plus Soli auf eine angegebene Ausschüttung. Die Schätzung ersetzt keine Steuererklärung.`,
           "Ein Verlustmonat senkt die kumulierte Schätzung, deshalb kann der Wert eines Monats oder Quartals negativ sein: er ist die Veränderung der Schätzung, keine Erstattung.",
           "Offene Belege von Finanzamt und anderen Steuerbehörden: nach dem Namen der Gegenpartei erkannt (Finanzamt, Finanzkasse, Hauptzollamt, Gemeinde-/Stadtkasse). Negative Beträge sind Erstattungen.",
         ],

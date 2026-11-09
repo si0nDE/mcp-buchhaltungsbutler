@@ -7086,6 +7086,297 @@
         }
       }
     },
+    "/settings/delete/debtor": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "delete debtor",
+        "description": "Delete a debtor account.<br /><br />The debtor account can only be deleted if no postings exist for it.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "api_key",
+            "description": "The api key registered for the customer to manage",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "postingaccount_number",
+            "description": "The postingaccount_number of the debtor account to delete",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "deleted successful",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_Success"
+            }
+          },
+          "401 (3)": {
+            "description": "API credentials unknown or invalid",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode3"
+            }
+          },
+          "401 (4)": {
+            "description": "customer not found or insufficient privileges",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode4"
+            }
+          },
+          "403 (11)": {
+            "description": "customer has no active status",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode11"
+            }
+          },
+          "400 (5)": {
+            "description": "invalid settings type specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode5"
+            }
+          },
+          "400 (6)": {
+            "description": "wrong debtor account postingaccount_number specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode6"
+            }
+          },
+          "400 (7)": {
+            "description": "no debtor found for specified postingaccount_number",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode7"
+            }
+          },
+          "400 (8)": {
+            "description": "debtor may not be deleted because postings exist",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode8"
+            }
+          },
+          "500 (0)": {
+            "description": "internal error",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode0"
+            }
+          },
+          "504 (30)": {
+            "description": "timeout",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteDebtor_ErrorCode30"
+            }
+          }
+        }
+      }
+    },
+    "/settings/delete/creditor": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "delete creditor",
+        "description": "Delete a creditor account.<br /><br />The creditor account can only be deleted if no postings exist for it.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "api_key",
+            "description": "The api key registered for the customer to manage",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "postingaccount_number",
+            "description": "The postingaccount_number of the creditor account to delete",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "deleted successful",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_Success"
+            }
+          },
+          "401 (3)": {
+            "description": "API credentials unknown or invalid",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode3"
+            }
+          },
+          "401 (4)": {
+            "description": "customer not found or insufficient privileges",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode4"
+            }
+          },
+          "403 (11)": {
+            "description": "customer has no active status",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode11"
+            }
+          },
+          "400 (5)": {
+            "description": "invalid settings type specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode5"
+            }
+          },
+          "400 (6)": {
+            "description": "wrong creditor account postingaccount_number specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode6"
+            }
+          },
+          "400 (7)": {
+            "description": "no creditor found for specified postingaccount_number",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode7"
+            }
+          },
+          "400 (8)": {
+            "description": "creditor may not be deleted because postings exist",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode8"
+            }
+          },
+          "500 (0)": {
+            "description": "internal error",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode0"
+            }
+          },
+          "504 (30)": {
+            "description": "timeout",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeleteCreditor_ErrorCode30"
+            }
+          }
+        }
+      }
+    },
+    "/settings/delete/postingaccount": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "delete postingaccount",
+        "description": "Delete a postingaccount. Only postingaccounts that were added or edited manually can be deleted, and only if there are no postings and no assets on them. If the postingaccount is a manually edited standard postingaccount, only its name is reset to the default value.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "api_key",
+            "description": "The api key registered for the customer to manage.",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "postingaccount_number",
+            "description": "The postingaccount_number of the postingaccount to delete.",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "query successful",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_Success"
+            }
+          },
+          "401 (3)": {
+            "description": "API credentials unknown or invalid",
+            "schema": {
+              "$ref": "#/definitions/Request_ErrorCode3"
+            }
+          },
+          "401 (4)": {
+            "description": "customer not found or insufficient privileges",
+            "schema": {
+              "$ref": "#/definitions/Request_ErrorCode4"
+            }
+          },
+          "403 (11)": {
+            "description": "customer has no active status",
+            "schema": {
+              "$ref": "#/definitions/Request_ErrorCode11"
+            }
+          },
+          "400 (5)": {
+            "description": "invalid settings type specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode5"
+            }
+          },
+          "400 (6)": {
+            "description": "no postingaccount_number specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode6"
+            }
+          },
+          "400 (7)": {
+            "description": "invalid postingaccount_number specified",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode7"
+            }
+          },
+          "400 (8)": {
+            "description": "postingaccount was not found",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode8"
+            }
+          },
+          "400 (9)": {
+            "description": "postingaccount may not be deleted because it is a standard postingaccount",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode9"
+            }
+          },
+          "400 (10)": {
+            "description": "postingaccount may not be deleted because postings exist",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode10"
+            }
+          },
+          "400 (12)": {
+            "description": "postingaccount may not be deleted because assets exist",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode12"
+            }
+          },
+          "400 (13)": {
+            "description": "postingaccount may not be deleted",
+            "schema": {
+              "$ref": "#/definitions/SettingsDeletePostingaccount_ErrorCode13"
+            }
+          },
+          "400 (23)": {
+            "description": "no post and files content received or declined",
+            "schema": {
+              "$ref": "#/definitions/Request_ErrorCode23"
+            }
+          },
+          "500 (0)": {
+            "description": "internal error",
+            "schema": {
+              "$ref": "#/definitions/Request_ErrorCode0"
+            }
+          },
+          "504 (30)": {
+            "description": "timeout",
+            "schema": {
+              "$ref": "#/definitions/Request_ErrorCode30"
+            }
+          }
+        }
+      }
+    },
     "/accounts/get": {
       "post": {
         "tags": [
@@ -29981,6 +30272,668 @@
           "type": "string",
           "enum": [
             "the country \"%country%\" is not configured as a destination country"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode0": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            0
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "error while processing the request"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode11": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            11
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "customer has no active status"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode3": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            3
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "API credentials unknown or invalid"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode30": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            30
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "a timeout occurred while processing the request"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode4": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            4
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "customer not found or insufficient privileges"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode5": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "invalid settings type specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode6": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            6
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "wrong creditor account postingaccount_number specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode7": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            7
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "no creditor found for specified postingaccount_number"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_ErrorCode8": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            8
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "creditor may not be deleted because postings exist"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteCreditor_Success": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "description": "Success boolean",
+          "enum": [
+            true
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "blank",
+          "enum": [
+            ""
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode0": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            0
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "error while processing the request"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode11": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            11
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "customer has no active status"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode3": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            3
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "API credentials unknown or invalid"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode30": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            30
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "a timeout occurred while processing the request"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode4": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            4
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "customer not found or insufficient privileges"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode5": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "invalid settings type specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode6": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            6
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "wrong debtor account postingaccount_number specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode7": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            7
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "no debtor found for specified postingaccount_number"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_ErrorCode8": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            8
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "debtor may not be deleted because postings exist"
+          ]
+        }
+      }
+    },
+    "SettingsDeleteDebtor_Success": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "description": "Success boolean",
+          "enum": [
+            true
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "blank",
+          "enum": [
+            ""
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode10": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            10
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "postingaccount may not be deleted because postings exist"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode12": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            12
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "postingaccount may not be deleted because assets exist"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode13": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            13
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "postingaccount may not be deleted"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode5": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "invalid settings type specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode6": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            6
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "no postingaccount_number specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode7": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            7
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "invalid postingaccount_number specified"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode8": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            8
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "postingaccount was not found"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_ErrorCode9": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error_code": {
+          "type": "integer",
+          "enum": [
+            9
+          ]
+        },
+        "message": {
+          "type": "string",
+          "enum": [
+            "postingaccount may not be deleted because it is a standard postingaccount"
+          ]
+        }
+      }
+    },
+    "SettingsDeletePostingaccount_Success": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "description": "Success boolean",
+          "enum": [
+            true
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "blank",
+          "enum": [
+            ""
+          ]
+        },
+        "postingaccount_number": {
+          "type": "string",
+          "description": "The postingaccount_number of the deleted postingaccount",
+          "enum": [
+            "7001"
           ]
         }
       }

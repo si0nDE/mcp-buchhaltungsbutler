@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPeriods, estimateTaxes, gewerbesteuer, incomeTax2026, normalizeRechtsform, soliOnIncomeTax } from "./tax-estimate.js";
+import { buildPeriods, estimateTaxes, gewerbesteuer, incomeTax2026, koerperschaftsteuerSatz, mindestHebesatz, normalizeRechtsform, soliOnIncomeTax } from "./tax-estimate.js";
 
 describe("normalizeRechtsform", () => {
   it("ordnet die Unternehmensformen aus BHB den drei Gruppen zu", () => {
@@ -117,5 +117,35 @@ describe("buildPeriods", () => {
     const r = buildPeriods(months, { rechtsform: "kapitalgesellschaft", hebesatzPct: 380, ausschuettung: 1000 });
     expect(r.filter((x) => x.kapitalertragsteuer !== null).map((x) => x.typ)).toEqual(["jahr"]);
     expect(r.find((x) => x.typ === "jahr")!.kapitalertragsteuer).toBe(263.75);
+  });
+});
+
+// § 23 Abs. 1 KStG und § 16 Abs. 4 Satz 2 GewStG mit § 36 Abs. 5b GewStG, amtlicher Text gelesen am 09.11.2026.
+describe("Körperschaftsteuersatz nach Veranlagungszeitraum (§ 23 Abs. 1 KStG)", () => {
+  it("15 % bis 2027, dann je Jahr ein Punkt weniger bis 10 % ab 2032", () => {
+    expect([2025, 2026, 2027, 2028, 2029, 2030, 2031, 2032, 2040].map(koerperschaftsteuerSatz)).toEqual([0.15, 0.15, 0.15, 0.14, 0.13, 0.12, 0.11, 0.1, 0.1]);
+  });
+  it("estimateTaxes nimmt den Satz des Jahres, ohne Jahr 2026", () => {
+    expect(estimateTaxes(10000, "kapitalgesellschaft", 400).koerperschaftsteuer).toBe(1500);
+    expect(estimateTaxes(10000, "kapitalgesellschaft", 400, 0, 0, 2028)).toMatchObject({ koerperschaftsteuer: 1400, soli: 77 });
+  });
+  it("buildPeriods nimmt das Jahr aus den Monaten", () => {
+    const m = [{ schluessel: "2028-01", ust: 0, vst: 0, gewinn: 10000 }];
+    const jahr = buildPeriods(m, { rechtsform: "kapitalgesellschaft", hebesatzPct: 400, ausschuettung: 0 }).find((x) => x.typ === "jahr")!;
+    expect(jahr.koerperschaftsteuer).toBe(1400);
+  });
+});
+
+describe("Mindesthebesatz (§ 16 Abs. 4 Satz 2 GewStG)", () => {
+  it("200 % bis Erhebungszeitraum 2026, 280 % ab 2027", () => {
+    expect([2025, 2026, 2027, 2030].map(mindestHebesatz)).toEqual([200, 200, 280, 280]);
+  });
+  it("ab 2027 rechnet die Gewerbesteuer mit mindestens 280 %, auch wenn ein niedrigerer Hebesatz angegeben ist", () => {
+    const m = [{ schluessel: "2027-01", ust: 0, vst: 0, gewinn: 100000 }];
+    const mit200 = buildPeriods(m, { rechtsform: "kapitalgesellschaft", hebesatzPct: 200, ausschuettung: 0 }).find((x) => x.typ === "jahr")!;
+    // Messbetrag 3.500 € x 280 % = 9.800 €
+    expect(mit200.gewerbesteuer).toBe(9800);
+    const m26 = [{ schluessel: "2026-01", ust: 0, vst: 0, gewinn: 100000 }];
+    expect(buildPeriods(m26, { rechtsform: "kapitalgesellschaft", hebesatzPct: 200, ausschuettung: 0 }).find((x) => x.typ === "jahr")!.gewerbesteuer).toBe(7000);
   });
 });

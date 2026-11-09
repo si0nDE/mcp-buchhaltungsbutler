@@ -254,3 +254,58 @@ describe("warnings added for documented BHB limits", () => {
     expect(res.warnings.join(" ")).toMatch(/Debitoren-\/Kreditorenkonto/);
   });
 });
+
+// Rechtsstand laut docs/rechtsgrundlagen-steueraenderungen-2025-2028.md (amtliche Texte gelesen am 09.11.2026).
+describe("Rechtsstand 09.11.2026", () => {
+  it("uses the 750 € limit for the Gesamtdifferenz (§ 25a Abs. 4 Satz 2 UStG), not the old 500 €", () => {
+    const e = JSON.stringify(findBookingGuide("differenzbesteuerung"));
+    expect(e).toMatch(/Einkaufspreis bis 750 €/);
+    expect(e).not.toMatch(/bis 500 €/);
+    expect(e).toMatch(/§ 25a Abs\. 4 Satz 2 UStG/);
+  });
+
+  it("holds the E-Rechnung timeline, the exceptions and the correction rule (§ 14, § 27 Abs. 38 UStG, UStDV, BMF 15.10.2026)", () => {
+    const e = JSON.stringify(findBookingGuide("rechnungen_erstellen"));
+    expect(e).toMatch(/31\.12\.2026/);
+    expect(e).toMatch(/800\.000 €/);
+    expect(e).toMatch(/ab 01\.01\.2028/);
+    expect(e).toMatch(/Datum der Leistung/);
+    expect(e).toMatch(/250 €.*§ 33 UStDV/);
+    expect(e).toMatch(/Fahrausweise.*§ 34 UStDV/);
+    expect(e).toMatch(/Kleinunternehmer.*§ 34a UStDV/);
+    expect(e).toMatch(/§ 4 Nr\. 8 bis 29/);
+    expect(e).toMatch(/Berichtigung.*als E-Rechnung/);
+    expect(e).toMatch(/keine Ordnungswidrigkeit/);
+  });
+
+  it("has a kleinunternehmer topic with the verified § 19 rules and the booking codes", () => {
+    const entry = findBookingGuide("kleinunternehmer");
+    expect(entry?.quelle).toMatch(/^Übergabe/);
+    const e = JSON.stringify(entry);
+    expect(e).toMatch(/25\.000 €/);
+    expect(e).toMatch(/100\.000 €/);
+    expect(e).toMatch(/vereinnahmt/);
+    expect(e).toMatch(/Bereits der Umsatz, mit dem die Grenze überschritten wird/);
+    expect(e).toMatch(/Neugründ/);
+    expect(e).toMatch(/fünf Kalenderjahre/);
+    expect(e).toMatch(/§ 34a UStDV/);
+    expect(e).toMatch(/§ 14c UStG/);
+    expect(e).toMatch(/19_both_1_no_pre/);
+    expect(e).toMatch(/0_none/);
+    expect(e).toMatch(/set_policy/);
+    expect(e).toMatch(/USt\. aber keine VSt\./);
+  });
+
+  it("holds the hints on Aufbewahrung, UStVA thresholds, degressive AfA and the Mindesthebesatz", () => {
+    expect(JSON.stringify(findBookingGuide("belege_upload_matching"))).toMatch(/§ 147 Abs\. 3 AO.*acht Jahre/);
+    expect(JSON.stringify(findBookingGuide("ust_va_zm"))).toMatch(/9\.000 €.*2\.000 €/);
+    expect(JSON.stringify(findBookingGuide("abschreibung"))).toMatch(/30\. Juni 2025.*1\. Januar 2028.*30 %/);
+    expect(JSON.stringify(findBookingGuide("controlling_artefakt"))).toMatch(/280 %/);
+  });
+
+  it("create_invoice_correction points to the E-Rechnung rule for corrections", () => {
+    const corr = createInvoicesTools({ call: vi.fn() } as unknown as BBClient).find((t) => t.name === "create_invoice_correction")!;
+    expect(corr.description).toMatch(/E-Rechnung/);
+    expect(corr.description).toMatch(/rechnungen_erstellen/);
+  });
+});

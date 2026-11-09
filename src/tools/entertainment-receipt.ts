@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { kleinunternehmerStatus } from "./kleinunternehmer.js";
+import { loadPolicy, type Policy } from "./policy.js";
 import type { BBClient } from "../bb-client/client.js";
 import {
   assertOccasionIsConcrete,
@@ -477,11 +479,11 @@ const generateShape = {
   tip: z.number().nonnegative().default(0).describe("Trinkgeld - kein Entgelt, keine USt"),
   kleinunternehmer: z
     .boolean()
-    .default(false)
+    .optional()
     .describe(
-      "Vor dem Aufruf aus Organisations-/Projektanweisungen oder dem bisherigen Gesprächsverlauf ableiten, " +
-        "ob die bewirtende Firma Kleinunternehmer nach § 19 UStG ist. Ohne jeden Hinweis: false " +
-        "(Regelbesteuerung) - kein aktives Nachfragen nötig, anders als bei host_name."
+      "Ob die bewirtende Firma Kleinunternehmer nach § 19 UStG ist. Ohne Angabe gilt die Hausregel (get_policy, " +
+        "tax_profile.kleinunternehmer); ist dort nichts festgelegt, gilt false (Regelbesteuerung) - kein aktives Nachfragen nötig, " +
+        "anders als bei host_name. Nur angeben, wenn Organisations-/Projektanweisungen oder der Gesprächsverlauf es ausdrücklich sagen."
     ),
   company_name: z.string().optional().describe("Für den Briefkopf; leer = Platzhalter im PDF"),
   company_address: z.string().optional(),
@@ -910,7 +912,12 @@ const MISSING_INVOICE_DESCRIPTION =
   "dann selbst der Beleg (ein Upload), ohne Vorsteuer. source_receipt_id_by_customer bleibt optional. Die Antwort enthält " +
   "booking_hint mit den Splits für die Buchungs-Tools.";
 
-export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, ToolDef] {
+export function createEntertainmentReceiptTools(client: BBClient, policyLoader: () => Promise<Policy> = loadPolicy): [ToolDef, ToolDef] {
+  // Ohne Angabe gilt der Kleinunternehmer-Status aus der Hausregel (set_policy), sonst Regelbesteuerung.
+  const withKleinunternehmer = async <T extends { kleinunternehmer?: boolean }>(args: T): Promise<T & { kleinunternehmer: boolean }> => ({
+    ...args,
+    kleinunternehmer: args.kleinunternehmer ?? (await kleinunternehmerStatus(policyLoader)).status === true,
+  });
   const generateEntertainmentReceipt = defineTool({
     name: "generate_entertainment_receipt",
     description:
@@ -924,7 +931,8 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
-    async handler(args) {
+    async handler(rawArgs) {
+      const args = await withKleinunternehmer(rawArgs);
       const { pdfBytes, amounts, mergedWithBill, warnings, plan, nonBusiness } = await buildEntertainmentReceiptDocument(args);
       // No API calls here, so the chart stays unknown (no account numbers in the hint).
       const presentHint = plan ? undefined : buildPresentHint(amounts, args.kleinunternehmer ?? false, nonBusiness);
@@ -959,7 +967,8 @@ export function createEntertainmentReceiptTools(client: BBClient): [ToolDef, Too
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: uploadShape,
-    async handler(args) {
+    async handler(rawArgs) {
+      const args = await withKleinunternehmer(rawArgs);
       if (args.source_receipt_id_by_customer !== undefined) {
         return uploadWithSourceReceipt(client, { ...args, source_receipt_id_by_customer: args.source_receipt_id_by_customer });
       }

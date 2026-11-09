@@ -35,6 +35,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "Linear nach Nutzungsdauer. Ab einem Wert über 1.000 € gilt die amtliche AfA-Tabelle; bei geringwertigen Wirtschaftsgütern unter 1.000 € gibt es weitere Methoden (Sofortabschreibung, Sammelposten über 5 Jahre).",
       "Unterjährige Anschaffung: im ersten und im letzten Jahr nur die Nutzungsmonate. Erstes Jahr = Anschaffungsmonat bis Dezember, insgesamt Nutzungsdauer x 12 Monate, das letzte Jahr bekommt die Restmonate.",
       "Einmal jährlich oder monatlich abschreiben: mit dem Steuerberater klären.",
+      "Degressive AfA (§ 7 Abs. 2 EStG, amtlicher Text gelesen 09.11.2026): für bewegliche Wirtschaftsgüter des Anlagevermögens, angeschafft oder hergestellt nach dem 30. Juni 2025 und vor dem 1. Januar 2028, höchstens das Dreifache des linearen Satzes und nicht mehr als 30 %. Elektrofahrzeuge im selben Zeitraum: 75 % im Anschaffungsjahr, dann 10, 5, 5, 3 und 2 % (§ 7 Abs. 2a EStG). Ob die Anlagenverwaltung von BHB die degressive Methode anbietet, ist nicht geprüft; die Wahl mit dem Steuerberater treffen.",
     ],
     buchungen: [
       "Beispiel Artikel: Schreibtisch 2.000 € netto, Nutzungsdauer 13 Jahre (Büroeinrichtung), gekauft im September. Anschaffung auf Büroeinrichtung (420 | 650) mit 19 % VSt. Jahresbetrag 2.000 / 13 = 153,84 €, Monatsbetrag 12,82 €, im ersten Jahr 4 Monate = 51,28 €.",
@@ -102,13 +103,16 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     regeln: [
       "Nur die Differenz zwischen Einkaufs- und Verkaufspreis wird besteuert; gilt für von Privat gekaufte bewegliche Gegenstände ohne Vorsteuerabzug (Gebrauchtwagen-, Kunst-, Secondhand-Handel). Vereinfachend immer 19 %.",
       "Aufzeichnungen getrennt führen: eigene Konten mit manage_posting_account anlegen, nicht als Automatikkonto. Wareneingang Einzeldifferenz und Gesamtdifferenz (Vorlage Wareneingang 3200 | 5200, Beispiel 3220), Erlöse Einzeldifferenz ohne USt und mit USt, Erlöse Gesamtdifferenz ohne USt und mit USt (Vorlage Umsätze/Erlöse 8200 | 4200, Beispiele 8220, 8225, 8221, 8226).",
-      "Gesamtdifferenz (§ 25a Abs. 4 UStG): nur für Waren mit Einkaufspreis bis 500 €, dann für alle solchen Waren im ganzen Besteuerungszeitraum, einmal jährlich ausgewiesen, Bindung für den Zeitraum.",
+      "Gesamtdifferenz (§ 25a Abs. 4 UStG): nur für Waren mit Einkaufspreis bis 750 € (§ 25a Abs. 4 Satz 2 UStG, seit 01.01.2025; amtlicher Text gelesen 09.11.2026), dann für alle solchen Waren im ganzen Besteuerungszeitraum, einmal jährlich ausgewiesen, Bindung für den Zeitraum.",
     ],
     buchungen: [
       "Einzeldifferenz (Beispiel Artikel): Notebook für 600 € von einer Privatperson gekauft: 600 € auf Wareneingang Einzeldifferenz, ohne USt/VSt. Verkauf für 900 €: Split 600 € (Einkaufspreis) auf Erlöse Einzeldifferenz ohne USt. und 300 € (Marge) auf Erlöse Einzeldifferenz mit USt. (19 % USt).",
       "Gesamtdifferenz: gleiches Schema, z. B. Verkauf 60 €: 45 € auf 8221 Erlöse Gesamtdifferenz ohne USt. und 15 € auf 8226 Erlöse Gesamtdifferenz mit 19 % USt.",
     ],
-    achtung: ["Ob § 25a anwendbar ist, klärt der Steuerberater."],
+    achtung: [
+      "Ob § 25a anwendbar ist, klärt der Steuerberater.",
+      "Der BHB-Artikel nannte noch 500 € (Grenze bis 2024). Seit 2025 gelten 750 € (Viertes Bürokratieentlastungsgesetz).",
+    ],
     konnektor: ["manage_posting_account (create), dann add_transaction_postings mit mehreren splits."],
   },
   {
@@ -745,6 +749,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "'Beleg erzeugt Zahlung': Zuweisung eines Eingangsbelegs zu einem manuellen Zahlungskonto erzeugt die Zahlung (Datum = Belegdatum); nachträgliche Korrekturen am Beleg passen die Zahlung an. Standard bei manuell angelegten Konten.",
       "Fehlende Belege: Zahlungen mit Filter 'Fehlender Beleg' prüfen; was keinen Beleg braucht, als 'beleglos' markieren; fehlt ein Beleg grundsätzlich, einen Kommentar mit dem Sachverhalt hinterlegen, damit der Steuerberater ihn einordnen kann. BuchhaltungsButler warnt nicht vor doppelt hochgeladenen Belegen: erst prüfen, ob der Beleg nur nicht zugeordnet wurde; Filter 'Duplikatsverdacht'.",
       "Archiv: Originale bleiben unveränderbar gespeichert; mangels Wirtschaftsprüfertestat rät BuchhaltungsButler nicht, Papierbelege zu vernichten.",
+      "Aufbewahrung (§ 147 Abs. 3 AO und § 257 Abs. 4 HGB, amtlicher Text gelesen 09.11.2026): Buchungsbelege, also auch Rechnungen, acht Jahre; Bücher, Jahresabschlüsse und Inventare zehn Jahre; empfangene und versandte Handels- und Geschäftsbriefe einschließlich E-Mails sechs Jahre. Die Frist beginnt mit dem Schluss des Kalenderjahres. Die acht Jahre gelten für alle Unterlagen, deren alte Zehnjahresfrist am 31.12.2024 noch lief (Art. 97 § 19a Abs. 2 EGAO); für Banken, Versicherungen und Wertpapierinstitute bleiben es zehn Jahre. Eine E-Rechnung ist im Empfangsformat (XML) aufzubewahren. Vor set_receipt_deleted bedenken: auch ein gelöschter Beleg muss in BHB erhalten bleiben, bis die Frist abgelaufen ist.",
     ],
     konnektor: [
       "Prüfen und Korrigieren von Belegdaten (Gegenpartei, Nummer, USt) geht per API nicht: siehe belegpruefung.",
@@ -815,6 +820,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     titel: "Umsatzsteuer-Voranmeldung, Zusammenfassende Meldung und ihre Warnungen",
     quelle: "Umsatzsteuer-Voranmeldung (USt.-VA) erstellen und übermitteln (11473240647965); Zusammenfassende Meldung (ZM) erstellen (11473312092445); Berichtigte Umsatzsteuer-Voranmeldung (11469981205277); Konsolidierte USt.-VA (11473051798941); Warn- und Fehlermeldungen bei der USt-VA (11432104747677); Buchungskonten den Kennziffern der USt.-VA zuordnen (11472964130461)",
     regeln: [
+      "Voranmeldungszeitraum (§ 18 Abs. 2 UStG, amtlicher Text gelesen 09.11.2026): grundsätzlich das Kalendervierteljahr; monatlich, wenn die Steuer des Vorjahres mehr als 9.000 € betrug; bei höchstens 2.000 € Vorjahressteuer kann das Finanzamt von den Voranmeldungen befreien (dann nur die Jahreserklärung). Bei einem Überschuss von mehr als 9.000 € im Vorjahr kann der Kalendermonat gewählt werden (§ 18 Abs. 2a). Kleinunternehmer geben keine Voranmeldung ab, außer für § 13b und i.g.E. (Thema kleinunternehmer). Den Vorjahreswert liefert die API nicht: im Zweifel den Nutzer oder Steuerberater fragen.",
       "USt-VA und ZM entstehen unter Abschluss in der Oberfläche und werden von dort per Elster übermittelt (mit dem Zertifikat von BuchhaltungsButler, § 87d AO; kein eigenes Zertifikat nötig). Das Übermittlungsprotokoll wird NICHT gespeichert: extern ablegen. Berichtigte Anmeldung: Checkbox 'berichtigte Anmeldung'. Konsolidierte USt-VA (mehrere Unternehmen, eine Steuernummer) geht nicht in BuchhaltungsButler, sondern per ElsterOnline mit eigenem Zertifikat aus den Werten der einzelnen Accounts. Eine korrigierte ZM nach der Übermittlung ist nur über ElsterOnline möglich.",
       "Kennziffern: get_ustva_position liefert die Zuordnung (nach Steuerschlüssel: 19 % Kz 81, 7 % Kz 86, i.g.E. 19 % Kz 89 und 61, i.g.E. 7 % Kz 93 und 61, Vorsteuer Kz 66, §13b EU (19_both_506) Kz 46/47 und 67, §13b Andere Leistungen (19_both_511) Kz 84/85 und 67; dazu die Konten mit fester Position). Umsatzsteuerkonten lassen sich nicht direkt bebuchen, weil der Umsatz aus der gebuchten Steuer zurückgerechnet und abgerundet wird.",
       "ZM: berücksichtigt Sonstige Leistungen an Unternehmen in der EU (8336 | 4336) und Lieferungen an Unternehmen in der EU (8125 | 4125) sowie darauf basierende individuelle Konten; Datum ist das Rechnungsdatum. Die gemeldeten Umsätze müssen mit der USt-VA übereinstimmen: Umsatzart L = Kz 41, S = Kz 21. Beim Debitor die USt-ID speichern, sonst fehlt sie in der ZM.",
@@ -824,6 +830,34 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "Elster-Fehler wie 'Das Feld ... Telefon darf maximal 20 Zeichen enthalten' sind Formatfehler in den Unternehmensdaten (Systemdaten/Ansprechpartner, Allgemeine Firmendaten, Steuerliche Informationen): das letzte Wort der Meldung nennt das Feld; häufig auch Sonderzeichen im Firmennamen oder eine ungültige Steuernummer.",
     ],
     konnektor: ["get_ustva_position für die Kennziffer-Vorhersage; check_month_end meldet nicht festgeschriebene Buchungen; die Vorbereitung der USt-VA (Festschreiben, Übermitteln) nur in der Oberfläche."],
+  },
+  {
+    id: "kleinunternehmer",
+    titel: "Kleinunternehmer (§ 19 UStG): Grenzen, Rechnungen, Buchen, Hausregel",
+    quelle:
+      "Übergabe des Teams: Rechtsprüfung vom 09.11.2026 (docs/rechtsgrundlagen-steueraenderungen-2025-2028.md; § 19 UStG, § 34a UStDV, BMF 18.03.2025 III C 3 - S 7360/00027/044/105, BMF 10.11.2025 III C 2 - S 7300/00080/004/019) und API-Spezifikation 1.9.1",
+    regeln: [
+      "Seit 01.01.2025 (JStG 2024) sind die Umsätze eines Kleinunternehmers steuerfrei, wenn der Gesamtumsatz im Vorjahr 25.000 € nicht überschritten hat und im laufenden Jahr 100.000 € nicht überschreitet (§ 19 Abs. 1 UStG). Gezählt wird nach vereinnahmten Entgelten, ohne Hilfsumsätze, bestimmte steuerfreie Umsätze und Verkäufe von Anlagevermögen (§ 19 Abs. 2).",
+      "Bereits der Umsatz, mit dem die Grenze überschritten wird, ist voll steuerpflichtig; es gibt keine Aufteilung und keinen Wechsel erst zum Jahresende (UStAE 19.1 Abs. 2 in der Fassung des BMF 18.03.2025). Ab da gelten Rechnungs-, Vorsteuer- und Erklärungspflichten der Regelbesteuerung. Entgelte für frühere Umsätze, die erst danach eingehen, sind bei Eingang regelbesteuert (UStAE 19.7 Abs. 1).",
+      "Vorjahr über 25.000 €: das ganze laufende Jahr ist steuerpflichtig, auch wenn es darunter bleibt. Neugründer: im ersten Jahr gilt die Grenze von 25.000 € für den tatsächlichen Umsatz dieses Jahres (UStAE 19.1 Abs. 3).",
+      "Verzicht auf die Kleinunternehmerregelung (§ 19 Abs. 3 UStG): unwiderruflich bis Ende Februar des zweiten Folgejahres, bindet mindestens fünf Kalenderjahre.",
+      "Rechnungen: vereinfacht nach § 34a UStDV, Pflicht ist der Hinweis auf die Steuerbefreiung für Kleinunternehmer, umgangssprachlich reicht ('steuerfreier Kleinunternehmer'), auch bei Kleinbetragsrechnungen; in BHB in die Schlussbemerkung (final_provisions). Kein Steuersatz: ausgewiesene Umsatzsteuer schuldet der Kleinunternehmer nach § 14c UStG. Keine E-Rechnungspflicht (§ 34a Satz 3 UStDV), E-Rechnungen empfangen können muss er trotzdem.",
+      "Vorsteuer: keine. Auch Leistungen vor einem absehbaren Wechsel zur Regelbesteuerung geben keinen Vorsteuerabzug; korrigiert wird nur über § 15a UStG mit den Bagatellgrenzen des § 44 UStDV (BMF 10.11.2025).",
+      "§ 13b und innergemeinschaftlicher Erwerb bleiben steuerpflichtig (UStAE 19.1 Abs. 1): wer etwa Software-Abos bei ausländischen Anbietern hat, meldet die Umsatzsteuer an und zahlt sie, ohne Vorsteuer.",
+    ],
+    buchungen: [
+      "Normale Eingangsrechnung: brutto auf das Aufwandskonto, vat 0_none.",
+      "§ 13b und i.g.E. ohne Vorsteuer: 19_both_1_no_pre ('§13b 19/16% USt.'), 19_both_6506 (EU § 13b Abs. 1), 19_both_6511 (Drittland § 13b Abs. 2 Nr. 1), 19_both_6501, 19_both_2_no_pre (i.g.E. 19 %), 7_both_no_pre (i.g.E. 7 %). Welche Kennziffer der USt-VA sie treffen, mit get_ustva_position prüfen.",
+      "Ausgangsrechnung: Positionen mit vat 0, Hinweis in final_provisions; Erlöse ohne Umsatzsteuer (0_none).",
+    ],
+    achtung: [
+      "Die BHB-API liefert keinen Kleinunternehmer-Status. Er steht in der Hausregel: set_policy kleinunternehmer true, false oder null, nur auf Aussage des Nutzers oder Steuerberaters, nie aus den Buchungen geschlossen. Mit true lehnt create_invoice Steuerausweis ab, die Buchungstools melden Vorsteuer- und Umsatzsteuer-Codes, der Bewirtungsbeleg rechnet brutto.",
+      "BHB bietet ein kostenpflichtiges Add-on 'USt. aber keine VSt.' ('Für Kleinunternehmer mit USt.-ID, die im EU-Ausland einkaufen'). Was es bewirkt, ist in der API nicht sichtbar (die Spezifikation erwähnt keine Add-ons); ob die Codes ohne Vorsteuer ohne Add-on angenommen werden, ist nicht geprüft.",
+      "Die Grenzüberschreitung mitten im Jahr erkennt der Konnektor nicht selbst: der Nutzer hält den Gesamtumsatz nach (Zahlungseingänge), stellt BHB und die Hausregel um und spricht mit dem Steuerberater.",
+    ],
+    konnektor: [
+      "get_policy / set_policy (kleinunternehmer), create_invoice (Prüfung bei kleinunternehmer true), add_receipt_postings, add_transaction_postings, add_free_postings (Warnungen), generate_entertainment_receipt (Vorgabe aus der Hausregel).",
+    ],
   },
   {
     id: "auswertungen",
@@ -883,6 +917,13 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "Stornorechnung/Rechnungskorrektur ist eine normale Rechnung mit negativem Betrag und wird automatisch als 'Rechnungskorrektur' bezeichnet; im Freitext 'Rechnungskorrektur zur Rechnung Nr. X vom TT.MM.JJJJ' angeben. Bei Debitoren dem Debitor zuweisen; bei Zahlung Rechnung UND Korrektur der Zahlung zuweisen (Thema gutschrift_verrechnen). Eine Gutschrift ist dagegen ein eigener Belegtyp.",
       "Ausgangsrechnung stornieren, zwei Wege: (1) Rechnungskorrektur (create_invoice_correction): ein zusätzlicher Beleg mit eigener Nummer und negativem Betrag, der aktiv bleibt; die Rechnung bleibt bestehen. (2) Direkt stornieren (set_receipt_deleted, deleted: true; in der Oberfläche 'Stornieren'): die Rechnung steht danach auf deleted: 1, es entsteht kein Gegenbeleg, die Nummer bleibt vergeben; per set_receipt_deleted deleted: false wiederherstellbar (am 29.10.2026 mit Testrechnungen geprüft). Direkt geht nur ohne festgeschriebene Buchung oder gebuchte Zahlung am Beleg. Bei 'stornieren' den Nutzer fragen, welchen Weg er will; ob eine ausgestellte, versandte oder bezahlte Rechnung direkt entfernt werden darf, entscheidet der Nutzer (ggf. mit dem Steuerberater), nicht der Konnektor. Ein Plan einer Wiederholungsrechnung bleibt in beiden Fällen bestehen.",
       "Dokumente umwandeln: Rechnung in Gutschrift, Angebot in Rechnung. Wiederkehrende Rechnung: die erste entsteht sofort, die nächste zum eingestellten Datum; Stoppen in 'Wiederkehrende Rechnungen'. Versand aus dem Account über die interne 'E-Mail für den Rechnungsversand' (Absender standardmäßig rechnungsversand@buchhaltungsbutler.de, eigene Absenderadresse möglich). Das Logo darf höchstens 20 MB groß sein. Jeder angelegte Kunde und Artikel wird für spätere Rechnungen gespeichert.",
+      "E-Rechnungspflicht, Rechtsstand (amtliche Texte gelesen 09.11.2026): Pflicht bei Leistungen an andere Unternehmer im Inland (§ 14 Abs. 2 Satz 2 Nr. 1 UStG). Übergang nach § 27 Abs. 38 UStG, maßgeblich ist das Datum der Leistung, nicht das Rechnungsdatum: für Leistungen bis 31.12.2026 dürfen alle noch Papier oder (mit Zustimmung des Empfängers) PDF schicken; für Leistungen 2027 nur noch Aussteller mit höchstens 800.000 € Gesamtumsatz im Vorjahr (oder per EDI); ab 01.01.2028 müssen alle E-Rechnungen ausstellen. Empfangen können muss jedes inländische Unternehmen schon jetzt.",
+      "Ausnahmen von der E-Rechnungspflicht (dürfen immer als sonstige Rechnung, also PDF oder Papier, gehen): Rechnungen bis 250 € brutto (Kleinbetragsrechnung, § 33 UStDV), Fahrausweise (§ 34 UStDV), Rechnungen von Kleinunternehmern (§ 34a UStDV, Thema kleinunternehmer), nach § 4 Nr. 8 bis 29 UStG steuerfreie Umsätze (§ 14 Abs. 2 Satz 2 UStG) und Rechnungen an Privatkunden.",
+      "BMF-Schreiben vom 15.10.2026 (III C 5 - S 7287-a/00019/021/017): Besteht die Pflicht, muss auch die Berichtigung einer Rechnung als E-Rechnung mit dem Rechnungstyp für eine Berichtigung ausgestellt werden (Rn. 20); welcher Typ für ersetzende oder kumulierende Berichtigung und kaufmännische Gutschrift gilt, ist technisch noch offen, jede taugliche Art ist zulässig, wenn sich aus Rechnung und Berichtigungen die richtigen Angaben klar ergeben (Rn. 21). Anzahlungs- und Abschlagsrechnungen vor Beginn der eigenen Pflicht müssen keine E-Rechnung sein, auch wenn Leistung und Zahlung später liegen (Rn. 2). Bis 30.06.2030 darf eine Endrechnung die Anzahlungen in BT-113 ('Paid amount') als Summe abziehen, Details in BT-22 oder einem eingebetteten Anhang (Rn. 3, 4). Eine sonstige Rechnung statt der geschuldeten E-Rechnung ist keine Ordnungswidrigkeit nach § 26a UStG (Rn. 28); der Vorsteuerabzug des Empfängers kann trotzdem leiden, deshalb nicht darauf bauen.",
+    ],
+    achtung: [
+      "Ob BHBs Korrektur (create_invoice_correction oder negativer Betrag bei e_invoice: true) in der E-Rechnung den Rechnungstyp für eine Berichtigung setzt, ist nicht geprüft. Bei Pflicht zur E-Rechnung die Korrektur nach dem Erstellen in BHB ansehen.",
+      "Den Vorjahresumsatz (800.000-€-Grenze für 2027) liefert die API nicht; im Zweifel den Nutzer fragen oder den Steuerberater.",
     ],
     konnektor: [
       "create_invoice (draft, e_invoice: true für ZUGFeRD/XRechnung mit e_invoice_id = Käuferreferenz/Leitweg-ID, negativer Betrag = Korrektur, recurring_*), create_invoice_correction (volle Korrektur einer Ausgangsrechnung); payment_reference nur für Amazon-Bestell-ID, PayPal- und Stripe-Transaktions-ID.",
@@ -982,7 +1023,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
     ablauf: [
       "1. Zeitraum, Vergleichszeitraum und Stichtag klären (Standard: letztes abgeschlossenes Quartal gegen das davor, Stichtag heute).",
-      "2. Rechtsform und Hebesatz klären (für get_tax_position).",
+      "2. Rechtsform und Hebesatz klären (für get_tax_position). Gesetzlicher Mindesthebesatz 200 % bis 2026, 280 % ab Erhebungszeitraum 2027 (§ 16 Abs. 4 Satz 2 GewStG); get_tax_position rechnet nie mit weniger.",
       "3. Tools nacheinander aufrufen (sie erzeugen Berichte in BHB, nie parallel): get_controlling, get_liquidity, get_stability (wenn Bilanzierer), get_bank_overview, get_tax_position.",
       "4. Summenkontrollen: Summe der Buchungen je Konto gleich Kontobetrag der BWA; Umsatzerlöse und Gesamtergebnis zwischen Ergebnis- und Steuerreiter für denselben Zeitraum gleich.",
       "5. Artefakt mit allen Reitern bauen, dem Nutzer Stand, Annahmen und offene Punkte nennen.",

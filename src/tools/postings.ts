@@ -26,6 +26,8 @@ import { postingtextWarnings } from "./postingtext.js";
 import { thirdPartyPaymentWarnings } from "./third-party-payment.js";
 import { cashbackPostingWarnings, fetchCashbackIds } from "./cashback.js";
 import { receiptCheckWarnings } from "./receipt-checks.js";
+import { kleinunternehmerPostingWarnings, kleinunternehmerStatus } from "./kleinunternehmer.js";
+import { loadPolicy, type Policy } from "./policy.js";
 import { assertTravelExpenseFields, formatTravelExpenseNote } from "./travel-expense.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 
@@ -553,8 +555,14 @@ async function assignNewFreePostings(
 }
 
 export function createPostingsTools(
-  client: BBClient
+  client: BBClient,
+  policyLoader: () => Promise<Policy> = loadPolicy
 ): [ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef, ToolDef] {
+  // Kleinunternehmer laut Hausregel (set_policy): Vorsteuer- und Umsatzsteuer-Codes werden gemeldet, nicht abgelehnt.
+  const kuWarnings = async (vats: string[]): Promise<string[]> => {
+    const ku = await kleinunternehmerStatus(policyLoader);
+    return [...ku.warnings, ...(ku.status === true ? kleinunternehmerPostingWarnings(vats) : [])];
+  };
   const listShape = {
     date_from: z.string(),
     date_to: z.string(),
@@ -705,7 +713,10 @@ export function createPostingsTools(
         )
       );
       const guards = args.receipts.map((entry) => guardEntertainmentBooking(entry.splits, entry));
-      const guardWarnings = guards.flatMap((g) => g.warnings);
+      const guardWarnings = [
+        ...guards.flatMap((g) => g.warnings),
+        ...(await kuWarnings(args.receipts.flatMap((e) => e.splits.map((s) => s.vat)))),
+      ];
       const receipts = args.receipts.map(({ splits, ...rest }) => ({
         ...omitAuditFields(rest),
         ...flattenSplits(splits),
@@ -811,7 +822,10 @@ export function createPostingsTools(
         )
       );
       const guards = args.transactions.map((entry) => guardEntertainmentBooking(entry.splits, entry));
-      const guardWarnings = guards.flatMap((g) => g.warnings);
+      const guardWarnings = [
+        ...guards.flatMap((g) => g.warnings),
+        ...(await kuWarnings(args.transactions.flatMap((e) => e.splits.map((s) => s.vat)))),
+      ];
       const transactions = args.transactions.map(({ splits, ...rest }) => ({
         ...omitAuditFields(rest),
         ...flattenTransactionSplits(splits),
@@ -959,6 +973,7 @@ export function createPostingsTools(
           splits: [{ vat: f.vat, receipt_id_by_customer: f.receipt_id_by_customer }],
         }))
       );
+      const freeKuWarnings = await kuWarnings(args.free_postings.map((f) => f.vat));
       if (args.dry_run) {
         return dryRunResult(
           client,
@@ -972,7 +987,7 @@ export function createPostingsTools(
             assignReceipts: wanted.map((w) => ({ index: w.index, receipt_id_by_customer: w.receipt })),
             taxAccountsOnly: true,
             postingtexts: args.free_postings.map((f) => f.postingtext),
-            extraWarnings: [...thirdPartyPaymentWarnings(args.free_postings), ...receiptWarnings],
+            extraWarnings: [...thirdPartyPaymentWarnings(args.free_postings), ...receiptWarnings, ...freeKuWarnings],
           }
         );
       }
@@ -992,6 +1007,7 @@ export function createPostingsTools(
             ...postingtextWarnings(args.free_postings.map((f) => f.postingtext)),
             ...thirdPartyPaymentWarnings(args.free_postings),
             ...receiptWarnings,
+            ...freeKuWarnings,
             ...(assignments.some((a) => a.status !== "assigned")
               ? [
                   "Mindestens eine Buchung wurde angelegt, aber der Beleg nicht zugeordnet (siehe receipt_assignments). " +

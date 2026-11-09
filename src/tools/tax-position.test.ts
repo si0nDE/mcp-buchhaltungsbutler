@@ -166,7 +166,7 @@ describe("get_tax_position: Perioden und Schätzung", () => {
         const from = ranges.get(Number(params.report_id_by_customer))!;
         // Januar: Gewinn 30.000, Februar: Verlust 10.000
         // Stand seit Jahresbeginn: Januar Gewinn 30.000, bis Februar kumuliert 20.000 (Februar Verlust 10.000)
-        return { report: from.startsWith("2026-01") ? stand([["Einnahmen", 8400, "Erlöse", -40000], ["Betriebsausgabe", 4950, "Beratung", 10000], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200]]) : stand([["Einnahmen", 8400, "Erlöse", -45000], ["Betriebsausgabe", 4950, "Beratung", 25000], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200]]) };
+        return { report: from.slice(5, 7) === "01" ? stand([["Einnahmen", 8400, "Erlöse", -40000], ["Betriebsausgabe", 4950, "Beratung", 10000], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200]]) : stand([["Einnahmen", 8400, "Erlöse", -45000], ["Betriebsausgabe", 4950, "Beratung", 25000], ["Umsatzsteuer", 1776, "Umsatzsteuer 19%", -700], ["Vorsteuer", 1576, "Abziehbare Vorsteuer 19%", 200]]) };
       }
       if (op === "receiptsGet") return { data: [] };
       throw new Error(`unexpected ${op}`);
@@ -205,6 +205,29 @@ describe("get_tax_position: Perioden und Schätzung", () => {
     expect(res.perioden[0].gewerbesteuer).toBeNull();
     expect(res.perioden[0].zahllast).toBe(500);
     expect(res.warnings.join(" ")).toMatch(/Keine Steuerschätzung/);
+  });
+
+  it("Hebesatz unter dem Mindestsatz des Jahres: rechnet mit dem Mindestsatz und sagt es (ab 2027 280 %)", async () => {
+    const { client } = monthsClient();
+    const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
+    const r2026 = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "GmbH", hebesatz_pct: 250 }));
+    expect(r2026.warnings.join(" ")).not.toMatch(/Mindesthebesatz/);
+    expect(r2026.annahmen.hebesatz_pct_gerechnet).toBe(250);
+    const r2027 = parse(await tool.handler({ as_of: "2027-02-15", rechtsform: "GmbH", hebesatz_pct: 250 }));
+    expect(r2027.warnings.join(" ")).toMatch(/Mindesthebesatz 280 %.*§ 16 Abs\. 4 Satz 2 GewStG/);
+    expect(r2027.annahmen).toMatchObject({ hebesatz_pct: 250, hebesatz_pct_gerechnet: 280 });
+  });
+
+  it("nennt den Körperschaftsteuersatz des Jahres und warnt, wenn der Einkommensteuertarif nicht für das Jahr geprüft ist", async () => {
+    const { client } = monthsClient();
+    const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
+    const kap = parse(await tool.handler({ as_of: "2028-02-15", rechtsform: "GmbH", hebesatz_pct: 400 }));
+    expect(kap.hinweise.join(" ")).toMatch(/Körperschaftsteuer 14 %/);
+    expect(kap.warnings.join(" ")).not.toMatch(/Einkommensteuertarif/);
+    const eu = parse(await tool.handler({ as_of: "2027-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 400 }));
+    expect(eu.warnings.join(" ")).toMatch(/Einkommensteuertarif 2026.*2027 nicht geprüft/);
+    const eu26 = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 400 }));
+    expect(eu26.warnings.join(" ")).not.toMatch(/Einkommensteuertarif/);
   });
 
   it("unbekannte Unternehmensform wird gemeldet statt geraten", async () => {
