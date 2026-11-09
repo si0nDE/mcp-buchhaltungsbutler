@@ -179,7 +179,7 @@ describe("Einbindung in die Tools", () => {
   });
 
   it("eine normale Buchung löst keinen zusätzlichen Kontenrahmen-Abruf aus", async () => {
-    const call = vi.fn(() => Promise.resolve({ success: true }));
+    const call = vi.fn((_key: string) => Promise.resolve({ success: true }));
     const [, , addTransactionPostings] = createPostingsTools({ call } as unknown as BBClient);
     await addTransactionPostings.handler({
       transactions: [{ transaction_id_by_customer: 1, splits: [{ postingaccount: 8400, postingtext: "Wartung", vat: "19_vat", amount: "119.00" }] }],

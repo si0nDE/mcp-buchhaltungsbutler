@@ -36,8 +36,11 @@ const GROUP = {
 } as const;
 
 // Kaufmännisch gerundet wie BHB: ,5 vom Nullpunkt weg (-1.234,375 % wird -1.234,38 %, Math.round ergäbe -1.234,37).
-const r2 = (n: number) => (Math.sign(n) * Math.round(Math.abs(n) * 100)) / 100;
-const pct = (num: number, den: number): number | null => (den === 0 ? null : r2((num / den) * 100));
+// toPrecision(15) schneidet Gleitkommareste ab, sonst landet ein ,5 als ,4999… auf der falschen Seite.
+const r2 = (n: number) => (Math.sign(n) * Math.round(Number((Math.abs(n) * 100).toPrecision(15)))) / 100;
+// BHB rechnet mit Centbeträgen: Zähler und Nenner zuerst auf Cent, sonst trägt eine Gleitkommasumme der BWA
+// (EBIT -2,30 als -2,2999…) über die Rundungsgrenze.
+const pct = (num: number, den: number): number | null => (r2(den) === 0 ? null : r2((r2(num) / r2(den)) * 100));
 // Änderung in Prozent gegenüber dem Vergleichswert; ohne Vergleichswert gibt es keine sinnvolle Zahl.
 // Wie BHB durch den Vergleichswert mit Vorzeichen geteilt: von einem negativen Wert auf 0 ergibt -100 %.
 const change = (cur: number, prev: number): number | null => (prev === 0 ? null : r2(((cur - prev) / prev) * 100));

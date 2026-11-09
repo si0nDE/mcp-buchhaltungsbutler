@@ -71,6 +71,11 @@ describe("Konventionen wie BHB", () => {
     const k = kpisFromBwa(bwa({ umsatz: 16, sonstige: 213.5 }));
     expect(k.umsatzrentabilitaet_pct).toBe(-1234.38);
   });
+  it("kaufmännisch gerundet auch bei Gleitkommaresten aus der BWA-Summe", () => {
+    // EBIT 48 - 48,30 kommt als -0,29999999999999716 an; -0,30 / 48 = -0,625 % wird wie bei BHB -0,63 %
+    const k = kpisFromBwa(bwa({ umsatz: 48, sonstige: 48.3 }));
+    expect(k.umsatzrentabilitaet_pct).toBe(-0.63);
+  });
 });
 
 describe("kpisFromBwa", () => {
