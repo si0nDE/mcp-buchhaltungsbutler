@@ -296,6 +296,11 @@ describe("Rechtsstand 09.11.2026", () => {
     expect(e).toMatch(/USt\. aber keine VSt\./);
   });
 
+  it("the kleinunternehmer topic is findable: get_booking_guide description and the server instructions name it", () => {
+    expect(tool.description).toMatch(/kleinunternehmer/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/Kleinunternehmer.*get_policy.*get_booking_guide kleinunternehmer/s);
+  });
+
   it("holds the hints on Aufbewahrung, UStVA thresholds, degressive AfA and the Mindesthebesatz", () => {
     expect(JSON.stringify(findBookingGuide("belege_upload_matching"))).toMatch(/§ 147 Abs\. 3 AO.*acht Jahre/);
     expect(JSON.stringify(findBookingGuide("ust_va_zm"))).toMatch(/9\.000 €.*2\.000 €/);

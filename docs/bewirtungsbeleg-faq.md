@@ -68,6 +68,8 @@ per `list_receipts` prüfen, ob der Beleg trotzdem angelegt wurde.
 wird sie auf den Nettobetrag (inkl. Trinkgeld, da ohne Umsatzsteuer) angewendet; die Vorsteuer bleibt
 davon unabhängig zu 100 % abziehbar (§ 15 UStG). Bei Kleinunternehmern (§ 19 UStG,
 `kleinunternehmer: true`) auf den Bruttobetrag, da keine separate Vorsteuerbuchung existiert.
+Ohne Angabe von `kleinunternehmer` gilt die Hausregel (`get_policy`, `tax_profile.kleinunternehmer`,
+gesetzt mit `set_policy`); ist dort nichts festgelegt, gilt die Regelbesteuerung.
 
 ## Wer gehört auf die Teilnehmerliste?
 

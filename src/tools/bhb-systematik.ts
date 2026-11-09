@@ -279,6 +279,9 @@ export const SERVER_INSTRUCTIONS = [
     "(never treat as open). check_receipt_fields reports conspicuous mandatory invoice details, never an approval.",
   "- Transfers between Zahlungskonten are never booked directly: both sides go against Geldtransit 1360 | 1460. Skonto " +
     "is a negative split with the receipt's tax rate on the settling payment, never a reduced receipt.",
+  "- Kleinunternehmer (§ 19 UStG): the BHB API does not expose the status; it is the house rule get_policy tax_profile.kleinunternehmer " +
+    "(set only from the user's or Steuerberater's statement via set_policy). With true there is no VAT on invoices (§ 14c), no Vorsteuer " +
+    "(0_none gross), § 13b/i.g.E. with the codes without Vorsteuer (get_booking_guide kleinunternehmer).",
   "- Fixed (festgeschrieben) postings are corrected by a reversal posting (cancel_posting does this only for ids the user " +
     "approved), never silently removed.",
   "- Evaluations (create_report/get_report/get_account_ledger): generated asynchronously, a new report of a type replaces " +

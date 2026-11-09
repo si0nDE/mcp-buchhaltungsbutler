@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Doku: Der Kleinunternehmer-Status ist auffindbar: die Server-Anweisungen nennen die Hausregel `tax_profile.kleinunternehmer`, die Beschreibung von `get_booking_guide` das Thema `kleinunternehmer`; README (Hausregeln) und `docs/bewirtungsbeleg-faq.md` (Vorgabe aus der Hausregel) nachgezogen.
 - Fix: Das Leitfaden-Thema `differenzbesteuerung` nannte für die Gesamtdifferenz noch die Grenze von 500 € Einkaufspreis (Stand bis 2024). Seit 2025 gelten 750 € (§ 25a Abs. 4 Satz 2 UStG, amtlicher Text gelesen am 09.11.2026). Rechtsgrundlagen der folgenden Einträge: `docs/rechtsgrundlagen-steueraenderungen-2025-2028.md`.
 - Änderung: `get_tax_position` rechnet die Gewerbesteuer ab Erhebungszeitraum 2027 mit mindestens 280 % Hebesatz (§ 16 Abs. 4 Satz 2 GewStG, erstmals 2027 nach § 36 Abs. 5b GewStG). Ein niedrigerer Hebesatz wird angenommen, dann aber mit dem Mindestsatz gerechnet und gewarnt; `annahmen.hebesatz_pct_gerechnet` zeigt den verwendeten Satz. Bis 2026 bleibt es bei 200 %.
 - Änderung: Die Körperschaftsteuer in der Schätzung folgt dem Veranlagungsjahr (§ 23 Abs. 1 KStG: 15 % bis 2027, 14 % 2028, 13 % 2029, 12 % 2030, 11 % 2031, 10 % ab 2032). Beim Einzelunternehmen warnt `get_tax_position` für andere Jahre als 2026, dass der Einkommensteuertarif 2026 verwendet wird.
