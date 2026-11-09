@@ -188,7 +188,15 @@ export function createTaxPositionTools(client: BBClient, opts: RunnerOptions = {
         warnings.push(
           `Hebesatz ${args.hebesatz_pct} % liegt unter dem gesetzlichen Mindesthebesatz ${minHebesatz} % für ${jahr} (§ 16 Abs. 4 Satz 2 GewStG, ab Erhebungszeitraum 2027 280 %): die Schätzung rechnet mit ${minHebesatz} %. Den Hebesatz der Gemeinde für ${jahr} prüfen.`
         );
-      if (rechtsform === "einzelunternehmen" && args.hebesatz_pct !== undefined && jahr !== 2026)
+      // Stand 09.11.2026 (docs/rechtsgrundlagen-steueraenderungen-2025-2028.md, Abschnitt 6): § 32a EStG kennt nur die Fassung ab VZ 2026,
+      // sie gilt damit auch 2027. Das Einkommensteuerreformgesetz 2027 ist Entwurf; nach Verkündung den Wortlaut aus dem BGBl. übernehmen.
+      if (rechtsform === "einzelunternehmen" && args.hebesatz_pct !== undefined && jahr === 2027)
+        warnings.push(
+          "Einkommensteuer geschätzt mit dem geltenden Einkommensteuertarif (§ 32a EStG in der Fassung ab Veranlagungszeitraum 2026, für 2027 unverändert; Stand 09.11.2026). " +
+            "Das Einkommensteuerreformgesetz 2027 (BT-Drucksache 21/8235) ist noch nicht beschlossen: es würde den Grundfreibetrag auf 12.564 € anheben und mittlere Einkommen " +
+            "leicht entlasten (rund 45 € bei 30.000 €, 106 € bei 120.000 € zu versteuerndem Einkommen), ab 280.000 € gälten 47 %. Bis zur Verkündung bleibt die Schätzung beim geltenden Tarif."
+        );
+      else if (rechtsform === "einzelunternehmen" && args.hebesatz_pct !== undefined && jahr !== 2026)
         warnings.push(`Einkommensteuer geschätzt mit dem Einkommensteuertarif 2026 (§ 32a EStG); der Tarif für ${jahr} nicht geprüft. Nur als Orientierung verwenden.`);
       const kstPct = Math.round(koerperschaftsteuerSatz(jahr) * 100);
 

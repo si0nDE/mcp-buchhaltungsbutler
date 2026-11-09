@@ -218,14 +218,21 @@ describe("get_tax_position: Perioden und Schätzung", () => {
     expect(r2027.annahmen).toMatchObject({ hebesatz_pct: 250, hebesatz_pct_gerechnet: 280 });
   });
 
-  it("nennt den Körperschaftsteuersatz des Jahres und warnt, wenn der Einkommensteuertarif nicht für das Jahr geprüft ist", async () => {
+  it("nennt den Körperschaftsteuersatz des Jahres und den Stand des Einkommensteuertarifs außerhalb 2026", async () => {
     const { client } = monthsClient();
     const [tool] = createTaxPositionTools(client, { sleep, pollMs: 1 });
     const kap = parse(await tool.handler({ as_of: "2028-02-15", rechtsform: "GmbH", hebesatz_pct: 400 }));
     expect(kap.hinweise.join(" ")).toMatch(/Körperschaftsteuer 14 %/);
     expect(kap.warnings.join(" ")).not.toMatch(/Einkommensteuertarif/);
     const eu = parse(await tool.handler({ as_of: "2027-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 400 }));
-    expect(eu.warnings.join(" ")).toMatch(/Einkommensteuertarif 2026.*2027 nicht geprüft/);
+    // 2027: geltender Tarif (Fassung ab 2026), Reform nur im Entwurf (BT-Drs. 21/8235, Stand 09.11.2026)
+    const w27 = eu.warnings.join(" ");
+    expect(w27).toMatch(/geltenden Einkommensteuertarif/);
+    expect(w27).toMatch(/21\/8235/);
+    expect(w27).toMatch(/nicht beschlossen/);
+    expect(w27).not.toMatch(/nicht geprüft/);
+    const eu28 = parse(await tool.handler({ as_of: "2028-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 400 }));
+    expect(eu28.warnings.join(" ")).toMatch(/Einkommensteuertarif 2026.*2028 nicht geprüft/);
     const eu26 = parse(await tool.handler({ as_of: "2026-02-15", rechtsform: "Einzelunternehmen", hebesatz_pct: 400 }));
     expect(eu26.warnings.join(" ")).not.toMatch(/Einkommensteuertarif/);
   });

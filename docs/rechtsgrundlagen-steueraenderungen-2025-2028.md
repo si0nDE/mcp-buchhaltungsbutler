@@ -93,7 +93,12 @@ Gelesen am 09.11.2026: § 19 UStG im Volltext (`gesetze-im-internet.de`), BMF 18
 - § 32a Abs. 1 EStG ab Veranlagungszeitraum 2026 (V): Grundfreibetrag 12 348 €; Zone bis 17 799 € mit (914,51 · y + 1 400) · y; Zone bis 69 878 € mit (173,10 · z + 2 397) · z + 1 034,87; bis 277 825 € 0,42 · x − 11 135,63; darüber 0,45 · x − 19 470,38. Abrundung auf volle Euro.
 - § 3 Abs. 3 SolZG (V): Freigrenze 20 350 € (Einzelveranlagung), 40 700 € (Zusammenveranlagung). § 4 SolZG (V): 5,5 Prozent, höchstens 11,9 Prozent des Betrags über der Freigrenze.
 - Stand im Konnektor: `incomeTax2026` und `soliOnIncomeTax` in `tax-estimate.ts` tragen genau diese Werte. Keine Änderung nötig.
-- Tarif 2027 (U): nicht geprüft; die Seite zeigt nur die Fassung "ab dem Veranlagungszeitraum 2026". Für Auswertungen 2027 ist der Tarif zu prüfen, bevor `incomeTax2026` dafür verwendet wird.
+- Tarif 2027 (geprüft 09.11.2026):
+  - Geltendes Recht (V, § 32a EStG im Volltext): Es gibt nur die Fassung "ab dem Veranlagungszeitraum 2026"; ein Text für 2027 existiert nicht. Ohne neues Gesetz gilt der Tarif 2026 also auch für 2027 (A). `incomeTax2026` rechnet damit für 2027 nach geltendem Recht.
+  - Entwurf (V, BT-Drucksache 21/8235 vom 28.09.2026, Einkommensteuerreformgesetz 2027, Wortlaut gelesen): § 32a Abs. 1 ab VZ 2027 mit Grundfreibetrag 12 564 €; bis 17 799 € (952,24 · y + 1 400) · y; bis 70 600 € (170,74 · z + 2 397) · z + 993,86; bis 249 999 € 0,42 · x − 11 241,73; bis 279 999 € 0,45 · x − 18 741,70; ab 280 000 € 0,47 · x − 24 341,68 (neue Stufe 47 %). Ab VZ 2028 Grundfreibetrag 12 900 € mit eigenen Koeffizienten (Art. 2). Inkrafttreten 01.01.2027 bzw. 01.01.2028 (Art. 7). Der Solidaritätszuschlag wird im Entwurf nicht geändert.
+  - Verfahrensstand (V, Bundesrat Beratungsvorgang 507/26 und Bundestag): Kabinett 02.09.2026, Stellungnahme Bundesrat 16.10.2026, erste Lesung 08.10.2026, Gegenäußerung 28.10.2026 (BT-Drs. 21/8823), Anhörung Finanzausschuss 04.11.2026. Kein Gesetzesbeschluss, nicht verkündet. Kein Rechtsstand, nicht in den Code.
+  - Wirkung (A, Rechenbeispiele Grundtarif): zvE 30 000 € −45 €, 60 000 € −83 €, 120 000 € −106 €, 300 000 € +1 129 € gegenüber dem Tarif 2026.
+  - Folge: Nach Verkündung den verkündeten Wortlaut (BGBl.) übernehmen, nicht den Entwurf: der Finanzausschuss kann ändern. Dafür braucht der Code eine sechste Tarifzone.
 
 ## 7. Aufbewahrungsfristen (§ 147 AO, § 257 HGB, Art. 97 § 19a EGAO)
 
@@ -164,6 +169,6 @@ Umgesetzt (Tests mit erfundenen Daten, kein Livetest):
 Offen:
 
 - Livetest an einem Konto: Nimmt die API die Codes ohne Vorsteuer (`_no_pre`, `65xx`) ohne Add-on an? Wie sieht eine Kleinunternehmer-Rechnung mit Satz 0 und Hinweis in `final_provisions` in BHB aus? Setzt BHB bei einer Korrektur einer E-Rechnung den Rechnungstyp für eine Berichtigung? Alle drei brauchen echte Belege und die Freigabe des Nutzers.
-- Einkommensteuertarif 2027 und Grundfreibetrag 2027 prüfen, bevor `incomeTax2026` für 2027 genutzt wird.
+- Einkommensteuertarif 2027: geprüft (Abschnitt 6). Geltend ist weiter der Tarif 2026; das Einkommensteuerreformgesetz 2027 ist nur Entwurf. Die Warnung in `get_tax_position` für 2027 nennt diesen Stand (umgesetzt 09.11.2026). Offen: nach Verkündung den Wortlaut aus dem BGBl. übernehmen (sechste Tarifzone).
 - Warnung aus den Zahlungseingängen, wenn ein Kleinunternehmer die Grenze erreicht (bewusst nicht umgesetzt: ohne Herausrechnung von Hilfsumsätzen und Anlagenverkäufen nur ein grober Hinweis).
 - Tools für die drei neuen Lösch-Endpunkte (nur auf Wunsch; sie löschen Stammdaten).
