@@ -29,7 +29,7 @@ export interface BookingProposal {
   debitoren_kreditoren: DebitorenKreditoren | null;
   auslagenkonto: Auslagenkonto | null;
   // Kreditor of the merchant (rule aktiv): given, derived from earlier bookings, or none.
-  creditor?: { number: number | null; source: "given" | "derived" | "none"; evidence: string[] };
+  creditor?: { number: number | null; source: "given" | "derived" | "receipt" | "none"; evidence: string[] };
   receipt: { id_by_customer: number | string | null; account: string | null; assigned_transactions: AssignedTransaction[] };
   steps: string[];
   calls: Array<{ tool: string; arguments: Record<string, unknown> }>;
@@ -174,6 +174,7 @@ interface Ctx {
   input: BookingInput;
   id: number;
   notes: string[];
+  account: string | null;
   assignedRows: Row[];
   assigned: AssignedTransaction[];
   baseSplits: Split[];
@@ -316,7 +317,7 @@ async function buildAktiv(c: Ctx): Promise<BookingProposal> {
   if (receiptBooked) {
     if (posted.length === 1) {
       creditor = posted[0];
-      creditorView = { number: creditor, source: "derived", evidence: ["der Beleg ist selbst schon auf diesem Kreditor gebucht"] };
+      creditorView = { number: creditor, source: "receipt", evidence: ["der Beleg ist selbst schon auf diesem Kreditor gebucht"] };
       if (input.creditor !== undefined && input.creditor !== creditor) {
         return result("needs_decision", [`Der Beleg ist schon auf Kreditor ${creditor} gebucht, angegeben wurde ${input.creditor}. Nicht automatisch buchen; mit dem Nutzer klären, welcher gilt.`], { creditor: creditorView });
       }
@@ -381,6 +382,9 @@ async function buildAktiv(c: Ctx): Promise<BookingProposal> {
   if (!receiptBooked) {
     calls.push(receiptCall());
     notes.push(DEBTOR_NOTE, splitNote(splits));
+    if (c.account !== null) {
+      steps.push(`Der Beleg liegt auf Konto ${c.account}. Lehnt BuchhaltungsButler die kreditorische Buchung ab (Konto mit 'Beleg erzeugt Zahlung'), erst die Zuordnung lösen (unassign_receipt) und den Beleg dann buchen.`);
+    }
   }
   if (receiptBooked && (assigned.length === 0 || payBooked)) {
     return withCreditor(
@@ -411,7 +415,6 @@ async function buildAktiv(c: Ctx): Promise<BookingProposal> {
   const listed = assigned.map(describeTx).join("; ");
   let reason: string;
   if (assigned.length === 1 && booked[0] === true) {
-    calls.length = 0; // booking the receipt on the Kreditor now would collide with the payment booked on the expense account
     reason = `Die zugeordnete Zahlung ${listed} ist schon gebucht (vermutlich "via Zahlung" auf das Aufwandskonto), der Beleg aber nicht auf dem Kreditor. Beides zusammen geht in BuchhaltungsButler nicht; die Buchung der Zahlung prüfen (list_postings) und mit dem Nutzer klären, ob sie gelöst werden soll.`;
   } else if (booked.some((b) => b === null)) {
     reason = `Der Buchungsstatus der Zahlung(en) ist nicht sicher bekannt (Abfrage der Buchungen unvollständig). Zugeordnet: ${listed}.`;
@@ -420,9 +423,9 @@ async function buildAktiv(c: Ctx): Promise<BookingProposal> {
   } else {
     reason = `Der Betrag der zugeordneten Zahlung weicht von der Erstattung ${formatEuro(input.amounts.reimbursement)} ab: ${listed}.`;
   }
-  if (calls.length > 0) {
-    steps.push(`Den Beleg auf Kreditor ${creditor} zu buchen ist davon unabhängig (Aufruf unten); den Ausgleich nicht automatisch vorschlagen.`);
-  }
+  // every needs_decision comes without calls: the receipt booking that would follow is only described
+  calls.length = 0;
+  if (!receiptBooked) steps.push(`Danach folgt die Buchung des Beleges auf Kreditor ${creditor} (add_receipt_postings, Splits wie in den Hinweisen, debtor 10000); sie wird erst vorgeschlagen, wenn die Zahlung geklärt ist.`);
   steps.unshift(`${reason} Nicht automatisch ausgleichen; mit dem Nutzer klären, was die Zahlung abdeckt (Ausgleich wäre: ${settleDescription}).`);
   return withCreditor("needs_decision", steps, { calls });
 }
@@ -456,7 +459,7 @@ async function build(client: BBClient, input: BookingInput, policyLoader: typeof
     notes,
     ...extra,
   });
-  const ctx: Ctx = { client, input, id, notes, assignedRows, assigned, baseSplits: baseSplits(input), result };
+  const ctx: Ctx = { client, input, id, notes, account, assignedRows, assigned, baseSplits: baseSplits(input), result };
   if (dk === "aktiv") return buildAktiv(ctx);
   if (dk === "aus") return buildAus(ctx);
   return buildUnset(ctx);

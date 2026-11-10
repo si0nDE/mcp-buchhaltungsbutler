@@ -708,11 +708,40 @@ describe("booking_proposal, Debitoren/Kreditoren aktiv (Beleg buchen, Zahlung gl
     const base = { original: await original(), merchantReceipts: [EARLIER], postings: [EARLIER_POSTING] };
     const differs = proposal(data(await upload(fakeClient({ ...base, assigned: [{ ...ASSIGNED[0], amount: "-6.43" }] }).client)));
     expect(differs.status).toBe("needs_decision");
-    expect(differs.calls.map((c) => c.tool)).not.toContain("add_transaction_postings");
+    expect(differs.calls).toEqual([]);
     expect(differs.steps.join(" ")).toMatch(/-6,43 €.*6,42 €/);
     const several = proposal(data(await upload(fakeClient({ ...base, assigned: [ASSIGNED[0], { ...ASSIGNED[0], id_by_customer: "9002" }] }).client)));
     expect(several.status).toBe("needs_decision");
-    expect(several.calls.map((c) => c.tool)).not.toContain("add_transaction_postings");
+    expect(several.calls).toEqual([]);
+  });
+
+  it("a payment with unknown booking status (booked null): needs_decision, no calls", async () => {
+    await setDK("aktiv");
+    // the posting sweep is cut off at 10 full pages and shows nothing for the payment: status unknown
+    const filler = Array.from({ length: 1000 }, (_, i) => ({ id_by_customer: `f${i}`, receipt_id_by_customer: "1", transaction_id_by_customer: "", debit_postingaccount_number: "4653", credit_postingaccount_number: "1200" }));
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED, merchantReceipts: [EARLIER], postings: [EARLIER_POSTING, ...filler] });
+    const p = proposal(data(await upload(client)));
+    expect(p.status).toBe("needs_decision");
+    expect(p.calls).toEqual([]);
+    expect(p.steps.join(" ")).toMatch(/nicht sicher bekannt/);
+  });
+
+  it("receipt on an account: ready with the unassign step; no account: no such step", async () => {
+    await setDK("aktiv");
+    const withAccount = fakeClient({ original: await original(), newReceiptRow: { account: "745" }, merchantReceipts: [EARLIER], postings: [EARLIER_POSTING], assigned: ASSIGNED });
+    const p = proposal(data(await upload(withAccount.client)));
+    expect(p.status).toBe("ready");
+    expect(p.calls).toEqual([RECEIPT_CALL(), SETTLE_CALL()]);
+    expect(p.steps.join(" ")).toContain("Der Beleg liegt auf Konto 745. Lehnt BuchhaltungsButler die kreditorische Buchung ab (Konto mit 'Beleg erzeugt Zahlung'), erst die Zuordnung lösen (unassign_receipt) und den Beleg dann buchen.");
+    const without = fakeClient({ original: await original(), merchantReceipts: [EARLIER], postings: [EARLIER_POSTING], assigned: ASSIGNED });
+    expect(proposal(data(await upload(without.client))).steps.join(" ")).not.toMatch(/Der Beleg liegt auf Konto/);
+  });
+
+  it("the Kreditor of an already booked receipt has source receipt", async () => {
+    await setDK("aktiv");
+    const booked = { id_by_customer: "p777", receipt_id_by_customer: "777", transaction_id_by_customer: "", debit_postingaccount_number: "4653", credit_postingaccount_number: "70555" };
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED, postings: [booked] });
+    expect(proposal(data(await upload(client))).creditor).toMatchObject({ number: 70555, source: "receipt" });
   });
 
   it("a payment already booked while the receipt is not: needs_decision, nothing proposed (would collide with a booking via payment)", async () => {
