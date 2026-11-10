@@ -12,7 +12,7 @@ Jemand kauft privat ein, auf demselben Bon stehen Dinge fürs Büro, bezahlt wur
 2. `prepare_mixed_receipt` zeigt den Bon mit Zeilennummern und die Fragen, die vorher zu klären sind.
 3. Fragen beantworten: welche Zeilen geschäftlich sind, Pfand und Rabatte, Bonnummer, wer ausgelegt hat, Anlass, MwSt-Zeilen des Bons, Bestätigung.
 4. `generate_mixed_receipt` zeigt die fertige Seite als Bild. Nichts wird hochgeladen.
-5. Nach Freigabe `generate_and_upload_mixed_receipt` mit `confirm: true`: Upload mit gesetzten Feldern, Kommentar am Original. Danach entscheidet der Nutzer, ob das Original soft-gelöscht wird, und der neue Beleg wird über das Auslagenkonto gebucht.
+5. Nach Freigabe `generate_and_upload_mixed_receipt` mit `confirm: true`: Upload mit gesetzten Feldern, Kommentar am Original. Sobald der neue Beleg in BuchhaltungsButler bestätigt ist, löscht das Tool das Original (soft). Danach wird der neue Beleg über das Auslagenkonto gebucht.
 
 ## Warum nur Schwarz-Weiß-Scans ohne Texterkennung?
 
@@ -24,7 +24,7 @@ Belege dürfen nicht so verändert werden, dass der ursprüngliche Inhalt nicht 
 
 ## Was verhindert doppelte Vorsteuer?
 
-Gebucht wird nur der Auslagenbeleg. Das Original trägt den Kommentar „Nicht buchen“ und wird nach Rückfrage beim Nutzer soft-gelöscht; das Tool selbst löscht nie. Vor dem Upload prüft das Tool, ob es schon einen anderen aktiven Beleg mit derselben Bonnummer gibt (ein erneuter Upload unter anderer Bonnummer fällt dabei nicht auf).
+Gebucht wird nur der Auslagenbeleg. Das Original trägt den Kommentar „Nicht buchen“ und wird vom Tool soft-gelöscht, sobald der neue Beleg in BuchhaltungsButler bestätigt ist (aktiv, gleiche Bonnummer, Betrag = Erstattung). Lässt sich der neue Beleg nicht bestätigen oder schlägt das Löschen fehl (zum Beispiel weil das Original schon gebucht ist), bleibt das Original aktiv, und die Antwort sagt, was zu tun ist. Vor dem Upload prüft das Tool, ob es schon einen anderen aktiven Beleg mit derselben Bonnummer gibt (ein erneuter Upload unter anderer Bonnummer fällt dabei nicht auf).
 
 ## Wie viele Positionen passen auf den Beleg?
 
@@ -32,4 +32,4 @@ Etwa sechs kurze Positionen passen auf die Seite. Bei mehr Positionen oder einem
 
 ## Textbaustein für die Verfahrensdokumentation
 
-> Gemischte Einkäufe (private und betriebliche Positionen auf einem Kassenbon, privat bezahlt) werden so behandelt: Der Kassenbon wird unverändert als Scan in BuchhaltungsButler hochgeladen. Daraus entsteht ein Auslagenbeleg mit dem Bon, dessen private Positionen geschwärzt sind, den betrieblichen Positionen mit Netto, Steuer und Brutto je Steuersatz, der auslegenden Person und dem Anlass. Er verweist über Bonnummer und SHA-256-Prüfsumme auf das Original. Das Original wird nach Freigabe in BuchhaltungsButler als gelöscht markiert, bleibt dort aber unverändert archiviert und abrufbar und trägt einen Kommentar mit Verweis auf den Auslagenbeleg. Gebucht wird nur der Auslagenbeleg; erstattet wird nur der betriebliche Anteil.
+> Gemischte Einkäufe (private und betriebliche Positionen auf einem Kassenbon, privat bezahlt) werden so behandelt: Der Kassenbon wird unverändert als Scan in BuchhaltungsButler hochgeladen. Daraus entsteht ein Auslagenbeleg mit dem Bon, dessen private Positionen geschwärzt sind, den betrieblichen Positionen mit Netto, Steuer und Brutto je Steuersatz, der auslegenden Person und dem Anlass. Er verweist über Bonnummer und SHA-256-Prüfsumme auf das Original. Das Original wird in BuchhaltungsButler als gelöscht markiert, sobald der Auslagenbeleg dort bestätigt ist, bleibt dort aber unverändert archiviert und abrufbar und trägt einen Kommentar mit Verweis auf den Auslagenbeleg. Gebucht wird nur der Auslagenbeleg; erstattet wird nur der betriebliche Anteil.

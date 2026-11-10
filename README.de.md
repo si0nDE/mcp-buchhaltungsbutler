@@ -90,7 +90,7 @@ Für einen privat bezahlten Bon, auf dem auch geschäftliche Positionen stehen (
 2. `prepare_mixed_receipt` liefert den Bon mit Zeilennummern und die Fragen, die vorher zu klären sind.
 3. Geschäftliche Zeilen, Pfand/Rabatt, Bonnummer, wer ausgelegt hat, Anlass und MwSt-Zeilen klären.
 4. `generate_mixed_receipt` liefert den gerenderten A4-Auslagenbeleg (geschwärzter Bon, Netto/Steuer je Satz) als Bild; hochgeladen wird nichts.
-5. Nach der Freigabe lädt `generate_and_upload_mixed_receipt` mit `confirm: true` ihn hoch und kommentiert das Original. Das Original löscht das Tool nie.
+5. Nach der Freigabe lädt `generate_and_upload_mixed_receipt` mit `confirm: true` ihn hoch und kommentiert das Original. Sobald der neue Beleg in BuchhaltungsButler bestätigt ist (aktiv, gleiche Bonnummer, Betrag = Erstattung), löscht das Tool das Original (soft, archiviert und wiederherstellbar). Lässt sich der neue Beleg nicht bestätigen oder schlägt das Löschen fehl, bleibt das Original aktiv und `next_steps` sagt, was zu tun ist. Ohne diese Bestätigung löscht das Tool nie, die Vorschau-Tools löschen nie.
 
 Details: [docs/gemischte-belege-faq.md](docs/gemischte-belege-faq.md), Rechtsgrundlagen: [docs/rechtsgrundlagen-gemischte-belege.md](docs/rechtsgrundlagen-gemischte-belege.md).
 

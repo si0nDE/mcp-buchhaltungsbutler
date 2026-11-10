@@ -64,6 +64,8 @@ const generateShape = {
 
 type GenerateArgs = z.infer<z.ZodObject<typeof generateShape>>;
 
+const AMOUNT_TOLERANCE = 0.01;
+
 const isDeleted = (row: Record<string, unknown>) => row.deleted === "1" || row.deleted === 1 || row.deleted === true;
 const germanDate = (iso: string) => iso.split("-").reverse().join(".");
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -123,7 +125,7 @@ function bookingHint(a: MixedReceiptAmounts, paidBy: string) {
       konto_vorschlag: "4653/6643 Aufmerksamkeiten (Kaffee, Milch, Getränke im Büro) oder 4980/6850 Sonstiger Betriebsbedarf; das Konto legt der Steuerberater fest.",
     })),
     inhaber: "Hat der Inhaber eines Einzelunternehmens selbst ausgelegt, ist das keine Erstattung, sondern eine Privateinlage (get_booking_guide auslagen).",
-    original: "Das Original nie buchen. Erst nach Rückfrage beim Nutzer mit set_receipt_deleted soft-löschen; es bleibt in BuchhaltungsButler archiviert.",
+    original: "Das Original nie buchen. Nach dem Upload löscht das Tool es (soft), sobald der neue Beleg in BuchhaltungsButler bestätigt ist; es bleibt dort archiviert und wiederherstellbar.",
   };
 }
 
@@ -173,6 +175,33 @@ async function sanitiseFreeText(args: GenerateArgs): Promise<GenerateArgs> {
     }
   }
   return out;
+}
+
+// True when BuchhaltungsButler lists an active receipt with this number that is not the original and carries the reimbursement
+// (and the id the upload returned, if it returned one). Any failure counts as "not verified": then nothing is deleted.
+async function verifyNewReceipt(
+  client: BBClient,
+  receiptNumber: string,
+  sourceId: number,
+  newId: string | number | undefined,
+  reimbursement: number
+): Promise<boolean> {
+  try {
+    const list = await client.call<{ data?: Array<Record<string, unknown>> }>("receiptsGet", {
+      list_direction: "inbound",
+      invoicenumber: receiptNumber,
+      limit: 500,
+      offset: 0,
+    });
+    return (list.data ?? []).some((row) => {
+      const id = toId(row.id_by_customer);
+      if (id === sourceId || isDeleted(row)) return false;
+      if (newId !== undefined && id !== newId) return false;
+      return Math.abs(Number(row.amount) - reimbursement) <= AMOUNT_TOLERANCE + 1e-9;
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
@@ -312,8 +341,10 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
     description:
       "Step 3, only after the user approved generate_mixed_receipt's preview: builds the same Auslagenbeleg, checks for another active " +
       "receipt with the same receipt number, uploads it with explicit counterparty/date/amount (the reimbursement)/invoice_number and adds " +
-      "a comment to the original. Requires confirm: true. Never deletes the original: afterwards ask the user, and only on yes call " +
-      "set_receipt_deleted on it (it stays archived in BHB); then book the new receipt via the Auslagenkonto (booking_hint).",
+      "a comment to the original. Then it checks that the new receipt is in BuchhaltungsButler (active, same receipt number, amount = " +
+      "reimbursement) and only then soft-deletes the original (receiptsDeleteIdByCustomer; it stays archived and can be restored). " +
+      "If the new receipt cannot be confirmed or the deletion fails, the original stays and next_steps says what to do. Requires " +
+      "confirm: true; the delete follows that approved upload without another question. Then book the new receipt via the Auslagenkonto (booking_hint).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
@@ -372,21 +403,44 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
       } catch (error) {
         commentError = message(error);
       }
+      // The original is soft-deleted only after the new receipt is confirmed in BuchhaltungsButler (nothing is deleted physically).
+      const verified = await verifyNewReceipt(client, args.receipt_number, args.source_receipt_id_by_customer, newId, built.amounts.reimbursement);
+      let originalDeleted = false;
+      let deleteError: string | undefined;
+      if (verified) {
+        try {
+          await client.call("receiptsDeleteIdByCustomer", {}, { idSuffix: args.source_receipt_id_by_customer });
+          originalDeleted = true;
+        } catch (error) {
+          deleteError = message(error);
+        }
+      }
+      const deleteSteps = originalDeleted
+        ? ["Das Original ist soft-gelöscht und bleibt in BuchhaltungsButler archiviert (wiederherstellbar mit set_receipt_deleted, deleted: false)."]
+        : verified
+          ? [
+              `Das Original konnte nicht gelöscht werden (${deleteError}). Ist es schon gebucht oder einer Zahlung zugeordnet, erst die Buchung aufheben (get_booking_guide festgeschriebene_loeschen), dann set_receipt_deleted. Bis dahin das Original nicht buchen.`,
+            ]
+          : [
+              "Der neue Beleg war in BuchhaltungsButler nicht eindeutig zu finden, deshalb bleibt das Original aktiv: mit list_receipts (Bonnummer) prüfen und dann set_receipt_deleted auf das Original. Bis dahin das Original nicht buchen.",
+            ];
       return ok({
         status: "uploaded",
         new_receipt_id_by_customer: newId ?? null,
         new_receipt_display_ref: newRef,
+        new_receipt_verified: verified,
         original_receipt_id_by_customer: args.source_receipt_id_by_customer,
         original_display_ref: built.original.displayRef,
-        original_deleted: false,
+        original_deleted: originalDeleted,
+        ...(deleteError ? { original_delete_error: deleteError } : {}),
         comment_added: commentAdded,
         ...(commentError ? { comment_error: commentError } : {}),
         amounts: amountsView(built.amounts),
         booking_hint: bookingHint(built.amounts, args.paid_by),
         warnings: built.warnings,
         next_steps: [
-          "Nutzer fragen, ob das Original jetzt soft-gelöscht werden soll; nur nach Ja set_receipt_deleted (deleted: true) auf das Original. Es bleibt in BuchhaltungsButler archiviert.",
-          "Danach den neuen Beleg über das Auslagenkonto buchen (booking_hint).",
+          ...deleteSteps,
+          "Den neuen Beleg über das Auslagenkonto buchen (booking_hint).",
           ...(commentAdded ? [] : [`Kommentar am Original fehlt: mit add_comment nachtragen ("Original zur geschwärzten Fassung ${newRef}").`]),
         ],
       });

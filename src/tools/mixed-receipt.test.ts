@@ -24,13 +24,28 @@ function fakeClient(o: {
   receiptsGet?: Array<Record<string, unknown>>;
   upload?: unknown;
   commentFails?: boolean;
+  // Row the list shows after the upload; null = the new receipt is not visible (yet).
+  uploadedRow?: Record<string, unknown> | null;
+  deleteFails?: boolean;
 }) {
-  const call = vi.fn(async (key: string, _params?: unknown) => {
+  let uploaded = false;
+  const newRow = { id_by_customer: "777", invoicenumber: "BEISPIEL-0815", deleted: "0", amount: "6.42" };
+  const call = vi.fn(async (key: string, _params?: unknown, _options?: unknown) => {
     if (key === "receiptsGetIdByCustomer") return { success: true, data: o.original };
-    if (key === "receiptsGet") return { success: true, data: o.receiptsGet ?? [] };
-    if (key === "receiptsUpload") return o.upload ?? { success: true, data: { id_by_customer: 777 } };
+    if (key === "receiptsGet") {
+      const extra = uploaded && o.uploadedRow !== null ? [o.uploadedRow ?? newRow] : [];
+      return { success: true, data: [...(o.receiptsGet ?? []), ...extra] };
+    }
+    if (key === "receiptsUpload") {
+      uploaded = true;
+      return o.upload ?? { success: true, data: { id_by_customer: 777 } };
+    }
     if (key === "commentsAdd") {
       if (o.commentFails) throw new Error("HTTP 500");
+      return { success: true };
+    }
+    if (key === "receiptsDeleteIdByCustomer") {
+      if (o.deleteFails) throw new Error("Beleg ist festgeschrieben");
       return { success: true };
     }
     throw new Error(`unexpected endpoint ${key}`);
@@ -190,7 +205,7 @@ describe("generate_and_upload_mixed_receipt", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
-  it("uploads with explicit fields, comments on the original and never deletes it", async () => {
+  it("uploads with explicit fields, comments on the original and soft-deletes it once the new receipt is verified", async () => {
     const { client, call } = fakeClient({
       original: await original(),
       receiptsGet: [
@@ -216,9 +231,58 @@ describe("generate_and_upload_mixed_receipt", () => {
     const comment = call.mock.calls.find((c) => c[0] === "commentsAdd")![1] as Data;
     expect(comment.receipt_id_by_customer).toBe(42);
     expect(comment.comment_text).toMatch(/Original zur geschwärzten Fassung/);
-    expect(call.mock.calls.map((c) => c[0])).not.toContain("receiptsDeleteIdByCustomer");
+    const keys = call.mock.calls.map((c) => c[0]);
+    const deleteCall = call.mock.calls.find((c) => c[0] === "receiptsDeleteIdByCustomer")!;
+    expect(deleteCall[2]).toEqual({ idSuffix: 42 });
+    // order: upload, comment on the original, check that the new receipt is there, only then delete
+    expect(keys.indexOf("commentsAdd")).toBeGreaterThan(keys.indexOf("receiptsUpload"));
+    expect(keys.lastIndexOf("receiptsGet")).toBeGreaterThan(keys.indexOf("receiptsUpload"));
+    expect(keys.indexOf("receiptsDeleteIdByCustomer")).toBeGreaterThan(keys.lastIndexOf("receiptsGet"));
+    expect(keys.filter((k) => k === "receiptsDeleteIdByCustomer")).toHaveLength(1);
     const d = data(result);
-    expect(d).toMatchObject({ status: "uploaded", new_receipt_id_by_customer: 777, original_receipt_id_by_customer: 42, original_deleted: false, comment_added: true });
+    expect(d).toMatchObject({
+      status: "uploaded",
+      new_receipt_id_by_customer: 777,
+      new_receipt_verified: true,
+      original_receipt_id_by_customer: 42,
+      original_deleted: true,
+      comment_added: true,
+    });
+    expect((d.next_steps as string[]).join(" ")).toMatch(/soft-gelöscht/);
+  });
+
+  it("does not delete the original when the new receipt cannot be found", async () => {
+    const { client, call } = fakeClient({ original: await original(), uploadedRow: null });
+    const d = data(await createMixedReceiptTools(client)[2].handler({ ...args, confirm: true } as never));
+    expect(call.mock.calls.map((c) => c[0])).not.toContain("receiptsDeleteIdByCustomer");
+    expect(d).toMatchObject({ status: "uploaded", new_receipt_verified: false, original_deleted: false });
+    expect((d.next_steps as string[]).join(" ")).toMatch(/list_receipts/);
+  });
+
+  it("does not delete the original when the receipt found has a different amount", async () => {
+    const { client, call } = fakeClient({
+      original: await original(),
+      uploadedRow: { id_by_customer: "777", invoicenumber: "BEISPIEL-0815", deleted: "0", amount: "99.00" },
+    });
+    const d = data(await createMixedReceiptTools(client)[2].handler({ ...args, confirm: true } as never));
+    expect(call.mock.calls.map((c) => c[0])).not.toContain("receiptsDeleteIdByCustomer");
+    expect(d.new_receipt_verified).toBe(false);
+  });
+
+  it("reports a failed deletion without failing the upload and says what to do", async () => {
+    const { client } = fakeClient({ original: await original(), deleteFails: true });
+    const d = data(await createMixedReceiptTools(client)[2].handler({ ...args, confirm: true } as never));
+    expect(d).toMatchObject({ status: "uploaded", new_receipt_verified: true, original_deleted: false });
+    expect(d.original_delete_error).toMatch(/festgeschrieben/);
+    expect((d.next_steps as string[]).join(" ")).toMatch(/set_receipt_deleted/);
+  });
+
+  it("never deletes anything in the preview tools", async () => {
+    const { client, call } = fakeClient({ original: await original() });
+    const [prepare, generate] = createMixedReceiptTools(client);
+    await prepare.handler({ source_receipt_id_by_customer: 42 } as never);
+    await generate.handler(args as never);
+    expect(call.mock.calls.map((c) => c[0])).not.toContain("receiptsDeleteIdByCustomer");
   });
 
   it("sets vat_rate when only one rate is involved", async () => {
@@ -237,6 +301,7 @@ describe("generate_and_upload_mixed_receipt", () => {
     const { client } = fakeClient({ original: await original(), upload: { success: true }, commentFails: true });
     const d = data(await createMixedReceiptTools(client)[2].handler({ ...args, confirm: true } as never));
     expect(d.new_receipt_id_by_customer).toBeNull();
+    expect(d.new_receipt_verified).toBe(true);
     expect(d.comment_added).toBe(false);
     expect((d.next_steps as string[]).join(" ")).toMatch(/add_comment/);
   });

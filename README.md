@@ -91,7 +91,7 @@ For a receipt paid privately that also contains business items (Auslage):
 2. `prepare_mixed_receipt` returns the receipt with line numbers and the questions to clarify first.
 3. Clarify business lines, Pfand/Rabatt, receipt number, who paid, occasion, VAT lines.
 4. `generate_mixed_receipt` returns the rendered A4 Auslagenbeleg (redacted receipt, net/tax per rate) as an image; nothing is uploaded.
-5. After approval `generate_and_upload_mixed_receipt` with `confirm: true` uploads it and comments on the original. The original is never deleted by the tool.
+5. After approval `generate_and_upload_mixed_receipt` with `confirm: true` uploads it and comments on the original. Once the new receipt is confirmed in BuchhaltungsButler (active, same receipt number, amount = reimbursement), the tool soft-deletes the original (archived, restorable). If it cannot confirm the new receipt or the deletion fails, the original stays and `next_steps` says what to do. The tool never deletes without that confirmation, and the preview tools never delete.
 
 Details: [docs/gemischte-belege-faq.md](docs/gemischte-belege-faq.md), legal background: [docs/rechtsgrundlagen-gemischte-belege.md](docs/rechtsgrundlagen-gemischte-belege.md).
 
