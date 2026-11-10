@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractText, getDocumentProxy } from "unpdf";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { createMixedReceiptTools } from "./mixed-receipt.js";
 import { neutralPostingText } from "./mixed-receipt-booking.js";
@@ -38,6 +38,9 @@ function fakeClient(o: {
   assigned?: Array<Record<string, unknown>>;
   transactions?: Array<Record<string, unknown>>;
   postings?: Array<Record<string, unknown>>;
+  // Earlier receipts of the merchant: returned only by the receiptsGet call that filters by counterparty (the Kreditor derivation).
+  merchantReceipts?: Array<Record<string, unknown>>;
+  creditors?: Array<Record<string, unknown>>;
   failEndpoint?: string;
 }) {
   let uploaded = false;
@@ -56,7 +59,9 @@ function fakeClient(o: {
     if (key === "receiptsAssignedTransactionsGet") return { success: true, data: o.assigned ?? [] };
     if (key === "transactionsGet") return { success: true, data: o.transactions ?? [] };
     if (key === "postingsGet") return { success: true, data: o.postings ?? [] };
+    if (key === "settingsGetCreditors") return { success: true, data: o.creditors ?? [] };
     if (key === "receiptsGet") {
+      if ((_params as { counterparty?: string } | undefined)?.counterparty !== undefined) return { success: true, data: o.merchantReceipts ?? [] };
       const extra = uploaded && o.uploadedRow !== null ? [o.uploadedRow ?? newRow] : [];
       return { success: true, data: [...(o.receiptsGet ?? []), ...extra] };
     }
@@ -342,27 +347,49 @@ const uploadParams = (call: ReturnType<typeof fakeClient>["call"]) => call.mock.
 const proposal = (d: Data) => d.booking_proposal as Data & { steps: string[]; notes: string[]; calls: Array<{ tool: string; arguments: Data }> };
 
 const savedPolicyFile = process.env.BHB_POLICY_FILE;
+// Without a policy file every test starts with the house rule "not set" (never the developer's real file).
+beforeEach(async () => {
+  process.env.BHB_POLICY_FILE = join(await mkdtemp(join(tmpdir(), "bhb-mixed-policy-")), "policy.json");
+});
 afterEach(() => {
   process.env.BHB_POLICY_FILE = savedPolicyFile;
 });
-async function setGewinnermittlung(value: "euer" | "bilanz" | null) {
-  const dir = await mkdtemp(join(tmpdir(), "bhb-mixed-policy-"));
-  const file = join(dir, "policy.json");
-  await writeFile(file, JSON.stringify({ tax_profile: { kleinunternehmer: false, gewinnermittlung: value } }));
-  process.env.BHB_POLICY_FILE = file;
+async function setDK(value: "aktiv" | "aus" | null) {
+  await writeFile(process.env.BHB_POLICY_FILE!, JSON.stringify({ tax_profile: { kleinunternehmer: false, debitoren_kreditoren: value } }));
 }
 
-const EXPECTED_SPLITS = [
-  { amount: "1.98", postingaccount: 4653, postingtext: "Milch", vat: "7_pre", receipt_id_by_customer: 777 },
-  { amount: "4.44", postingaccount: 4653, postingtext: "Mineralwasser, Pfand", vat: "19_pre", receipt_id_by_customer: 777 },
+const SPLITS = [
+  { amount: "1.98", postingaccount: 4653, postingtext: "Milch", vat: "7_pre" },
+  { amount: "4.44", postingaccount: 4653, postingtext: "Mineralwasser, Pfand", vat: "19_pre" },
 ];
+const EXPECTED_SPLITS = SPLITS.map((s) => ({ ...s, receipt_id_by_customer: 777 }));
 const ASSIGNED = [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }];
+// An earlier receipt of the same merchant, booked on the Kreditor 70555 (the Kreditor's name differs from the merchant's on purpose).
+const EARLIER = { id_by_customer: "500", counterparty: "Beispielmarkt", invoicenumber: "BM-500", deleted: "0" };
+const EARLIER_POSTING = {
+  id_by_customer: "p500",
+  receipt_id_by_customer: "500",
+  transaction_id_by_customer: "",
+  debit_postingaccount_number: "4653",
+  credit_postingaccount_number: "70555",
+};
+const RECEIPT_CALL = (creditor = 70555) => ({
+  tool: "add_receipt_postings",
+  arguments: { receipts: [{ receipt_id_by_customer: 777, creditor, debtor: 10000, splits: SPLITS }] },
+});
+const SETTLE_CALL = (creditor = 70555) => ({
+  tool: "add_transaction_postings",
+  arguments: {
+    transactions: [{ transaction_id_by_customer: 9001, splits: [{ amount: "6.42", postingaccount: creditor, postingtext: "Ausgleich Beleg", vat: "0_none", receipt_id_by_customer: 777 }] }],
+  },
+});
 
 describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
   it("the preview names the auto-detected Auslagenkonto with its effect", async () => {
+    await setDK("aus");
     const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS });
     const d = data(await createMixedReceiptTools(client)[1].handler(args as never));
-    expect(d.auslagenkonto).toMatchObject({ number: 745, name: "Verbindlichkeiten Gesellschafter Erika Beispiel", source: "auto" });
+    expect(d.auslagenkonto).toMatchObject({ number: 745, name: "Verbindlichkeiten Gesellschafter Erika Beispiel", source: "auto", passed_on_upload: true });
     expect((d.auslagenkonto as Data).effect).toMatch(/Beleg erzeugt Zahlung/);
   });
 
@@ -381,6 +408,7 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
   });
 
   it("an explicit auslagenkonto skips detection; without_auslagenkonto opts out; both together are rejected", async () => {
+    await setDK("aus");
     const given = fakeClient({ original: await original() });
     const dGiven = data(await createMixedReceiptTools(given.client)[1].handler({ ...args, auslagenkonto: 741 } as never));
     expect(dGiven.auslagenkonto).toMatchObject({ number: 741, source: "given" });
@@ -394,14 +422,16 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
     expect(both.call).not.toHaveBeenCalled();
   });
 
-  it("the upload passes the detected account as an integer and reports it", async () => {
+  it("house rule aus: the upload passes the detected account as an integer and reports it", async () => {
+    await setDK("aus");
     const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS });
     const d = data(await upload(client));
     expect(uploadParams(call).account).toBe(745);
-    expect(d.auslagenkonto).toMatchObject({ number: 745, source: "auto" });
+    expect(d.auslagenkonto).toMatchObject({ number: 745, source: "auto", passed_on_upload: true });
   });
 
-  it("the upload omits account with without_auslagenkonto and uses an explicit one over the detected one", async () => {
+  it("the upload omits account with without_auslagenkonto and uses an explicit one over the detected one (rule aus)", async () => {
+    await setDK("aus");
     const out = fakeClient({ original: await original(), accounts: ACCOUNTS });
     const dOut = data(await upload(out.client, { without_auslagenkonto: true }));
     expect("account" in uploadParams(out.call)).toBe(false);
@@ -413,6 +443,7 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
   });
 
   it("the upload omits account when nothing is found or detection fails, and warns in the second case", async () => {
+    await setDK("aus");
     const none = fakeClient({ original: await original(), accounts: [ACCOUNTS[0]] });
     await upload(none.client);
     expect("account" in uploadParams(none.call)).toBe(false);
@@ -421,15 +452,90 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
     expect("account" in uploadParams(failing.call)).toBe(false);
     expect((d.warnings as string[]).join(" ")).toMatch(/Auslagenkonto.*nicht ermittelt/);
   });
+
+  for (const rule of ["aus", "aktiv", null] as const) {
+    for (const mode of ["auto", "explicit"] as const) {
+      it(`rule ${String(rule)}, Auslagenkonto ${mode}: account is passed on upload only with "aus"`, async () => {
+        await setDK(rule);
+        const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS });
+        const d = data(await upload(client, mode === "explicit" ? { auslagenkonto: 741 } : {}));
+        const konto = d.auslagenkonto as Data;
+        // the number stays visible (the proposal uses it), the upload does not pass it unless the rule is "aus"
+        expect(konto.number).toBe(mode === "explicit" ? 741 : 745);
+        if (rule === "aus") {
+          expect(uploadParams(call).account).toBe(konto.number);
+          expect(konto.passed_on_upload).toBe(true);
+        } else {
+          expect("account" in uploadParams(call)).toBe(false);
+          expect(konto.passed_on_upload).toBe(false);
+          expect(konto.effect).toMatch(rule === "aktiv" ? /Hausregel Debitoren\/Kreditoren aktiv: das Konto wird nicht beim Upload mitgegeben/ : /Hausregel nicht gesetzt \(set_policy debitoren_kreditoren\)/);
+          if (mode === "explicit") expect((d.warnings as string[]).join(" ")).toMatch(/auslagenkonto.*ignoriert.*Debitoren\/Kreditoren/);
+        }
+      });
+    }
+  }
+
+  it("the preview shows the same effect and passed_on_upload as the upload", async () => {
+    await setDK("aktiv");
+    const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS });
+    const d = data(await createMixedReceiptTools(client)[1].handler(args as never));
+    expect(d.auslagenkonto).toMatchObject({ number: 745, passed_on_upload: false });
+    expect((d.auslagenkonto as Data).effect).toMatch(/die Zahlung wird später zugeordnet/);
+  });
 });
 
-describe("booking_proposal", () => {
+describe("Kreditor des Händlers in der Vorschau", () => {
+  it("rule aktiv: shows the Kreditor derived from an earlier receipt of the merchant, with evidence", async () => {
+    await setDK("aktiv");
+    const { client } = fakeClient({ original: await original(), merchantReceipts: [EARLIER], postings: [EARLIER_POSTING] });
+    const d = data(await createMixedReceiptTools(client)[1].handler(args as never));
+    expect(d.creditor).toMatchObject({ number: 70555, source: "derived", evidence: ["Beleg 500 (BM-500)"] });
+    expect((d.creditor as Data).effect).toMatch(/70555/);
+  });
+
+  it("an explicit creditor is shown as given and skips the derivation", async () => {
+    await setDK("aktiv");
+    const { client, call } = fakeClient({ original: await original() });
+    const d = data(await createMixedReceiptTools(client)[1].handler({ ...args, creditor: 70556 } as never));
+    expect(d.creditor).toMatchObject({ number: 70556, source: "given" });
+    expect(call.mock.calls.some((c) => (c[1] as { counterparty?: string } | undefined)?.counterparty !== undefined)).toBe(false);
+  });
+
+  it("no earlier booking: none with the reason; rule aus: not needed and no lookup", async () => {
+    await setDK("aktiv");
+    const none = fakeClient({ original: await original() });
+    const d = data(await createMixedReceiptTools(none.client)[1].handler(args as never));
+    expect(d.creditor).toMatchObject({ number: null, source: "none" });
+    expect((d.creditor as Data).effect).toMatch(/creditor/);
+    await setDK("aus");
+    const aus = fakeClient({ original: await original() });
+    const dAus = data(await createMixedReceiptTools(aus.client)[1].handler(args as never));
+    expect(dAus.creditor).toMatchObject({ number: null, source: "none" });
+    expect((dAus.creditor as Data).effect).toMatch(/nicht nötig \(Debitoren\/Kreditoren aus\)/);
+    expect(aus.call.mock.calls.some((c) => (c[1] as { counterparty?: string } | undefined)?.counterparty !== undefined)).toBe(false);
+  });
+
+  it("rejects a creditor below 70000 or a non-integer", async () => {
+    const { client } = fakeClient({ original: await original() });
+    for (const tool of [createMixedReceiptTools(client)[1], createMixedReceiptTools(client)[2]]) {
+      const schema = tool.inputSchema.creditor as unknown as { safeParse: (v: unknown) => { success: boolean } };
+      expect(schema.safeParse(1200).success).toBe(false);
+      expect(schema.safeParse(70555.5).success).toBe(false);
+      expect(schema.safeParse(70555).success).toBe(true);
+    }
+  });
+});
+
+describe("booking_proposal, Debitoren/Kreditoren aus (Zahlung buchen)", () => {
   it("1: an assigned payment with the matching amount gives a ready add_transaction_postings call", async () => {
+    await setDK("aus");
     const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED });
     const d = data(await upload(client));
     const p = proposal(d);
     expect(d.status).toBe("uploaded");
     expect(p.status).toBe("ready");
+    expect(p.debitoren_kreditoren).toBe("aus");
+    expect(p.gewinnermittlung).toBeUndefined();
     expect(p.auslagenkonto).toEqual({ number: 745, name: "Verbindlichkeiten Gesellschafter Erika Beispiel" });
     expect(p.receipt).toMatchObject({ id_by_customer: 777, account: "745", assigned_transactions: [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }] });
     expect(p.calls).toEqual([{ tool: "add_transaction_postings", arguments: { transactions: [{ transaction_id_by_customer: 9001, splits: EXPECTED_SPLITS }] } }]);
@@ -441,6 +547,7 @@ describe("booking_proposal", () => {
   });
 
   it("2: an assigned payment that is already booked gives already_booked and no calls", async () => {
+    await setDK("aus");
     const { client } = fakeClient({
       original: await original(),
       accounts: ACCOUNTS,
@@ -454,6 +561,7 @@ describe("booking_proposal", () => {
   });
 
   it("3: an assigned payment with a different amount, or several payments, give needs_decision with the amounts and no calls", async () => {
+    await setDK("aus");
     const differs = fakeClient({ original: await original(), newReceiptRow: { account: "745" }, assigned: [{ ...ASSIGNED[0], amount: "-5.00" }] });
     const p = proposal(data(await upload(differs.client)));
     expect(p.status).toBe("needs_decision");
@@ -470,15 +578,16 @@ describe("booking_proposal", () => {
     expect(p2.calls).toEqual([]);
   });
 
-  it("4: EÜR, nothing assigned, no candidate payment: no_payment_exists says plainly there is no payment and names the ways", async () => {
-    await setGewinnermittlung("euer");
+  it("4: nothing assigned, no candidate payment: no_payment_exists says plainly there is no payment and names the ways", async () => {
+    await setDK("aus");
     const { client } = fakeClient({ original: await original(), accounts: [ACCOUNTS[0]], transactions: [{ id_by_customer: "9200", amount: "-6.42", to_from: "Max Mustermann", purpose: "Miete", booking_date: "2026-10-05" }] });
     const p = proposal(data(await upload(client)));
     expect(p.status).toBe("no_payment_exists");
-    expect(p.gewinnermittlung).toBe("euer");
+    expect(p.debitoren_kreditoren).toBe("aus");
     expect(p.calls).toEqual([]);
     const steps = p.steps.join("\n");
-    expect(steps).toContain("Zu diesem Beleg gibt es in BuchhaltungsButler keine Zahlung, die man buchen könnte. Eine EÜR bucht nur Zahlungen; das ist normal, wenn nur Geschäftskonten angelegt sind und privat bezahlt wurde.");
+    expect(steps).toContain("Debitoren/Kreditoren sind aus: es gibt keine Beleg-Buchung, gebucht wird die Zahlung.");
+    expect(steps).toContain("Zu diesem Beleg gibt es in BuchhaltungsButler keine Zahlung, die man buchen könnte");
     expect(steps).toMatch(/create_account/);
     expect(steps).toMatch(/Beleg erzeugt Zahlung/);
     expect(steps).toMatch(/add_free_postings/);
@@ -486,10 +595,11 @@ describe("booking_proposal", () => {
     expect(steps).toMatch(/730 \| 3510/);
     expect(steps).toMatch(/zählt nicht als Zahlung/);
     expect(steps).toMatch(/Erstattung abwarten/);
+    expect(steps).not.toMatch(/Bilanz|Verbindlichkeit gegenüber der Person/);
   });
 
-  it("4b: EÜR with a resolved Auslagenkonto but no payment notes the account probably lacks 'Beleg erzeugt Zahlung' and fills the free-postings call", async () => {
-    await setGewinnermittlung("euer");
+  it("4b: with a resolved Auslagenkonto but no payment notes the account probably lacks 'Beleg erzeugt Zahlung' and fills the free-postings call", async () => {
+    await setDK("aus");
     const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS });
     const p = proposal(data(await upload(client)));
     expect(p.status).toBe("no_payment_exists");
@@ -512,8 +622,8 @@ describe("booking_proposal", () => {
     ]);
   });
 
-  it("5: EÜR with a reimbursement payment found in the account list gives needs_decision with the candidates and no filled calls", async () => {
-    await setGewinnermittlung("euer");
+  it("5: a reimbursement payment found in the account list gives needs_decision with the candidates and no filled calls", async () => {
+    await setDK("aus");
     const { client, call } = fakeClient({
       original: await original(),
       transactions: [
@@ -532,46 +642,164 @@ describe("booking_proposal", () => {
     const tx = call.mock.calls.find((c) => c[0] === "transactionsGet")![1] as Data;
     expect(tx).toMatchObject({ date_from: "2026-10-01", date_to: "2026-11-30" });
   });
+});
 
-  it("6: Bilanz without a payment describes add_receipt_postings (creditor unknown) as needs_decision", async () => {
-    await setGewinnermittlung("bilanz");
-    const { client } = fakeClient({ original: await original(), accounts: [ACCOUNTS[0]] });
+describe("booking_proposal, Debitoren/Kreditoren aktiv (Beleg buchen, Zahlung gleicht aus)", () => {
+  it("creditor derived from an earlier booking + exactly matching assigned payment: two calls in order, receipt first", async () => {
+    await setDK("aktiv");
+    const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS, merchantReceipts: [EARLIER], postings: [EARLIER_POSTING], assigned: ASSIGNED });
+    const d = data(await upload(client));
+    const p = proposal(d);
+    expect(p.status).toBe("ready");
+    expect(p.debitoren_kreditoren).toBe("aktiv");
+    expect(p.creditor).toMatchObject({ number: 70555, source: "derived", evidence: ["Beleg 500 (BM-500)"] });
+    expect(p.calls).toEqual([RECEIPT_CALL(), SETTLE_CALL()]);
+    expect(p.steps.join(" ")).toMatch(/Erst den Beleg buchen, dann den Ausgleich auf der Zahlung/);
+    expect(p.notes.join(" ")).toMatch(/debtor: 10000.*Debitoren-Sammelkonto.*Schema/);
+    expect(p.notes.join(" ")).toMatch(/Beleg erzeugt Zahlung.*unassign_receipt/);
+    // no account on upload, so the receipt can be booked on the Kreditor
+    expect("account" in uploadParams(call)).toBe(false);
+    expect(d.auslagenkonto).toMatchObject({ number: 745, passed_on_upload: false });
+  });
+
+  it("an explicit creditor is used as given", async () => {
+    await setDK("aktiv");
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED });
+    const p = proposal(data(await upload(client, { creditor: 70556 })));
+    expect(p.status).toBe("ready");
+    expect(p.creditor).toMatchObject({ number: 70556, source: "given" });
+    expect(p.calls).toEqual([RECEIPT_CALL(70556), SETTLE_CALL(70556)]);
+  });
+
+  it("creditor known, no payment assigned: only the receipt call; the Ausgleich is described, not invented", async () => {
+    await setDK("aktiv");
+    const { client } = fakeClient({ original: await original(), merchantReceipts: [EARLIER], postings: [EARLIER_POSTING] });
     const p = proposal(data(await upload(client)));
-    expect(p.gewinnermittlung).toBe("bilanz");
+    expect(p.status).toBe("ready");
+    expect(p.calls).toEqual([RECEIPT_CALL()]);
+    const steps = p.steps.join(" ");
+    expect(steps).toMatch(/Zahlung dem Beleg zuordnen/);
+    expect(steps).toMatch(/add_transaction_postings/);
+    expect(steps).toMatch(/70555/);
+    expect(steps).toMatch(/0_none/);
+  });
+
+  it("receipt already booked on the Kreditor and an unbooked payment assigned: only the Ausgleich call", async () => {
+    await setDK("aktiv");
+    const booked = { id_by_customer: "p777", receipt_id_by_customer: "777", transaction_id_by_customer: "", debit_postingaccount_number: "4653", credit_postingaccount_number: "70555" };
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED, merchantReceipts: [EARLIER], postings: [EARLIER_POSTING, booked] });
+    const p = proposal(data(await upload(client)));
+    expect(p.status).toBe("ready");
+    expect(p.calls).toEqual([SETTLE_CALL()]);
+  });
+
+  it("receipt and payment both booked: already_booked, no calls", async () => {
+    await setDK("aktiv");
+    const booked = { id_by_customer: "p777", receipt_id_by_customer: "777", transaction_id_by_customer: "", debit_postingaccount_number: "4653", credit_postingaccount_number: "70555" };
+    const settle = { id_by_customer: "5001", receipt_id_by_customer: "777", transaction_id_by_customer: "9001", debit_postingaccount_number: "70555", credit_postingaccount_number: "745", fixed: "0" };
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED, postings: [booked, settle] });
+    const p = proposal(data(await upload(client)));
+    expect(p.status).toBe("already_booked");
+    expect(p.calls).toEqual([]);
+  });
+
+  it("a payment with a different amount, or several, gives needs_decision and no Ausgleich call", async () => {
+    await setDK("aktiv");
+    const base = { original: await original(), merchantReceipts: [EARLIER], postings: [EARLIER_POSTING] };
+    const differs = proposal(data(await upload(fakeClient({ ...base, assigned: [{ ...ASSIGNED[0], amount: "-6.43" }] }).client)));
+    expect(differs.status).toBe("needs_decision");
+    expect(differs.calls.map((c) => c.tool)).not.toContain("add_transaction_postings");
+    expect(differs.steps.join(" ")).toMatch(/-6,43 €.*6,42 €/);
+    const several = proposal(data(await upload(fakeClient({ ...base, assigned: [ASSIGNED[0], { ...ASSIGNED[0], id_by_customer: "9002" }] }).client)));
+    expect(several.status).toBe("needs_decision");
+    expect(several.calls.map((c) => c.tool)).not.toContain("add_transaction_postings");
+  });
+
+  it("a payment already booked while the receipt is not: needs_decision, nothing proposed (would collide with a booking via payment)", async () => {
+    await setDK("aktiv");
+    const { client } = fakeClient({
+      original: await original(),
+      assigned: ASSIGNED,
+      merchantReceipts: [EARLIER],
+      postings: [EARLIER_POSTING, { id_by_customer: "5001", transaction_id_by_customer: "9001", fixed: "0" }],
+    });
+    const p = proposal(data(await upload(client)));
     expect(p.status).toBe("needs_decision");
     expect(p.calls).toEqual([]);
-    const text = [...p.steps, ...p.notes].join(" ");
-    expect(text).toMatch(/add_receipt_postings/);
-    expect(text).toMatch(/Kreditor/);
-    expect(text).toMatch(/get_booking_guide auslagen/);
+    expect(p.steps.join(" ")).toMatch(/via Zahlung/);
   });
 
-  it("7: without gewinnermittlung the note says so and both ways are shown", async () => {
-    await setGewinnermittlung(null);
-    const { client } = fakeClient({ original: await original(), accounts: [ACCOUNTS[0]] });
+  it("creditor unknown: needs_decision, no calls, asks for creditor", async () => {
+    await setDK("aktiv");
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED });
     const p = proposal(data(await upload(client)));
-    expect(p.gewinnermittlung).toBeNull();
     expect(p.status).toBe("needs_decision");
-    expect(p.notes).toContain("Gewinnermittlung nicht festgelegt (set_policy gewinnermittlung); beide Wege unten");
-    const text = p.steps.join(" ");
-    expect(text).toMatch(/keine Zahlung/);
-    expect(text).toMatch(/add_receipt_postings/);
+    expect(p.calls).toEqual([]);
+    expect(p.creditor).toMatchObject({ number: null, source: "none" });
+    expect(p.steps.join(" ")).toMatch(/Kreditor des Händlers nicht ermittelbar: mit `creditor` angeben/);
   });
 
+  it("several candidate Kreditoren: needs_decision naming them, no calls", async () => {
+    await setDK("aktiv");
+    const earlier2 = { ...EARLIER, id_by_customer: "501", invoicenumber: "BM-501" };
+    const { client } = fakeClient({
+      original: await original(),
+      merchantReceipts: [EARLIER, earlier2],
+      postings: [EARLIER_POSTING, { ...EARLIER_POSTING, id_by_customer: "p501", receipt_id_by_customer: "501", credit_postingaccount_number: "70556" }],
+    });
+    const p = proposal(data(await upload(client)));
+    expect(p.status).toBe("needs_decision");
+    expect(p.calls).toEqual([]);
+    expect(p.steps.join(" ")).toMatch(/70555.*70556/);
+    expect(p.steps.join(" ")).toMatch(/creditor/);
+  });
+});
+
+describe("booking_proposal, Hausregel nicht gesetzt", () => {
+  it("needs_decision without calls, asks for set_policy and describes both ways", async () => {
+    await setDK(null);
+    const { client } = fakeClient({ original: await original(), assigned: ASSIGNED, merchantReceipts: [EARLIER], postings: [EARLIER_POSTING] });
+    const p = proposal(data(await upload(client)));
+    expect(p.status).toBe("needs_decision");
+    expect(p.debitoren_kreditoren).toBeNull();
+    expect(p.calls).toEqual([]);
+    const steps = p.steps.join(" ");
+    expect(steps).toMatch(/Hausregel Debitoren\/Kreditoren nicht gesetzt \(set_policy debitoren_kreditoren: aktiv oder aus\)/);
+    expect(steps).toMatch(/add_receipt_postings/);
+    expect(steps).toMatch(/add_transaction_postings/);
+  });
+
+  it("adds the hint when creditors exist in the instance; without creditors no hint; a failing read changes nothing", async () => {
+    await setDK(null);
+    const withCreditors = fakeClient({ original: await original(), creditors: [{ postingaccount_number: "70555" }] });
+    expect(proposal(data(await upload(withCreditors.client))).steps.join(" ")).toMatch(/Es gibt Kreditoren in dieser Instanz: Debitoren\/Kreditoren sind vermutlich aktiv/);
+    const without = fakeClient({ original: await original() });
+    expect(proposal(data(await upload(without.client))).steps.join(" ")).not.toMatch(/Es gibt Kreditoren/);
+    const failing = fakeClient({ original: await original(), failEndpoint: "settingsGetCreditors" });
+    const p = proposal(data(await upload(failing.client)));
+    expect(p.status).toBe("needs_decision");
+    expect(p.steps.join(" ")).not.toMatch(/Es gibt Kreditoren/);
+  });
+});
+
+describe("booking_proposal, übergreifend", () => {
   it("notes the Privateinlage hint for the Inhaber of a Einzelunternehmen", async () => {
+    await setDK("aus");
     const { client } = fakeClient({ original: await original(), accounts: [ACCOUNTS[0]] });
     expect(proposal(data(await upload(client))).notes.join(" ")).toMatch(/Privateinlage/);
   });
 
   it("8: any failing read endpoint gives status unavailable, the upload result stays uploaded and the original deleted", async () => {
-    for (const failEndpoint of ["receiptsAssignedTransactionsGet", "postingsGet", "transactionsGet"]) {
-      await setGewinnermittlung("euer");
-      const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: failEndpoint === "transactionsGet" ? [] : ASSIGNED, failEndpoint });
-      const d = data(await upload(client));
-      expect(d).toMatchObject({ status: "uploaded", original_deleted: true, new_receipt_verified: true });
-      expect(proposal(d).status).toBe("unavailable");
-      expect(proposal(d).steps.join(" ")).toMatch(/Buchungsvorschlag konnte nicht erstellt werden.*HTTP 500/);
-      expect(proposal(d).calls).toEqual([]);
+    for (const rule of ["aus", "aktiv"] as const) {
+      for (const failEndpoint of ["receiptsAssignedTransactionsGet", "postingsGet", ...(rule === "aus" ? ["transactionsGet"] : [])]) {
+        await setDK(rule);
+        const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: failEndpoint === "transactionsGet" ? [] : ASSIGNED, merchantReceipts: [EARLIER], failEndpoint });
+        const d = data(await upload(client));
+        expect(d).toMatchObject({ status: "uploaded", original_deleted: true, new_receipt_verified: true });
+        expect(proposal(d).status).toBe("unavailable");
+        expect(proposal(d).steps.join(" ")).toMatch(/Buchungsvorschlag konnte nicht erstellt werden.*HTTP 500/);
+        expect(proposal(d).calls).toEqual([]);
+      }
     }
     // a broken policy file also gives "unavailable", not an error
     process.env.BHB_POLICY_FILE = join(await mkdtemp(join(tmpdir(), "bhb-mixed-policy-")), "kaputt.json");
@@ -590,23 +818,25 @@ describe("booking_proposal", () => {
     expect(proposal(d).steps.join(" ")).toMatch(/list_receipts/);
   });
 
-  it("9: the proposal only reads: no add/assign/create endpoint is ever called", async () => {
-    await setGewinnermittlung("euer");
-    const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED });
-    await upload(client);
-    const allowed = new Set([
-      // main flow
-      "receiptsGetIdByCustomer", "receiptsGet", "receiptsUpload", "commentsAdd", "receiptsDeleteIdByCustomer",
-      // reads
-      "accountsGet", "receiptsAssignedTransactionsGet", "postingsGet", "transactionsGet",
-    ]);
-    for (const [key] of call.mock.calls) expect(allowed.has(key)).toBe(true);
-    const keys = call.mock.calls.map((c) => c[0]);
-    expect(keys.filter((k) => k === "receiptsUpload")).toHaveLength(1);
-    expect(keys.filter((k) => k === "commentsAdd")).toHaveLength(1);
-    expect(keys.filter((k) => k === "receiptsDeleteIdByCustomer")).toHaveLength(1);
-    // the proposal runs after the delete
-    expect(keys.lastIndexOf("receiptsDeleteIdByCustomer")).toBeLessThan(keys.indexOf("receiptsAssignedTransactionsGet"));
+  it("9: the proposal only reads: no add/assign/create endpoint is ever called, for every rule value", async () => {
+    for (const rule of ["aus", "aktiv", null] as const) {
+      await setDK(rule);
+      const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED, merchantReceipts: [EARLIER], postings: [EARLIER_POSTING], creditors: [{}] });
+      await upload(client);
+      const allowed = new Set([
+        // main flow
+        "receiptsGetIdByCustomer", "receiptsGet", "receiptsUpload", "commentsAdd", "receiptsDeleteIdByCustomer",
+        // reads
+        "accountsGet", "receiptsAssignedTransactionsGet", "postingsGet", "transactionsGet", "settingsGetCreditors",
+      ]);
+      for (const [key] of call.mock.calls) expect(allowed.has(key)).toBe(true);
+      const keys = call.mock.calls.map((c) => c[0]);
+      expect(keys.filter((k) => k === "receiptsUpload")).toHaveLength(1);
+      expect(keys.filter((k) => k === "commentsAdd")).toHaveLength(1);
+      expect(keys.filter((k) => k === "receiptsDeleteIdByCustomer")).toHaveLength(1);
+      // the proposal runs after the delete
+      expect(keys.lastIndexOf("receiptsDeleteIdByCustomer")).toBeLessThan(keys.indexOf("receiptsAssignedTransactionsGet"));
+    }
   });
 });
 
@@ -623,6 +853,7 @@ describe("neutral booking text", () => {
   });
 
   it("uses booking_text for every split and shows the text in the preview", async () => {
+    await setDK("aus");
     const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED });
     const [, generate, upload] = createMixedReceiptTools(client);
     const preview = data(await generate.handler({ ...args, booking_text: "Büroverpflegung" } as never));

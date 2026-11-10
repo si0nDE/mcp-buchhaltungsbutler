@@ -1,6 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "./server.js";
 import type { BBClient } from "./bb-client/client.js";
 import { inkLines, makeFakeScanPdf } from "./tools/mixed-receipt-scan.fixture.js";
@@ -16,6 +19,12 @@ async function connectedClient(client: BBClient) {
 function mockClient(result: unknown): BBClient {
   return { call: vi.fn().mockResolvedValue(result) };
 }
+
+const savedPolicyFile = process.env.BHB_POLICY_FILE;
+afterEach(() => {
+  if (savedPolicyFile === undefined) delete process.env.BHB_POLICY_FILE;
+  else process.env.BHB_POLICY_FILE = savedPolicyFile;
+});
 
 describe("createServer", () => {
   it("registers exactly 61 tools", () => {
@@ -169,11 +178,17 @@ describe("createServer", () => {
 
   it("passes generate_and_upload_mixed_receipt's output with booking_proposal through the MCP output-schema validation", async () => {
     const file = Buffer.from(await makeFakeScanPdf({ inkRows: inkLines(8, 30, 20, 20) })).toString("base64");
+    process.env.BHB_POLICY_FILE = join(await mkdtemp(join(tmpdir(), "bhb-server-policy-")), "policy.json");
+    await writeFile(process.env.BHB_POLICY_FILE, JSON.stringify({ tax_profile: { kleinunternehmer: false, debitoren_kreditoren: "aktiv" } }));
     let uploaded = false;
     const call = vi.fn(async (key: string, _params?: unknown, options?: { idSuffix?: number }) => {
       if (key === "receiptsGetIdByCustomer") {
         if (options?.idSuffix === 777) return { success: true, data: { id_by_customer: "777", account: "745", amount_paid: "-6.42" } };
         return { success: true, data: { id_by_customer: "42", invoicenumber: "BEISPIEL-0815", counterparty: "Beispielmarkt", date: "2026-10-01", amount: "23.45", deleted: "0", file_content: file } };
+      }
+      // earlier receipt of the merchant (the Kreditor is derived from its booking)
+      if (key === "receiptsGet" && (_params as { counterparty?: string } | undefined)?.counterparty !== undefined) {
+        return { success: true, data: [{ id_by_customer: "500", counterparty: "Beispielmarkt", invoicenumber: "BM-500", deleted: "0" }] };
       }
       if (key === "receiptsGet") return { success: true, data: uploaded ? [{ id_by_customer: "777", invoicenumber: "BEISPIEL-0815", deleted: "0", amount: "6.42" }] : [] };
       if (key === "receiptsUpload") {
@@ -182,7 +197,9 @@ describe("createServer", () => {
       }
       if (key === "accountsGet") return { success: true, data: [{ name: "Verbindlichkeiten Gesellschafter Erika Beispiel", postingaccount_number: "745" }] };
       if (key === "receiptsAssignedTransactionsGet") return { success: true, data: [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }] };
-      if (key === "postingsGet") return { success: true, data: [] };
+      if (key === "postingsGet") {
+        return { success: true, data: [{ id_by_customer: "p500", receipt_id_by_customer: "500", transaction_id_by_customer: "", debit_postingaccount_number: "4653", credit_postingaccount_number: "70555" }] };
+      }
       if (key === "commentsAdd" || key === "receiptsDeleteIdByCustomer") return { success: true };
       throw new Error(`unexpected endpoint ${key}`);
     });
@@ -208,6 +225,6 @@ describe("createServer", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent?.data?.status).toBe("uploaded");
     expect(result.structuredContent?.data?.booking_proposal?.status).toBe("ready");
-    expect(result.structuredContent?.data?.booking_proposal?.calls).toHaveLength(1);
+    expect(result.structuredContent?.data?.booking_proposal?.calls?.map((c) => (c as { tool: string }).tool)).toEqual(["add_receipt_postings", "add_transaction_postings"]);
   });
 });

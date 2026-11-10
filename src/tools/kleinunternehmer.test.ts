@@ -9,7 +9,7 @@ import {
 } from "./kleinunternehmer.js";
 import { DEFAULT_POLICY, type Policy } from "./policy.js";
 
-const policy = (kleinunternehmer: boolean | null): Policy => ({ ...structuredClone(DEFAULT_POLICY), tax_profile: { kleinunternehmer, gewinnermittlung: null } });
+const policy = (kleinunternehmer: boolean | null): Policy => ({ ...structuredClone(DEFAULT_POLICY), tax_profile: { kleinunternehmer, debitoren_kreditoren: null } });
 
 describe("kleinunternehmerStatus", () => {
   it("liest den Status aus der Policy, null wenn nicht festgelegt", async () => {

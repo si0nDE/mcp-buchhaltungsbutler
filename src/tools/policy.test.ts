@@ -55,7 +55,7 @@ describe("policy tools", () => {
 
   it("kleinunternehmer: default null, set_policy setzt ihn einzeln, ohne die Regel für ausländische Anbieter zu ändern", async () => {
     const [get, set] = createPolicyTools();
-    expect(parse(await get.handler({} as never)).tax_profile).toEqual({ kleinunternehmer: null, gewinnermittlung: null });
+    expect(parse(await get.handler({} as never)).tax_profile).toEqual({ kleinunternehmer: null, debitoren_kreditoren: null });
     await set.handler({ foreign_supplier_domestic_vat_no_rc_hint: "as_invoiced", reason: "GF 11.10.: wie ausgewiesen", confirm: true } as never);
     await set.handler({ kleinunternehmer: true, reason: "GF 09.11.: Kleinunternehmer nach § 19 UStG, Vorjahr 18.000 €", confirm: true } as never);
     const p = await loadPolicy();
@@ -73,7 +73,7 @@ describe("policy tools", () => {
 
   it("alte Policy-Dateien ohne tax_profile laden mit kleinunternehmer null; ein falscher Typ ist ein Fehler", async () => {
     await writeFile(join(dir, "alt.json"), JSON.stringify({ vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "ask" }, history: [] }));
-    expect((await loadPolicy(join(dir, "alt.json"))).tax_profile).toEqual({ kleinunternehmer: null, gewinnermittlung: null });
+    expect((await loadPolicy(join(dir, "alt.json"))).tax_profile).toEqual({ kleinunternehmer: null, debitoren_kreditoren: null });
     await writeFile(join(dir, "falsch.json"), JSON.stringify({ tax_profile: { kleinunternehmer: "ja" } }));
     await expect(loadPolicy(join(dir, "falsch.json"))).rejects.toThrow(/kleinunternehmer/);
   });
@@ -83,32 +83,39 @@ describe("policy tools", () => {
     await expect(loadPolicy(join(dir, "p.json"))).rejects.toThrow(/unbekannter Wert/);
   });
 
-  it("gewinnermittlung: default null, set/get Rundlauf, Altdatei ohne Schlüssel, ungültiger Wert", async () => {
+  it("debitoren_kreditoren: default null, set/get Rundlauf, Altdatei ohne Schlüssel, altes gewinnermittlung wird ignoriert, ungültiger Wert", async () => {
     const [get, set] = createPolicyTools();
     const first = parse(await get.handler({} as never));
-    expect(first.tax_profile.gewinnermittlung).toBeNull();
-    expect(first.allowed_values.gewinnermittlung).toEqual(["euer", "bilanz", null]);
+    expect(first.tax_profile.debitoren_kreditoren).toBeNull();
+    expect(first.tax_profile.gewinnermittlung).toBeUndefined();
+    expect(first.allowed_values.debitoren_kreditoren).toEqual(["aktiv", "aus", null]);
     expect(first.tax_profile_meaning).toBeTypeOf("string");
-    expect(first.gewinnermittlung_meaning).toMatch(/nicht festgelegt/i);
-    await set.handler({ gewinnermittlung: "euer", reason: "Steuerberater 10.11.: EÜR", confirm: true } as never);
+    expect(first.debitoren_kreditoren_meaning).toMatch(/nicht festgelegt/i);
+    await set.handler({ debitoren_kreditoren: "aktiv", reason: "GF 10.11.: Debitoren und Kreditoren aktiviert", confirm: true } as never);
     const res = parse(await get.handler({} as never));
-    expect(res.tax_profile).toEqual({ kleinunternehmer: null, gewinnermittlung: "euer" });
-    expect(res.gewinnermittlung_meaning).toMatch(/EÜR/);
-    expect((await loadPolicy()).history.at(-1)!.change).toEqual({ gewinnermittlung: { from: null, to: "euer" } });
-    await set.handler({ gewinnermittlung: "bilanz", reason: "Steuerberater: Bilanz ab 2027", confirm: true } as never);
-    expect((await loadPolicy()).tax_profile.gewinnermittlung).toBe("bilanz");
+    expect(res.tax_profile).toEqual({ kleinunternehmer: null, debitoren_kreditoren: "aktiv" });
+    expect(res.debitoren_kreditoren_meaning).toMatch(/Beleg/);
+    expect((await loadPolicy()).history.at(-1)!.change).toEqual({ debitoren_kreditoren: { from: null, to: "aktiv" } });
+    await set.handler({ debitoren_kreditoren: "aus", reason: "GF: Debitoren und Kreditoren aus", confirm: true } as never);
+    expect((await loadPolicy()).tax_profile.debitoren_kreditoren).toBe("aus");
+    expect(parse(await get.handler({} as never)).debitoren_kreditoren_meaning).toMatch(/Zahlung/);
     await set.handler({ kleinunternehmer: false, reason: "GF: Regelbesteuerung", confirm: true } as never);
-    expect((await loadPolicy()).tax_profile).toEqual({ kleinunternehmer: false, gewinnermittlung: "bilanz" });
+    expect((await loadPolicy()).tax_profile).toEqual({ kleinunternehmer: false, debitoren_kreditoren: "aus" });
     await writeFile(join(dir, "alt2.json"), JSON.stringify({ tax_profile: { kleinunternehmer: true } }));
-    expect((await loadPolicy(join(dir, "alt2.json"))).tax_profile).toEqual({ kleinunternehmer: true, gewinnermittlung: null });
-    await writeFile(join(dir, "falsch2.json"), JSON.stringify({ tax_profile: { gewinnermittlung: "ist" } }));
-    await expect(loadPolicy(join(dir, "falsch2.json"))).rejects.toThrow(/gewinnermittlung/);
+    expect((await loadPolicy(join(dir, "alt2.json"))).tax_profile).toEqual({ kleinunternehmer: true, debitoren_kreditoren: null });
+    // the never-deployed field gewinnermittlung is ignored, not migrated
+    await writeFile(join(dir, "alt3.json"), JSON.stringify({ tax_profile: { kleinunternehmer: true, gewinnermittlung: "bilanz" } }));
+    expect((await loadPolicy(join(dir, "alt3.json"))).tax_profile).toEqual({ kleinunternehmer: true, debitoren_kreditoren: null });
+    await writeFile(join(dir, "falsch2.json"), JSON.stringify({ tax_profile: { debitoren_kreditoren: "ja" } }));
+    await expect(loadPolicy(join(dir, "falsch2.json"))).rejects.toThrow(/debitoren_kreditoren/);
   });
 
-  it("set_policy lehnt einen ungültigen gewinnermittlung-Wert ab", async () => {
+  it("set_policy lehnt einen ungültigen debitoren_kreditoren-Wert ab und kennt gewinnermittlung nicht mehr", async () => {
     const [, set] = createPolicyTools();
     const schema = z.object(set.inputSchema as never);
-    expect(schema.safeParse({ gewinnermittlung: "ist", reason: "GF-Entscheidung", confirm: true }).success).toBe(false);
-    expect(schema.safeParse({ gewinnermittlung: null, reason: "GF-Entscheidung", confirm: true }).success).toBe(true);
+    expect(schema.safeParse({ debitoren_kreditoren: "ist", reason: "GF-Entscheidung", confirm: true }).success).toBe(false);
+    expect(schema.safeParse({ debitoren_kreditoren: null, reason: "GF-Entscheidung", confirm: true }).success).toBe(true);
+    expect(set.inputSchema).not.toHaveProperty("gewinnermittlung");
+    expect(set.description).toMatch(/Debitoren und Kreditoren aktivieren/);
   });
 });

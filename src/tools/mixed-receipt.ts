@@ -6,11 +6,13 @@ import { readUploadedId, toId, type UploadResponse } from "./entertainment-recei
 import { MAX_ORIGINAL_BYTES, sha256Hex } from "./entertainment-receipt-append.js";
 import { bookingTextFor, buildBookingProposal } from "./mixed-receipt-booking.js";
 import { findAuslagenkonto, type Auslagenkonto } from "./mixed-receipt-account.js";
+import { creditorInfo, findMerchantCreditor, KREDITOR_MIN } from "./mixed-receipt-creditor.js";
 import { computeMixedReceipt, type MixedReceiptAmounts } from "./mixed-receipt-calc.js";
 import { renderMixedReceiptPdf } from "./mixed-receipt-pdf.js";
 import { renderPreview } from "./mixed-receipt-preview.js";
 import { renderPdfPagesToPng } from "./mixed-receipt-render.js";
 import { assertUsableBands, findLines, findTallBands, parseLineSpec, readBilevelScan, redactLines, tallLinesWarning, writeScan } from "./mixed-receipt-scan.js";
+import { loadPolicy, type DebitorenKreditoren } from "./policy.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, withImages, type ToolDef } from "./types.js";
 
 const MIN_OCCASION_LENGTH = 15;
@@ -67,7 +69,19 @@ const generateShape = {
     .int()
     .positive()
     .optional()
-    .describe("Posting account number of the paying person's Auslagenkonto. Skips the automatic detection; the upload assigns the receipt to this account."),
+    .describe(
+      "Posting account number of the paying person's Auslagenkonto. Skips the automatic detection. Only with house rule debitoren_kreditoren 'aus' " +
+        "the upload assigns the receipt to this account; with 'aktiv' or not set it is not passed (the receipt must stay free to be booked on a Kreditor)."
+    ),
+  creditor: z
+    .number()
+    .int()
+    .min(KREDITOR_MIN)
+    .optional()
+    .describe(
+      "Posting account number of the merchant's Kreditor (Personenkonto, at least 70000) for the booking proposal. Skips the derivation from " +
+        "earlier bookings of the merchant. Only used with house rule debitoren_kreditoren 'aktiv'."
+    ),
   booking_text: z
     .string()
     .min(1)
@@ -155,31 +169,48 @@ interface AuslagenkontoInfo {
   number: number | null;
   name: string | null;
   source: "auto" | "given" | "none";
+  // Whether the upload passes the account (BuchhaltungsButler then creates a payment). Only with house rule debitoren_kreditoren "aus".
+  passed_on_upload: boolean;
   effect: string;
 }
 
 const ASSIGN_EFFECT = "Beim Upload wird der Beleg diesem Konto zugewiesen; BuchhaltungsButler legt dann eine Zahlung an, wenn das Konto 'Beleg erzeugt Zahlung' nutzt.";
 
+const DK_AKTIV_EFFECT =
+  "Hausregel Debitoren/Kreditoren aktiv: das Konto wird nicht beim Upload mitgegeben, damit der Beleg kreditorisch gebucht werden kann; die Zahlung wird später zugeordnet.";
+const DK_UNSET_EFFECT = "Hausregel nicht gesetzt (set_policy debitoren_kreditoren): Konto wird nicht mitgegeben.";
+
 // Explicit number > opt-out > detection by the paying person's name. A failing detection counts as "none" with a warning.
-async function resolveAuslagenkonto(client: BBClient, args: GenerateArgs): Promise<{ info: AuslagenkontoInfo; warnings: string[] }> {
+// The account is passed on upload only with house rule "aus": passing it makes BuchhaltungsButler create a payment ('Beleg erzeugt Zahlung'),
+// and a receipt on such an account cannot be booked on a Kreditor. The number stays in the info (the proposal uses it).
+async function resolveAuslagenkonto(client: BBClient, args: GenerateArgs, dk: DebitorenKreditoren | null): Promise<{ info: AuslagenkontoInfo; warnings: string[] }> {
   if (args.auslagenkonto !== undefined && args.without_auslagenkonto === true) {
     throw new Error("auslagenkonto und without_auslagenkonto schließen sich aus: entweder ein Konto angeben oder ohne Konto hochladen. Es wurde nichts erzeugt.");
   }
-  if (args.auslagenkonto !== undefined) return { info: { number: args.auslagenkonto, name: null, source: "given", effect: ASSIGN_EFFECT }, warnings: [] };
+  const passed = dk === "aus";
+  const effect = passed ? ASSIGN_EFFECT : dk === "aktiv" ? DK_AKTIV_EFFECT : DK_UNSET_EFFECT;
+  if (args.auslagenkonto !== undefined) {
+    return {
+      info: { number: args.auslagenkonto, name: null, source: "given", passed_on_upload: passed, effect },
+      warnings: passed
+        ? []
+        : [`auslagenkonto ${args.auslagenkonto} wird ignoriert: ${dk === "aktiv" ? "die Hausregel Debitoren/Kreditoren ist aktiv" : "die Hausregel Debitoren/Kreditoren ist nicht gesetzt"}, das Konto wird nicht beim Upload mitgegeben.`],
+    };
+  }
   if (args.without_auslagenkonto === true) {
-    return { info: { number: null, name: null, source: "none", effect: "Abgewählt (without_auslagenkonto): Der Beleg wird ohne Konto hochgeladen, BuchhaltungsButler legt keine Zahlung an." }, warnings: [] };
+    return { info: { number: null, name: null, source: "none", passed_on_upload: false, effect: "Abgewählt (without_auslagenkonto): Der Beleg wird ohne Konto hochgeladen, BuchhaltungsButler legt keine Zahlung an." }, warnings: [] };
   }
   try {
     const { found, candidates } = await findAuslagenkonto(client, args.paid_by);
-    if (found) return { info: { number: found.number, name: found.name, source: "auto", effect: ASSIGN_EFFECT }, warnings: [] };
-    const effect =
+    if (found) return { info: { number: found.number, name: found.name, source: "auto", passed_on_upload: passed, effect }, warnings: [] };
+    const noneEffect =
       candidates.length > 0
         ? `Es gibt mehrere passende Konten (${candidates.join("; ")}): Der Beleg wird ohne Konto hochgeladen. Mit auslagenkonto das richtige angeben.`
         : `Kein Konto mit dem Namen "${args.paid_by}" und "Gesellschafter" oder "Auslage" gefunden: Der Beleg wird ohne Konto hochgeladen, BuchhaltungsButler legt keine Zahlung an.`;
-    return { info: { number: null, name: null, source: "none", effect }, warnings: [] };
+    return { info: { number: null, name: null, source: "none", passed_on_upload: false, effect: noneEffect }, warnings: [] };
   } catch (error) {
     return {
-      info: { number: null, name: null, source: "none", effect: "Die Konten konnten nicht gelesen werden: Der Beleg wird ohne Konto hochgeladen." },
+      info: { number: null, name: null, source: "none", passed_on_upload: false, effect: "Die Konten konnten nicht gelesen werden: Der Beleg wird ohne Konto hochgeladen." },
       warnings: [`Auslagenkonto nicht ermittelt (${message(error)}): Beleg ohne Konto. Mit auslagenkonto lässt sich eines angeben.`],
     };
   }
@@ -261,7 +292,7 @@ async function verifyNewReceipt(
   }
 }
 
-async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
+async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs, opts: { withCreditor: boolean }) {
   if (rawArgs.auslagenkonto !== undefined && rawArgs.without_auslagenkonto === true) {
     throw new Error("auslagenkonto und without_auslagenkonto schließen sich aus: entweder ein Konto angeben oder ohne Konto hochladen. Es wurde nichts erzeugt.");
   }
@@ -300,8 +331,19 @@ async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
   const pages = await renderPdfPagesToPng(pdf);
   const bonParts = renderPreview(scan, bits, bands, { numbers: true });
   const warnings = [...amounts.warnings];
-  const konto = await resolveAuslagenkonto(client, args);
+  // House rule Debitoren/Kreditoren: a file that cannot be read counts as "not set" here (the proposal reports the real error).
+  let dk: DebitorenKreditoren | null = null;
+  try {
+    dk = (await loadPolicy()).tax_profile.debitoren_kreditoren;
+  } catch (error) {
+    warnings.push(`Hausregel Debitoren/Kreditoren nicht lesbar (${message(error)}): behandelt wie nicht gesetzt.`);
+  }
+  const konto = await resolveAuslagenkonto(client, args, dk);
   warnings.push(...konto.warnings);
+  // Only the preview shows the Kreditor (the proposal derives it again after the upload, then without the new receipt).
+  const creditor = opts.withCreditor
+    ? await creditorInfo(client, { rule: dk, given: args.creditor, merchantName: args.merchant.name, excludeIds: [args.source_receipt_id_by_customer], now: new Date() })
+    : undefined;
   if (tall.length > 0) warnings.push(tallLinesWarning(tall));
   if (!args.confirmation) warnings.push("Keine Bestätigung angegeben: Auf dem Beleg steht 'Bestätigung ausstehend'.");
   const bhbNumber = typeof original.row.invoicenumber === "string" ? original.row.invoicenumber.trim() : "";
@@ -312,6 +354,7 @@ async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
     original,
     amounts,
     auslagenkonto: konto.info,
+    creditor,
     args,
     pdf,
     date,
@@ -380,7 +423,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: generateShape,
     async handler(args) {
-      const built = await buildMixedReceipt(client, args);
+      const built = await buildMixedReceipt(client, args, { withCreditor: true });
       return withImages(
         ok({
           status: "preview",
@@ -393,6 +436,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
           booking_text: bookingTextFor(args.positions.map((p) => p.description), args.booking_text),
           booking_hint: bookingHint(built.amounts, args.paid_by),
           auslagenkonto: built.auslagenkonto,
+          creditor: built.creditor,
           images: built.images.map((i) => i.info),
           warnings: built.warnings,
           next_step:
@@ -412,9 +456,11 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
       "reimbursement) and only then soft-deletes the original (receiptsDeleteIdByCustomer; it stays archived and can be restored). " +
       "If the new receipt cannot be confirmed or the deletion fails, the original stays and next_steps says what to do. Requires " +
       "confirm: true; the delete follows that approved upload without another question. The upload assigns the receipt to the paying person's " +
-      "Auslagenkonto (detected by name, or auslagenkonto; opt out with without_auslagenkonto), so BuchhaltungsButler can create the payment. " +
-      "Finally it returns booking_proposal: a read-only proposal how to book the receipt (Bilanz) or the payment (EÜR, house rule gewinnermittlung), " +
-      "including the case that no payment exists at all; it books, assigns and creates nothing.",
+      "Auslagenkonto (detected by name, or auslagenkonto; opt out with without_auslagenkonto) only with house rule debitoren_kreditoren 'aus', so BuchhaltungsButler can " +
+      "create the payment; with 'aktiv' or not set no account is passed, so the receipt can be booked on a Kreditor. " +
+      "Finally it returns booking_proposal: a read-only proposal that follows the house rule debitoren_kreditoren (set_policy): 'aktiv' = book the receipt on the " +
+      "merchant's Kreditor (derived from earlier bookings of that merchant, or given as creditor) and let the payment only settle it; 'aus' = book the payment, " +
+      "including the case that no payment exists at all; not set = needs_decision. It books, assigns and creates nothing.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
@@ -427,7 +473,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
           "confirm ist nicht true: Erst generate_mixed_receipt aufrufen, die Vorschau dem Nutzer zeigen und nach seiner Freigabe mit confirm: true hochladen. Es wurde nichts hochgeladen."
         );
       }
-      const built = await buildMixedReceipt(client, args);
+      const built = await buildMixedReceipt(client, args, { withCreditor: false });
       const list = await client.call<{ data?: Array<Record<string, unknown>> }>("receiptsGet", {
         list_direction: "inbound",
         invoicenumber: args.receipt_number,
@@ -451,7 +497,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
         amount: built.amounts.reimbursement,
         currency: "EUR",
       };
-      if (built.auslagenkonto.number !== null) uploadParams.account = built.auslagenkonto.number;
+      if (built.auslagenkonto.number !== null && built.auslagenkonto.passed_on_upload) uploadParams.account = built.auslagenkonto.number;
       if (built.amounts.rates.length === 1) uploadParams.vat_rate = built.amounts.rates[0].vat_rate;
       let newId: string | number | undefined;
       try {
@@ -507,7 +553,10 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
         bookingText: built.args.booking_text,
         receiptDate: built.date,
         auslagenkonto,
-        accountPassedOnUpload: auslagenkonto !== null,
+        accountPassedOnUpload: auslagenkonto !== null && built.auslagenkonto.passed_on_upload,
+        sourceId: args.source_receipt_id_by_customer,
+        creditor: args.creditor,
+        merchantName: built.args.merchant.name,
       });
       return ok({
         status: "uploaded",
