@@ -36,6 +36,12 @@ export class SheetOverflowError extends Error {
   }
 }
 
+// Headline in bold, a trailing "(…)" part below it in regular weight (section() draws the first value bold).
+export function splitOccasion(occasion: string): string[] {
+  const m = /^(.+?)\s*(\([^()]*\))\s*$/.exec(occasion.trim());
+  return m ? [m[1], m[2]] : [occasion.trim()];
+}
+
 export async function renderMixedReceiptPdf(sheet: MixedReceiptSheet, redactedScanPdf: Uint8Array): Promise<{ pdf: Uint8Array; bonOnSecondPage: boolean }> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -111,7 +117,7 @@ export async function renderMixedReceiptPdf(sheet: MixedReceiptSheet, redactedSc
     `Summe ${formatEuro(sheet.receiptTotal)}${sheet.paymentMethod ? `, ${sheet.paymentMethod}` : ""}`,
   ]);
   section("3", "Ausgelegt von", [sheet.paidBy, "privat bezahlt, Erstattung durch das Unternehmen"]);
-  section("4", "Anlass", [sheet.occasion]);
+  section("4", "Anlass", splitOccasion(sheet.occasion));
 
   // 5 Business positions
   need(18 + 19);
@@ -198,7 +204,8 @@ export async function renderMixedReceiptPdf(sheet: MixedReceiptSheet, redactedSc
   const fy = MARGIN - 10;
   page.drawLine({ start: { x: MARGIN, y: fy + 14 }, end: { x: width - MARGIN, y: fy + 14 }, thickness: 0.5, color: LIGHT_RULE });
   page.drawText(sheet.companyName, { x: MARGIN, y: fy, size: 8, font, color: GRAY });
-  right(page, bonOnSecondPage ? "Seite 2: geschwärzte Kopie des Kassenbons" : "Links: geschwärzte Kopie des Kassenbons", width - MARGIN, fy, 8, font, GRAY);
+  // With the receipt beside the data its caption "Geschwärzte Kopie" says it; the footer only points to page 2.
+  if (bonOnSecondPage) right(page, "Seite 2: geschwärzte Kopie des Kassenbons", width - MARGIN, fy, 8, font, GRAY);
   page.drawText(`SHA-256 Originaldokument: ${sheet.originalSha256}`, { x: MARGIN, y: fy - 11, size: 6.5, font, color: GRAY });
 
   return { pdf: await doc.save(), bonOnSecondPage };

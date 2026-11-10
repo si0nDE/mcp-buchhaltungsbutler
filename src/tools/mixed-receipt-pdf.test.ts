@@ -2,7 +2,7 @@ import { PDFDocument } from "pdf-lib";
 import { extractText, getDocumentProxy } from "unpdf";
 import { describe, expect, it } from "vitest";
 import { computeMixedReceipt } from "./mixed-receipt-calc.js";
-import { renderMixedReceiptPdf, SheetOverflowError, type MixedReceiptSheet } from "./mixed-receipt-pdf.js";
+import { renderMixedReceiptPdf, SheetOverflowError, splitOccasion, type MixedReceiptSheet } from "./mixed-receipt-pdf.js";
 import { inkLines, makeFakeScanPdf } from "./mixed-receipt-scan.fixture.js";
 
 const positions = [
@@ -42,6 +42,20 @@ async function textOf(pdf: Uint8Array): Promise<string> {
   return text.replace(/\s+/g, " ");
 }
 
+describe("splitOccasion", () => {
+  it("splits a trailing parenthesis from the headline", () => {
+    expect(splitOccasion("Milch für Kaffee im Büro (Besprechungen und Team)")).toEqual(["Milch für Kaffee im Büro", "(Besprechungen und Team)"]);
+  });
+
+  it("keeps an occasion without parenthesis as the headline only", () => {
+    expect(splitOccasion("Milch für Kaffee im Büro")).toEqual(["Milch für Kaffee im Büro"]);
+  });
+
+  it("does not turn a text that starts with a parenthesis into an empty headline", () => {
+    expect(splitOccasion("(nur Klammer)")).toEqual(["(nur Klammer)"]);
+  });
+});
+
 describe("renderMixedReceiptPdf", () => {
   it("puts letterhead, receipt data, positions, result, hint and hash on one page", async () => {
     const scan = await makeFakeScanPdf({ width: 1800, height: 6000, inkRows: inkLines(10) });
@@ -62,10 +76,12 @@ describe("renderMixedReceiptPdf", () => {
       "Bestätigung ausstehend",
       "Rg. BEISPIEL-0815 · Beispielmarkt · 01.10.2026 · 23,45 €",
       `SHA-256 Originaldokument: ${SHA}`,
-      "Links: geschwärzte Kopie des Kassenbons",
+      "Geschwärzte Kopie",
     ]) {
       expect(text, expected).toContain(expected);
     }
+    // the caption under the receipt says it already; the footer does not repeat it
+    expect(text).not.toContain("Links: geschwärzte Kopie des Kassenbons");
   });
 
   it("prints the confirmation only when one is given", async () => {
