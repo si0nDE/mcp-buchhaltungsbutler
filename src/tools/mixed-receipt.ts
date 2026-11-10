@@ -4,6 +4,8 @@ import type { BBClient } from "../bb-client/client.js";
 import { receiptDisplayRef } from "../formatting/display-ref.js";
 import { readUploadedId, toId, type UploadResponse } from "./entertainment-receipt.js";
 import { MAX_ORIGINAL_BYTES, sha256Hex } from "./entertainment-receipt-append.js";
+import { buildBookingProposal } from "./mixed-receipt-booking.js";
+import { findAuslagenkonto, type Auslagenkonto } from "./mixed-receipt-account.js";
 import { computeMixedReceipt, type MixedReceiptAmounts } from "./mixed-receipt-calc.js";
 import { renderMixedReceiptPdf } from "./mixed-receipt-pdf.js";
 import { renderPreview } from "./mixed-receipt-preview.js";
@@ -60,6 +62,16 @@ const generateShape = {
     .object({ name: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
     .optional()
     .describe("Only if the paying person explicitly confirmed the receipt; otherwise omit."),
+  auslagenkonto: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Posting account number of the paying person's Auslagenkonto. Skips the automatic detection; the upload assigns the receipt to this account."),
+  without_auslagenkonto: z
+    .boolean()
+    .optional()
+    .describe("true = upload without an account (opt out of the automatically detected Auslagenkonto). Not together with auslagenkonto."),
 };
 
 type GenerateArgs = z.infer<z.ZodObject<typeof generateShape>>;
@@ -129,6 +141,40 @@ function bookingHint(a: MixedReceiptAmounts, paidBy: string) {
   };
 }
 
+interface AuslagenkontoInfo {
+  number: number | null;
+  name: string | null;
+  source: "auto" | "given" | "none";
+  effect: string;
+}
+
+const ASSIGN_EFFECT = "Beim Upload wird der Beleg diesem Konto zugewiesen; BuchhaltungsButler legt dann eine Zahlung an, wenn das Konto 'Beleg erzeugt Zahlung' nutzt.";
+
+// Explicit number > opt-out > detection by the paying person's name. A failing detection counts as "none" with a warning.
+async function resolveAuslagenkonto(client: BBClient, args: GenerateArgs): Promise<{ info: AuslagenkontoInfo; warnings: string[] }> {
+  if (args.auslagenkonto !== undefined && args.without_auslagenkonto === true) {
+    throw new Error("auslagenkonto und without_auslagenkonto schließen sich aus: entweder ein Konto angeben oder ohne Konto hochladen. Es wurde nichts erzeugt.");
+  }
+  if (args.auslagenkonto !== undefined) return { info: { number: args.auslagenkonto, name: null, source: "given", effect: ASSIGN_EFFECT }, warnings: [] };
+  if (args.without_auslagenkonto === true) {
+    return { info: { number: null, name: null, source: "none", effect: "Abgewählt (without_auslagenkonto): Der Beleg wird ohne Konto hochgeladen, BuchhaltungsButler legt keine Zahlung an." }, warnings: [] };
+  }
+  try {
+    const { found, candidates } = await findAuslagenkonto(client, args.paid_by);
+    if (found) return { info: { number: found.number, name: found.name, source: "auto", effect: ASSIGN_EFFECT }, warnings: [] };
+    const effect =
+      candidates.length > 0
+        ? `Es gibt mehrere passende Konten (${candidates.join("; ")}): Der Beleg wird ohne Konto hochgeladen. Mit auslagenkonto das richtige angeben.`
+        : `Kein Konto mit dem Namen "${args.paid_by}" und "Gesellschafter" oder "Auslage" gefunden: Der Beleg wird ohne Konto hochgeladen, BuchhaltungsButler legt keine Zahlung an.`;
+    return { info: { number: null, name: null, source: "none", effect }, warnings: [] };
+  } catch (error) {
+    return {
+      info: { number: null, name: null, source: "none", effect: "Die Konten konnten nicht gelesen werden: Der Beleg wird ohne Konto hochgeladen." },
+      warnings: [`Auslagenkonto nicht ermittelt (${message(error)}): Beleg ohne Konto. Mit auslagenkonto lässt sich eines angeben.`],
+    };
+  }
+}
+
 // Free text goes onto the PDF and into one-line fields: line breaks become ", ".
 function oneLine(text: string): string {
   return text.replace(/\s*[\r\n]+\s*/g, ", ").trim();
@@ -185,7 +231,7 @@ async function verifyNewReceipt(
   sourceId: number,
   newId: string | number | undefined,
   reimbursement: number
-): Promise<boolean> {
+): Promise<{ ok: boolean; id?: string | number }> {
   try {
     const list = await client.call<{ data?: Array<Record<string, unknown>> }>("receiptsGet", {
       list_direction: "inbound",
@@ -193,18 +239,22 @@ async function verifyNewReceipt(
       limit: 500,
       offset: 0,
     });
-    return (list.data ?? []).some((row) => {
-      const id = toId(row.id_by_customer);
-      if (id === sourceId || isDeleted(row)) return false;
+    const row = (list.data ?? []).find((r) => {
+      const id = toId(r.id_by_customer);
+      if (id === sourceId || isDeleted(r)) return false;
       if (newId !== undefined && id !== newId) return false;
-      return Math.abs(Number(row.amount) - reimbursement) <= AMOUNT_TOLERANCE + 1e-9;
+      return Math.abs(Number(r.amount) - reimbursement) <= AMOUNT_TOLERANCE + 1e-9;
     });
+    return row ? { ok: true, id: toId(row.id_by_customer) } : { ok: false };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
 
 async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
+  if (rawArgs.auslagenkonto !== undefined && rawArgs.without_auslagenkonto === true) {
+    throw new Error("auslagenkonto und without_auslagenkonto schließen sich aus: entweder ein Konto angeben oder ohne Konto hochladen. Es wurde nichts erzeugt.");
+  }
   const args = await sanitiseFreeText(rawArgs);
   if (args.occasion.trim().length < MIN_OCCASION_LENGTH) {
     throw new Error(`Anlass "${args.occasion}" ist zu knapp (mindestens ${MIN_OCCASION_LENGTH} Zeichen): konkret sagen, wofür der Einkauf ist. Es wurde nichts erzeugt.`);
@@ -240,6 +290,8 @@ async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
   const pages = await renderPdfPagesToPng(pdf);
   const bonParts = renderPreview(scan, bits, bands, { numbers: true });
   const warnings = [...amounts.warnings];
+  const konto = await resolveAuslagenkonto(client, args);
+  warnings.push(...konto.warnings);
   if (tall.length > 0) warnings.push(tallLinesWarning(tall));
   if (!args.confirmation) warnings.push("Keine Bestätigung angegeben: Auf dem Beleg steht 'Bestätigung ausstehend'.");
   const bhbNumber = typeof original.row.invoicenumber === "string" ? original.row.invoicenumber.trim() : "";
@@ -249,6 +301,8 @@ async function buildMixedReceipt(client: BBClient, rawArgs: GenerateArgs) {
   return {
     original,
     amounts,
+    auslagenkonto: konto.info,
+    args,
     pdf,
     date,
     warnings,
@@ -326,6 +380,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
           bon_on_second_page: built.bonOnSecondPage,
           amounts: amountsView(built.amounts),
           booking_hint: bookingHint(built.amounts, args.paid_by),
+          auslagenkonto: built.auslagenkonto,
           images: built.images.map((i) => i.info),
           warnings: built.warnings,
           next_step:
@@ -344,7 +399,10 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
       "a comment to the original. Then it checks that the new receipt is in BuchhaltungsButler (active, same receipt number, amount = " +
       "reimbursement) and only then soft-deletes the original (receiptsDeleteIdByCustomer; it stays archived and can be restored). " +
       "If the new receipt cannot be confirmed or the deletion fails, the original stays and next_steps says what to do. Requires " +
-      "confirm: true; the delete follows that approved upload without another question. Then book the new receipt via the Auslagenkonto (booking_hint).",
+      "confirm: true; the delete follows that approved upload without another question. The upload assigns the receipt to the paying person's " +
+      "Auslagenkonto (detected by name, or auslagenkonto; opt out with without_auslagenkonto), so BuchhaltungsButler can create the payment. " +
+      "Finally it returns booking_proposal: a read-only proposal how to book the receipt (Bilanz) or the payment (EÜR, house rule gewinnermittlung), " +
+      "including the case that no payment exists at all; it books, assigns and creates nothing.",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
@@ -381,6 +439,7 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
         amount: built.amounts.reimbursement,
         currency: "EUR",
       };
+      if (built.auslagenkonto.number !== null) uploadParams.account = built.auslagenkonto.number;
       if (built.amounts.rates.length === 1) uploadParams.vat_rate = built.amounts.rates[0].vat_rate;
       let newId: string | number | undefined;
       try {
@@ -404,7 +463,8 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
         commentError = message(error);
       }
       // The original is soft-deleted only after the new receipt is confirmed in BuchhaltungsButler (nothing is deleted physically).
-      const verified = await verifyNewReceipt(client, args.receipt_number, args.source_receipt_id_by_customer, newId, built.amounts.reimbursement);
+      const check = await verifyNewReceipt(client, args.receipt_number, args.source_receipt_id_by_customer, newId, built.amounts.reimbursement);
+      const verified = check.ok;
       let originalDeleted = false;
       let deleteError: string | undefined;
       if (verified) {
@@ -424,6 +484,19 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
           : [
               "Der neue Beleg war in BuchhaltungsButler nicht eindeutig zu finden, deshalb bleibt das Original aktiv: mit list_receipts (Bonnummer) prüfen und dann set_receipt_deleted auf das Original. Bis dahin das Original nicht buchen.",
             ];
+      // Read-only proposal after the delete step; never throws (failure = status "unavailable").
+      const auslagenkonto: Auslagenkonto | null =
+        built.auslagenkonto.number === null ? null : { number: built.auslagenkonto.number, name: built.auslagenkonto.name ?? `Konto ${built.auslagenkonto.number}` };
+      const bookingProposal = await buildBookingProposal(client, {
+        newId: newId ?? check.id,
+        amounts: built.amounts,
+        positions: built.args.positions,
+        merchant: built.args.merchant.name,
+        paidBy: built.args.paid_by,
+        receiptDate: built.date,
+        auslagenkonto,
+        accountPassedOnUpload: auslagenkonto !== null,
+      });
       return ok({
         status: "uploaded",
         new_receipt_id_by_customer: newId ?? null,
@@ -437,10 +510,12 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
         ...(commentError ? { comment_error: commentError } : {}),
         amounts: amountsView(built.amounts),
         booking_hint: bookingHint(built.amounts, args.paid_by),
+        auslagenkonto: built.auslagenkonto,
+        booking_proposal: bookingProposal,
         warnings: built.warnings,
         next_steps: [
           ...deleteSteps,
-          "Den neuen Beleg über das Auslagenkonto buchen (booking_hint).",
+          "Buchung des neuen Belegs bzw. der Zahlung: booking_proposal (nur ein Vorschlag, das Tool bucht nichts).",
           ...(commentAdded ? [] : [`Kommentar am Original fehlt: mit add_comment nachtragen ("Original zur geschwärzten Fassung ${newRef}").`]),
         ],
       });

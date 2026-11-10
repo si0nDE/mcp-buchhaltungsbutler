@@ -79,7 +79,7 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
     ],
     konnektor: [
       "create_account (type other, postingaccount_number, receipt_creates_transaction true), create_transactions für die manuelle Zahlung.",
-      "Gemischter Bon (private und geschäftliche Positionen, privat bezahlt): prepare_mixed_receipt, generate_mixed_receipt, generate_and_upload_mixed_receipt erzeugen einen Auslagenbeleg mit geschwärzten privaten Positionen und Vorsteuer je Steuersatz; das Original bleibt in BHB (docs/gemischte-belege-faq.md).",
+      "Gemischter Bon (private und geschäftliche Positionen, privat bezahlt): prepare_mixed_receipt, generate_mixed_receipt, generate_and_upload_mixed_receipt erzeugen einen Auslagenbeleg mit geschwärzten privaten Positionen und Vorsteuer je Steuersatz; das Original bleibt in BHB (docs/gemischte-belege-faq.md). Der Upload gibt das Auslagenkonto der Person mit (Erkennung am Namen, abwählbar mit without_auslagenkonto) und liefert danach booking_proposal: nur ein Vorschlag (Konto 4653 | 6643, Split je Steuersatz), je nach Hausregel gewinnermittlung (set_policy): mit Zahlung add_transaction_postings; mit EÜR kann es gar keine Zahlung geben, wenn nur Geschäftskonten angelegt sind (Weg: Auslagenkonto anlegen, freie Buchung gegen Privateinlagen, Erstattung abwarten); mit Bilanz add_receipt_postings auf den Kreditor der Person.",
     ],
   },
   {

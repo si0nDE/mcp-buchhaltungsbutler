@@ -166,4 +166,48 @@ describe("createServer", () => {
     expect(result.content.some((c) => c.type === "image" && c.mimeType === "image/png")).toBe(true);
     expect(result.structuredContent?.data?.line_count).toBe(8);
   });
+
+  it("passes generate_and_upload_mixed_receipt's output with booking_proposal through the MCP output-schema validation", async () => {
+    const file = Buffer.from(await makeFakeScanPdf({ inkRows: inkLines(8, 30, 20, 20) })).toString("base64");
+    let uploaded = false;
+    const call = vi.fn(async (key: string, _params?: unknown, options?: { idSuffix?: number }) => {
+      if (key === "receiptsGetIdByCustomer") {
+        if (options?.idSuffix === 777) return { success: true, data: { id_by_customer: "777", account: "732", amount_paid: "-6.42" } };
+        return { success: true, data: { id_by_customer: "42", invoicenumber: "BEISPIEL-0815", counterparty: "Beispielmarkt", date: "2026-10-01", amount: "23.45", deleted: "0", file_content: file } };
+      }
+      if (key === "receiptsGet") return { success: true, data: uploaded ? [{ id_by_customer: "777", invoicenumber: "BEISPIEL-0815", deleted: "0", amount: "6.42" }] : [] };
+      if (key === "receiptsUpload") {
+        uploaded = true;
+        return { success: true, data: { id_by_customer: 777 } };
+      }
+      if (key === "accountsGet") return { success: true, data: [{ name: "Verbindlichkeiten Gesellschafter Erika Beispiel", postingaccount_number: "732" }] };
+      if (key === "receiptsAssignedTransactionsGet") return { success: true, data: [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }] };
+      if (key === "postingsGet") return { success: true, data: [] };
+      if (key === "commentsAdd" || key === "receiptsDeleteIdByCustomer") return { success: true };
+      throw new Error(`unexpected endpoint ${key}`);
+    });
+    const mcp = await connectedClient({ call } as unknown as BBClient);
+    const result = (await mcp.callTool({
+      name: "generate_and_upload_mixed_receipt",
+      arguments: {
+        source_receipt_id_by_customer: 42,
+        redact_lines: ["3-5", 7],
+        positions: [{ description: "Milch 1 l", gross: 1.98, vat_rate: 7 }, { description: "Mineralwasser", gross: 4.44, vat_rate: 19 }],
+        receipt_total: 23.45,
+        receipt_vat_lines: [{ vat_rate: 7, net: 15.0, vat: 1.05 }, { vat_rate: 19, net: 6.22, vat: 1.18 }],
+        merchant: { name: "Beispielmarkt", address: "Musterstraße 1, 12345 Musterstadt" },
+        receipt_number: "BEISPIEL-0815",
+        receipt_datetime: "2026-10-01 10:15",
+        paid_by: "Erika Beispiel",
+        occasion: "Milch und Wasser für Kundenbesprechungen im Büro",
+        company_name: "Beispiel GmbH",
+        company_address: "Beispielweg 2, 12345 Musterstadt",
+        confirm: true,
+      },
+    })) as { isError?: boolean; structuredContent?: { data?: { status?: string; booking_proposal?: { status?: string; calls?: unknown[] } } } };
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent?.data?.status).toBe("uploaded");
+    expect(result.structuredContent?.data?.booking_proposal?.status).toBe("ready");
+    expect(result.structuredContent?.data?.booking_proposal?.calls).toHaveLength(1);
+  });
 });

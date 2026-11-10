@@ -12,16 +12,20 @@ import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
 export const FOREIGN_SUPPLIER_RULES = ["ask", "as_invoiced", "reverse_charge_strict"] as const;
 export type ForeignSupplierRule = (typeof FOREIGN_SUPPLIER_RULES)[number];
 
+export const GEWINNERMITTLUNG_VALUES = ["euer", "bilanz"] as const;
+export type Gewinnermittlung = (typeof GEWINNERMITTLUNG_VALUES)[number];
+
 export interface Policy {
   vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: ForeignSupplierRule };
   // Kleinunternehmer nach § 19 UStG: true, false oder null (nicht festgelegt). Die BHB-API liefert den Status nicht.
-  tax_profile: { kleinunternehmer: boolean | null };
+  // Gewinnermittlung: "euer" (Einnahmenüberschussrechnung), "bilanz" oder null (nicht festgelegt). Wird nie aus Buchungen abgeleitet.
+  tax_profile: { kleinunternehmer: boolean | null; gewinnermittlung: Gewinnermittlung | null };
   history: Array<{ at: string; change: Record<string, unknown>; reason: string }>;
 }
 
 export const DEFAULT_POLICY: Policy = {
   vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "ask" },
-  tax_profile: { kleinunternehmer: null },
+  tax_profile: { kleinunternehmer: null, gewinnermittlung: null },
   history: [],
 };
 
@@ -49,9 +53,13 @@ export async function loadPolicy(path = policyFilePath()): Promise<Policy> {
   if (ku !== undefined && ku !== null && typeof ku !== "boolean") {
     throw new Error(`Policy-Datei ${path}: tax_profile.kleinunternehmer muss true, false oder null sein, ist "${String(ku)}".`);
   }
+  const gw = parsed.tax_profile?.gewinnermittlung;
+  if (gw !== undefined && gw !== null && !GEWINNERMITTLUNG_VALUES.includes(gw)) {
+    throw new Error(`Policy-Datei ${path}: tax_profile.gewinnermittlung muss "euer", "bilanz" oder null sein, ist "${String(gw)}".`);
+  }
   return {
     vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: rule ?? "ask" },
-    tax_profile: { kleinunternehmer: ku ?? null },
+    tax_profile: { kleinunternehmer: ku ?? null, gewinnermittlung: gw ?? null },
     history: Array.isArray(parsed.history) ? parsed.history : [],
   };
 }
@@ -62,6 +70,13 @@ const kuText = (ku: boolean | null) =>
     : ku === false
       ? "Regelbesteuerung (kein Kleinunternehmer)."
       : "Nicht festgelegt: keine Kleinunternehmer-Prüfung. Den Nutzer fragen, wenn es darauf ankommt.";
+
+const gwText = (gw: Gewinnermittlung | null) =>
+  gw === "euer"
+    ? "EÜR: gebucht werden Zahlungen (add_transaction_postings); ohne angelegte Zahlung gibt es nichts zu buchen. Der Buchungsvorschlag für gemischte Belege richtet sich danach."
+    : gw === "bilanz"
+      ? "Bilanz: Belege werden gebucht (add_receipt_postings auf Kreditor/Debitor), die Zahlung danach. Der Buchungsvorschlag für gemischte Belege richtet sich danach."
+      : "Nicht festgelegt: der Buchungsvorschlag für gemischte Belege zeigt beide Wege. Den Nutzer oder Steuerberater fragen, wenn es darauf ankommt.";
 
 const RULE_TEXT: Record<ForeignSupplierRule, string> = {
   ask: "Jeder Fall wird als Entscheidung gemeldet.",
@@ -76,7 +91,8 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
     description:
       "Read the house rules (Hausregeln) of this client for legal questions without a clear answer, e.g. foreign suppliers that show German VAT without a " +
       "reverse-charge note (audit_vat_period respects it; default 'ask' = report every case as a decision), and the tax profile: kleinunternehmer " +
-      "(§ 19 UStG; true, false or null = not set; the BHB API does not expose it). Read-only.",
+      "(§ 19 UStG; true, false or null = not set; the BHB API does not expose it) and gewinnermittlung ('euer', 'bilanz' or null = not set; steers the booking " +
+      "proposal after a mixed receipt). Read-only.",
     annotations: { readOnlyHint: true, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {},
@@ -88,7 +104,12 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
         meaning: RULE_TEXT[policy.vat_policy.foreign_supplier_domestic_vat_no_rc_hint],
         tax_profile: policy.tax_profile,
         tax_profile_meaning: kuText(policy.tax_profile.kleinunternehmer),
-        allowed_values: { foreign_supplier_domestic_vat_no_rc_hint: FOREIGN_SUPPLIER_RULES, kleinunternehmer: [true, false, null] },
+        gewinnermittlung_meaning: gwText(policy.tax_profile.gewinnermittlung),
+        allowed_values: {
+          foreign_supplier_domestic_vat_no_rc_hint: FOREIGN_SUPPLIER_RULES,
+          kleinunternehmer: [true, false, null],
+          gewinnermittlung: [...GEWINNERMITTLUNG_VALUES, null],
+        },
         history: policy.history.slice(-10),
       });
     },
@@ -101,19 +122,21 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
       "(it goes into the change history). Give at least one of: foreign_supplier_domestic_vat_no_rc_hint: 'ask' (default), 'as_invoiced' (book as invoiced, " +
       "Vorsteuer, no § 13b) or 'reverse_charge_strict' (§ 13b by law, invoiced VAT not deductible); kleinunternehmer: true (§ 19 UStG applies), false " +
       "(Regelbesteuerung) or null (unknown). Set kleinunternehmer only from the user's or Steuerberater's statement, never from the bookings; when the limit " +
-      "is exceeded mid-year or the user waived § 19 (Verzicht), set it to false. Writes the policy file (BHB_POLICY_FILE); the file must persist (volume in a container).",
+      "is exceeded mid-year or the user waived § 19 (Verzicht), set it to false. gewinnermittlung: 'euer', 'bilanz' or null; set it only from the user's or " +
+      "Steuerberater's statement (GmbH/UG bilanzieren, a Einzelunternehmen often uses EÜR), never infer it from the bookings. Writes the policy file (BHB_POLICY_FILE); the file must persist (volume in a container).",
     annotations: { readOnlyHint: false, destructiveHint: false },
     outputSchema: OBJECT_OUTPUT_SHAPE,
     inputSchema: {
       foreign_supplier_domestic_vat_no_rc_hint: z.enum(FOREIGN_SUPPLIER_RULES).optional(),
       kleinunternehmer: z.boolean().nullable().optional().describe("§ 19 UStG: true = Kleinunternehmer, false = Regelbesteuerung, null = nicht festgelegt."),
+      gewinnermittlung: z.enum(GEWINNERMITTLUNG_VALUES).nullable().optional().describe("'euer' = Einnahmenüberschussrechnung, 'bilanz' = Bilanzierung, null = nicht festgelegt."),
       reason: z.string().min(5).describe("Who decided what and why, e.g. 'GF 11.10.2026: wie ausgewiesen buchen, Differenz ca. 12 € je Quartal'."),
       confirm: z.boolean().describe("Must be true: the user confirmed the change."),
     },
     async handler(args) {
       if (args.confirm !== true) throw new Error("set_policy ändert eine Hausregel nur mit confirm: true nach ausdrücklicher Entscheidung des Nutzers.");
-      if (args.foreign_supplier_domestic_vat_no_rc_hint === undefined && args.kleinunternehmer === undefined) {
-        throw new Error("set_policy braucht mindestens einen Wert: foreign_supplier_domestic_vat_no_rc_hint oder kleinunternehmer.");
+      if (args.foreign_supplier_domestic_vat_no_rc_hint === undefined && args.kleinunternehmer === undefined && args.gewinnermittlung === undefined) {
+        throw new Error("set_policy braucht mindestens einen Wert: foreign_supplier_domestic_vat_no_rc_hint, kleinunternehmer oder gewinnermittlung.");
       }
       const path = policyFilePath();
       const before = await loadPolicy(path);
@@ -124,9 +147,11 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
       }
       const ku = args.kleinunternehmer === undefined ? before.tax_profile.kleinunternehmer : args.kleinunternehmer;
       if (args.kleinunternehmer !== undefined) change.kleinunternehmer = { from: before.tax_profile.kleinunternehmer, to: ku };
+      const gw = args.gewinnermittlung === undefined ? before.tax_profile.gewinnermittlung : args.gewinnermittlung;
+      if (args.gewinnermittlung !== undefined) change.gewinnermittlung = { from: before.tax_profile.gewinnermittlung, to: gw };
       const next: Policy = {
         vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: rule },
-        tax_profile: { kleinunternehmer: ku },
+        tax_profile: { kleinunternehmer: ku, gewinnermittlung: gw },
         history: [...before.history, { at: new Date().toISOString(), change, reason: args.reason }],
       };
       await mkdir(dirname(path), { recursive: true });
@@ -139,6 +164,7 @@ export function createPolicyTools(): [ToolDef, ToolDef] {
         change,
         meaning: RULE_TEXT[rule],
         tax_profile_meaning: kuText(ku),
+        gewinnermittlung_meaning: gwText(gw),
       });
     },
   });

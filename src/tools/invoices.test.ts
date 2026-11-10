@@ -170,7 +170,7 @@ describe("invoices tools", () => {
 describe("create_invoice: Kleinunternehmer laut Hausregel (§ 19 UStG)", () => {
   const ku = (kleinunternehmer: boolean | null) => async () => ({
     vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "ask" as const },
-    tax_profile: { kleinunternehmer },
+    tax_profile: { kleinunternehmer, gewinnermittlung: null },
     history: [],
   });
   const base = { type: "invoice" as const, show_prices_type: "net" as const, company_name: "Muster GmbH", date: "2026-11-09", draft: false };

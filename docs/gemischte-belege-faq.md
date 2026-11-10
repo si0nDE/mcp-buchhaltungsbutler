@@ -12,7 +12,21 @@ Jemand kauft privat ein, auf demselben Bon stehen Dinge fürs Büro, bezahlt wur
 2. `prepare_mixed_receipt` zeigt den Bon mit Zeilennummern und die Fragen, die vorher zu klären sind.
 3. Fragen beantworten: welche Zeilen geschäftlich sind, Pfand und Rabatte, Bonnummer, wer ausgelegt hat, Anlass, MwSt-Zeilen des Bons, Bestätigung.
 4. `generate_mixed_receipt` zeigt die fertige Seite als Bild. Nichts wird hochgeladen.
-5. Nach Freigabe `generate_and_upload_mixed_receipt` mit `confirm: true`: Upload mit gesetzten Feldern, Kommentar am Original. Sobald der neue Beleg in BuchhaltungsButler bestätigt ist, löscht das Tool das Original (soft). Danach wird der neue Beleg über das Auslagenkonto gebucht.
+5. Nach Freigabe `generate_and_upload_mixed_receipt` mit `confirm: true`: Upload mit gesetzten Feldern, Kommentar am Original. Sobald der neue Beleg in BuchhaltungsButler bestätigt ist, löscht das Tool das Original (soft). Der Upload weist den Beleg dem Auslagenkonto der Person zu (falls gefunden), danach liefert die Antwort einen Buchungsvorschlag (`booking_proposal`, siehe unten).
+
+## Wie wird der Beleg gebucht?
+
+Das Tool bucht nichts. Nach dem Upload und dem Löschen des Originals liefert es in `booking_proposal` einen Vorschlag, den man prüft und selbst ausführt. Er hängt von drei Dingen ab: Gibt es eine Zahlung zum Beleg, ist die Gewinnermittlung EÜR oder Bilanz (Hausregel `gewinnermittlung`, `set_policy`, nur nach Aussage des Nutzers oder Steuerberaters; nicht festgelegt zeigt beide Wege), und wurde das Auslagenkonto gefunden.
+
+**Auslagenkonto.** Der Upload gibt das Konto der auslegenden Person mit (`account`), erkannt am Namen plus "Gesellschafter" oder "Auslage". Nutzt das Konto 'Beleg erzeugt Zahlung', legt BuchhaltungsButler die Zahlung selbst an (Erstattungsbetrag, die Gegenbuchung läuft über das Konto). Die Vorschau zeigt, welches Konto gewählt wird. Anderes Konto: `auslagenkonto` angeben; ohne Konto hochladen: `without_auslagenkonto: true`.
+
+**Zahlung ist dem Beleg zugeordnet** (der Normalfall mit Auslagenkonto): Vorschlag `add_transaction_postings` auf diese Zahlung, ein Split je Steuersatz, Konto 4653 (SKR03; SKR04 6643; alternativ 4980 | 6850 Sonstiger Betriebsbedarf, das Konto legt der Steuerberater fest), Vorsteuer-Code 7_pre bzw. 19_pre, Buchungstext "Positionen - Händler". Ist die Zahlung schon gebucht, sagt der Vorschlag das (`already_booked`); weicht ihr Betrag ab oder sind es mehrere, nennt er die Beträge und fragt (`needs_decision`).
+
+**Mit EÜR gibt es unter Umständen keine Zahlung.** Eine EÜR bucht nur Zahlungen. Sind nur Geschäftskonten angelegt und hat die Person privat bezahlt, existiert zu dem Beleg in BuchhaltungsButler keine Zahlung, die man buchen könnte. Das ist normal, kein Fehler. Der Vorschlag sucht zuerst eine Erstattung (Abgang in Höhe des Erstattungsbetrags, Name der Person, 60 Tage ab Belegdatum) und nennt Treffer zur Auswahl. Ohne Treffer (`no_payment_exists`) bleiben drei Wege: (1) ein Auslagenkonto anlegen (`create_account`, type other, 'Beleg erzeugt Zahlung'), den Beleg zuweisen und die erzeugte Zahlung buchen; (2) ohne Konto per `add_free_postings` Soll 4653 an Haben Privateinlagen (Einzelunternehmen 1890 | 2180, GmbH/UG 730 | 3510) mit dem Beleg buchen, wobei eine freie Buchung mit Beleg in BuchhaltungsButler nicht als Zahlung zählt; (3) die Erstattung abwarten, dann zuordnen und buchen. Hat der Inhaber eines Einzelunternehmens selbst ausgelegt, ist es keine Erstattung, sondern eine Privateinlage.
+
+**Mit Bilanz** bucht man den Beleg (`add_receipt_postings`) auf die Verbindlichkeit gegenüber der Person und später die Erstattung gegen diesen Kreditor (0_none). Die Nummer des Kreditor-Personenkontos kennt der Connector nicht; der Vorschlag beschreibt den Weg und gibt keinen fertigen Aufruf (`needs_decision`). Ein Beleg auf einem Konto mit 'Beleg erzeugt Zahlung' lässt sich nicht auf einen Kreditor buchen.
+
+Lassen sich die Lesezugriffe für den Vorschlag nicht ausführen, bleibt der Upload gültig, `booking_proposal.status` ist `unavailable` und nennt den Grund.
 
 ## Warum nur Schwarz-Weiß-Scans ohne Texterkennung?
 

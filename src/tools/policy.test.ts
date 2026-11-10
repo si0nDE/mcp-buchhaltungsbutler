@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPolicyTools, loadPolicy } from "./policy.js";
 
@@ -54,7 +55,7 @@ describe("policy tools", () => {
 
   it("kleinunternehmer: default null, set_policy setzt ihn einzeln, ohne die Regel für ausländische Anbieter zu ändern", async () => {
     const [get, set] = createPolicyTools();
-    expect(parse(await get.handler({} as never)).tax_profile).toEqual({ kleinunternehmer: null });
+    expect(parse(await get.handler({} as never)).tax_profile).toEqual({ kleinunternehmer: null, gewinnermittlung: null });
     await set.handler({ foreign_supplier_domestic_vat_no_rc_hint: "as_invoiced", reason: "GF 11.10.: wie ausgewiesen", confirm: true } as never);
     await set.handler({ kleinunternehmer: true, reason: "GF 09.11.: Kleinunternehmer nach § 19 UStG, Vorjahr 18.000 €", confirm: true } as never);
     const p = await loadPolicy();
@@ -72,7 +73,7 @@ describe("policy tools", () => {
 
   it("alte Policy-Dateien ohne tax_profile laden mit kleinunternehmer null; ein falscher Typ ist ein Fehler", async () => {
     await writeFile(join(dir, "alt.json"), JSON.stringify({ vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "ask" }, history: [] }));
-    expect((await loadPolicy(join(dir, "alt.json"))).tax_profile).toEqual({ kleinunternehmer: null });
+    expect((await loadPolicy(join(dir, "alt.json"))).tax_profile).toEqual({ kleinunternehmer: null, gewinnermittlung: null });
     await writeFile(join(dir, "falsch.json"), JSON.stringify({ tax_profile: { kleinunternehmer: "ja" } }));
     await expect(loadPolicy(join(dir, "falsch.json"))).rejects.toThrow(/kleinunternehmer/);
   });
@@ -80,5 +81,34 @@ describe("policy tools", () => {
   it("rejects an unknown rule value in the file", async () => {
     await writeFile(join(dir, "p.json"), JSON.stringify({ vat_policy: { foreign_supplier_domestic_vat_no_rc_hint: "egal" } }));
     await expect(loadPolicy(join(dir, "p.json"))).rejects.toThrow(/unbekannter Wert/);
+  });
+
+  it("gewinnermittlung: default null, set/get Rundlauf, Altdatei ohne Schlüssel, ungültiger Wert", async () => {
+    const [get, set] = createPolicyTools();
+    const first = parse(await get.handler({} as never));
+    expect(first.tax_profile.gewinnermittlung).toBeNull();
+    expect(first.allowed_values.gewinnermittlung).toEqual(["euer", "bilanz", null]);
+    expect(first.tax_profile_meaning).toBeTypeOf("string");
+    expect(first.gewinnermittlung_meaning).toMatch(/nicht festgelegt/i);
+    await set.handler({ gewinnermittlung: "euer", reason: "Steuerberater 10.11.: EÜR", confirm: true } as never);
+    const res = parse(await get.handler({} as never));
+    expect(res.tax_profile).toEqual({ kleinunternehmer: null, gewinnermittlung: "euer" });
+    expect(res.gewinnermittlung_meaning).toMatch(/EÜR/);
+    expect((await loadPolicy()).history.at(-1)!.change).toEqual({ gewinnermittlung: { from: null, to: "euer" } });
+    await set.handler({ gewinnermittlung: "bilanz", reason: "Steuerberater: Bilanz ab 2027", confirm: true } as never);
+    expect((await loadPolicy()).tax_profile.gewinnermittlung).toBe("bilanz");
+    await set.handler({ kleinunternehmer: false, reason: "GF: Regelbesteuerung", confirm: true } as never);
+    expect((await loadPolicy()).tax_profile).toEqual({ kleinunternehmer: false, gewinnermittlung: "bilanz" });
+    await writeFile(join(dir, "alt2.json"), JSON.stringify({ tax_profile: { kleinunternehmer: true } }));
+    expect((await loadPolicy(join(dir, "alt2.json"))).tax_profile).toEqual({ kleinunternehmer: true, gewinnermittlung: null });
+    await writeFile(join(dir, "falsch2.json"), JSON.stringify({ tax_profile: { gewinnermittlung: "ist" } }));
+    await expect(loadPolicy(join(dir, "falsch2.json"))).rejects.toThrow(/gewinnermittlung/);
+  });
+
+  it("set_policy lehnt einen ungültigen gewinnermittlung-Wert ab", async () => {
+    const [, set] = createPolicyTools();
+    const schema = z.object(set.inputSchema as never);
+    expect(schema.safeParse({ gewinnermittlung: "ist", reason: "GF-Entscheidung", confirm: true }).success).toBe(false);
+    expect(schema.safeParse({ gewinnermittlung: null, reason: "GF-Entscheidung", confirm: true }).success).toBe(true);
   });
 });
