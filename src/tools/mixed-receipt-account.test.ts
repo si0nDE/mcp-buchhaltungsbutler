@@ -34,11 +34,11 @@ describe("findAuslagenkonto", () => {
 
   it("returns none and lists the names when several accounts match", async () => {
     const r = await findAuslagenkonto(
-      clientWith([...accounts, { name: "Auslagen Erika Beispiel", postingaccount_number: "732" }]),
+      clientWith([...accounts, { name: "Auslagen Erika Beispiel", postingaccount_number: "745" }]),
       "Erika Beispiel"
     );
     expect(r.found).toBeNull();
-    expect(r.candidates).toEqual(["Verbindlichkeiten Gesellschafter Erika Beispiel (730)", "Auslagen Erika Beispiel (732)"]);
+    expect(r.candidates).toEqual(["Verbindlichkeiten Gesellschafter Erika Beispiel (730)", "Auslagen Erika Beispiel (745)"]);
   });
 
   it("throws on endpoint failure (caller turns it into a warning)", async () => {

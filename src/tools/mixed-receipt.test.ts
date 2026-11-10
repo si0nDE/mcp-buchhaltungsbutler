@@ -334,7 +334,7 @@ describe("generate_and_upload_mixed_receipt", () => {
 
 const ACCOUNTS = [
   { name: "Girokonto", postingaccount_number: "1200" },
-  { name: "Verbindlichkeiten Gesellschafter Erika Beispiel", postingaccount_number: "732" },
+  { name: "Verbindlichkeiten Gesellschafter Erika Beispiel", postingaccount_number: "745" },
 ];
 const upload = (client: BBClient, extra: Record<string, unknown> = {}) => createMixedReceiptTools(client)[2].handler({ ...args, confirm: true, ...extra } as never);
 const uploadParams = (call: ReturnType<typeof fakeClient>["call"]) => call.mock.calls.find((c) => c[0] === "receiptsUpload")![1] as Data;
@@ -361,7 +361,7 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
   it("the preview names the auto-detected Auslagenkonto with its effect", async () => {
     const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS });
     const d = data(await createMixedReceiptTools(client)[1].handler(args as never));
-    expect(d.auslagenkonto).toMatchObject({ number: 732, name: "Verbindlichkeiten Gesellschafter Erika Beispiel", source: "auto" });
+    expect(d.auslagenkonto).toMatchObject({ number: 745, name: "Verbindlichkeiten Gesellschafter Erika Beispiel", source: "auto" });
     expect((d.auslagenkonto as Data).effect).toMatch(/Beleg erzeugt Zahlung/);
   });
 
@@ -372,7 +372,7 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
     expect((dNone.auslagenkonto as Data).effect).toMatch(/Kein Konto/);
     const several = fakeClient({ original: await original(), accounts: [...ACCOUNTS, { name: "Auslagen Erika Beispiel", postingaccount_number: "733" }] });
     const dSeveral = data(await createMixedReceiptTools(several.client)[1].handler(args as never));
-    expect((dSeveral.auslagenkonto as Data).effect).toMatch(/mehrere.*Verbindlichkeiten Gesellschafter Erika Beispiel \(732\).*Auslagen Erika Beispiel \(733\)/);
+    expect((dSeveral.auslagenkonto as Data).effect).toMatch(/mehrere.*Verbindlichkeiten Gesellschafter Erika Beispiel \(745\).*Auslagen Erika Beispiel \(733\)/);
     const failing = fakeClient({ original: await original(), accountsFail: true });
     const dFail = data(await createMixedReceiptTools(failing.client)[1].handler(args as never));
     expect(dFail.auslagenkonto).toMatchObject({ source: "none" });
@@ -396,8 +396,8 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
   it("the upload passes the detected account as an integer and reports it", async () => {
     const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS });
     const d = data(await upload(client));
-    expect(uploadParams(call).account).toBe(732);
-    expect(d.auslagenkonto).toMatchObject({ number: 732, source: "auto" });
+    expect(uploadParams(call).account).toBe(745);
+    expect(d.auslagenkonto).toMatchObject({ number: 745, source: "auto" });
   });
 
   it("the upload omits account with without_auslagenkonto and uses an explicit one over the detected one", async () => {
@@ -424,13 +424,13 @@ describe("Auslagenkonto im Vorschau- und Upload-Werkzeug", () => {
 
 describe("booking_proposal", () => {
   it("1: an assigned payment with the matching amount gives a ready add_transaction_postings call", async () => {
-    const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "732" }, assigned: ASSIGNED });
+    const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED });
     const d = data(await upload(client));
     const p = proposal(d);
     expect(d.status).toBe("uploaded");
     expect(p.status).toBe("ready");
-    expect(p.auslagenkonto).toEqual({ number: 732, name: "Verbindlichkeiten Gesellschafter Erika Beispiel" });
-    expect(p.receipt).toMatchObject({ id_by_customer: 777, account: "732", assigned_transactions: [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }] });
+    expect(p.auslagenkonto).toEqual({ number: 745, name: "Verbindlichkeiten Gesellschafter Erika Beispiel" });
+    expect(p.receipt).toMatchObject({ id_by_customer: 777, account: "745", assigned_transactions: [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }] });
     expect(p.calls).toEqual([{ tool: "add_transaction_postings", arguments: { transactions: [{ transaction_id_by_customer: 9001, splits: EXPECTED_SPLITS }] } }]);
     expect(p.steps.join(" ")).toMatch(/Zahlung 9001 \(-6,42 €\) ist dem Beleg zugeordnet/);
     expect(p.notes.join(" ")).toMatch(/4653 \(SKR03\); SKR04: 6643; alternativ 4980 \| 6850 Sonstiger Betriebsbedarf; das Konto legt der Steuerberater fest/);
@@ -443,7 +443,7 @@ describe("booking_proposal", () => {
     const { client } = fakeClient({
       original: await original(),
       accounts: ACCOUNTS,
-      newReceiptRow: { account: "732" },
+      newReceiptRow: { account: "745" },
       assigned: ASSIGNED,
       postings: [{ id_by_customer: "5001", transaction_id_by_customer: "9001", fixed: "0" }],
     });
@@ -453,12 +453,17 @@ describe("booking_proposal", () => {
   });
 
   it("3: an assigned payment with a different amount, or several payments, give needs_decision with the amounts and no calls", async () => {
-    const differs = fakeClient({ original: await original(), newReceiptRow: { account: "732" }, assigned: [{ ...ASSIGNED[0], amount: "-5.00" }] });
+    const differs = fakeClient({ original: await original(), newReceiptRow: { account: "745" }, assigned: [{ ...ASSIGNED[0], amount: "-5.00" }] });
     const p = proposal(data(await upload(differs.client)));
     expect(p.status).toBe("needs_decision");
     expect(p.calls).toEqual([]);
     expect(p.steps.join(" ")).toMatch(/-5,00 €.*6,42 €/);
-    const several = fakeClient({ original: await original(), newReceiptRow: { account: "732" }, assigned: [ASSIGNED[0], { ...ASSIGNED[0], id_by_customer: "9002" }] });
+    // one cent off is not offered as a ready call: the split sum would not equal the payment
+    const cent = fakeClient({ original: await original(), newReceiptRow: { account: "745" }, assigned: [{ ...ASSIGNED[0], amount: "-6.43" }] });
+    const pCent = proposal(data(await upload(cent.client)));
+    expect(pCent.status).toBe("needs_decision");
+    expect(pCent.calls).toEqual([]);
+    const several = fakeClient({ original: await original(), newReceiptRow: { account: "745" }, assigned: [ASSIGNED[0], { ...ASSIGNED[0], id_by_customer: "9002" }] });
     const p2 = proposal(data(await upload(several.client)));
     expect(p2.status).toBe("needs_decision");
     expect(p2.calls).toEqual([]);
@@ -497,7 +502,7 @@ describe("booking_proposal", () => {
             postingtext: s.postingtext,
             amount: s.amount,
             postingaccount_debit: 4653,
-            postingaccount_credit: 732,
+            postingaccount_credit: 745,
             vat: s.vat,
             receipt_id_by_customer: 777,
           })),
@@ -560,7 +565,7 @@ describe("booking_proposal", () => {
   it("8: any failing read endpoint gives status unavailable, the upload result stays uploaded and the original deleted", async () => {
     for (const failEndpoint of ["receiptsAssignedTransactionsGet", "postingsGet", "transactionsGet"]) {
       await setGewinnermittlung("euer");
-      const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "732" }, assigned: failEndpoint === "transactionsGet" ? [] : ASSIGNED, failEndpoint });
+      const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: failEndpoint === "transactionsGet" ? [] : ASSIGNED, failEndpoint });
       const d = data(await upload(client));
       expect(d).toMatchObject({ status: "uploaded", original_deleted: true, new_receipt_verified: true });
       expect(proposal(d).status).toBe("unavailable");
@@ -586,7 +591,7 @@ describe("booking_proposal", () => {
 
   it("9: the proposal only reads: no add/assign/create endpoint is ever called", async () => {
     await setGewinnermittlung("euer");
-    const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "732" }, assigned: ASSIGNED });
+    const { client, call } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED });
     await upload(client);
     const allowed = new Set([
       // main flow

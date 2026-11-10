@@ -180,7 +180,8 @@ async function build(client: BBClient, input: BookingInput, policyLoader: typeof
     const listed = assigned.map(describeTx).join("; ");
     if (assigned.length === 1 && booked[0] === false) {
       const t = assigned[0];
-      if (Math.abs(Math.abs(num(t.amount)) - input.amounts.reimbursement) <= TOLERANCE + 1e-9) {
+      // exact to the cent: the offered splits sum to the reimbursement and BuchhaltungsButler wants the sum to equal the payment
+      if (Math.round(Math.abs(num(t.amount)) * 100) === Math.round(input.amounts.reimbursement * 100)) {
         notes.push(splitNote(splits));
         return result(
           "ready",

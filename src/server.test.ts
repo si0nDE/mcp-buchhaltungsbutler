@@ -172,7 +172,7 @@ describe("createServer", () => {
     let uploaded = false;
     const call = vi.fn(async (key: string, _params?: unknown, options?: { idSuffix?: number }) => {
       if (key === "receiptsGetIdByCustomer") {
-        if (options?.idSuffix === 777) return { success: true, data: { id_by_customer: "777", account: "732", amount_paid: "-6.42" } };
+        if (options?.idSuffix === 777) return { success: true, data: { id_by_customer: "777", account: "745", amount_paid: "-6.42" } };
         return { success: true, data: { id_by_customer: "42", invoicenumber: "BEISPIEL-0815", counterparty: "Beispielmarkt", date: "2026-10-01", amount: "23.45", deleted: "0", file_content: file } };
       }
       if (key === "receiptsGet") return { success: true, data: uploaded ? [{ id_by_customer: "777", invoicenumber: "BEISPIEL-0815", deleted: "0", amount: "6.42" }] : [] };
@@ -180,7 +180,7 @@ describe("createServer", () => {
         uploaded = true;
         return { success: true, data: { id_by_customer: 777 } };
       }
-      if (key === "accountsGet") return { success: true, data: [{ name: "Verbindlichkeiten Gesellschafter Erika Beispiel", postingaccount_number: "732" }] };
+      if (key === "accountsGet") return { success: true, data: [{ name: "Verbindlichkeiten Gesellschafter Erika Beispiel", postingaccount_number: "745" }] };
       if (key === "receiptsAssignedTransactionsGet") return { success: true, data: [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }] };
       if (key === "postingsGet") return { success: true, data: [] };
       if (key === "commentsAdd" || key === "receiptsDeleteIdByCustomer") return { success: true };
