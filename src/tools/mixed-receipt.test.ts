@@ -5,6 +5,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BBClient } from "../bb-client/client.js";
 import { createMixedReceiptTools } from "./mixed-receipt.js";
+import { neutralPostingText } from "./mixed-receipt-booking.js";
 import { inkLines, makeFakeScanPdf } from "./mixed-receipt-scan.fixture.js";
 
 async function original(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -352,8 +353,8 @@ async function setGewinnermittlung(value: "euer" | "bilanz" | null) {
 }
 
 const EXPECTED_SPLITS = [
-  { amount: "1.98", postingaccount: 4653, postingtext: "Milch 1 l - Beispielmarkt", vat: "7_pre", receipt_id_by_customer: 777 },
-  { amount: "4.44", postingaccount: 4653, postingtext: "Mineralwasser 0,5 l, Pfand - Beispielmarkt", vat: "19_pre", receipt_id_by_customer: 777 },
+  { amount: "1.98", postingaccount: 4653, postingtext: "Milch", vat: "7_pre", receipt_id_by_customer: 777 },
+  { amount: "4.44", postingaccount: 4653, postingtext: "Mineralwasser, Pfand", vat: "19_pre", receipt_id_by_customer: 777 },
 ];
 const ASSIGNED = [{ id_by_customer: "9001", amount: "-6.42", to_from: "Erika Beispiel", booking_date: "2026-10-01" }];
 
@@ -606,5 +607,39 @@ describe("booking_proposal", () => {
     expect(keys.filter((k) => k === "receiptsDeleteIdByCustomer")).toHaveLength(1);
     // the proposal runs after the delete
     expect(keys.lastIndexOf("receiptsDeleteIdByCustomer")).toBeLessThan(keys.indexOf("receiptsAssignedTransactionsGet"));
+  });
+});
+
+describe("neutral booking text", () => {
+  it("strips quantities, sizes and percentages and never contains the merchant", () => {
+    expect(neutralPostingText(["H-Milch 1,5 % 1 l"])).toBe("H-Milch");
+    expect(neutralPostingText(["Milch 1 l", "Milch 1 l"])).toBe("Milch");
+    expect(neutralPostingText(["Mineralwasser 0,5 l", "Pfand 6 × 0,25 €"])).toBe("Mineralwasser, Pfand");
+    expect(neutralPostingText(["12345"])).toBe("12345");
+  });
+
+  it("limits the derived text to 40 characters", () => {
+    expect(neutralPostingText(["Aufmerksamkeiten für Kundenbesprechungen im Büro und Team", "Zweite Position"]).length).toBeLessThanOrEqual(40);
+  });
+
+  it("uses booking_text for every split and shows the text in the preview", async () => {
+    const { client } = fakeClient({ original: await original(), accounts: ACCOUNTS, newReceiptRow: { account: "745" }, assigned: ASSIGNED });
+    const [, generate, upload] = createMixedReceiptTools(client);
+    const preview = data(await generate.handler({ ...args, booking_text: "Büroverpflegung" } as never));
+    expect(preview.booking_text).toEqual({ value: "Büroverpflegung", source: "given" });
+    const derived = data(await generate.handler(args as never));
+    expect((derived.booking_text as Data).source).toBe("derived");
+    const d = data(await upload.handler({ ...args, booking_text: "Büroverpflegung", confirm: true } as never));
+    const proposal = d.booking_proposal as { calls: Array<{ arguments: { transactions: Array<{ splits: Array<{ postingtext: string }> }> } }> };
+    const texts = proposal.calls[0].arguments.transactions[0].splits.map((x) => x.postingtext);
+    expect(texts).toEqual(["Büroverpflegung", "Büroverpflegung"]);
+  });
+
+  it("rejects an empty or overlong booking_text", async () => {
+    const { client } = fakeClient({ original: await original() });
+    const schema = createMixedReceiptTools(client)[1].inputSchema.booking_text as unknown as { safeParse: (v: unknown) => { success: boolean } };
+    expect(schema.safeParse("").success).toBe(false);
+    expect(schema.safeParse("x".repeat(41)).success).toBe(false);
+    expect(schema.safeParse("Milch").success).toBe(true);
   });
 });

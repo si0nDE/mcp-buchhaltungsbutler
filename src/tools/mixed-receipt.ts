@@ -4,7 +4,7 @@ import type { BBClient } from "../bb-client/client.js";
 import { receiptDisplayRef } from "../formatting/display-ref.js";
 import { readUploadedId, toId, type UploadResponse } from "./entertainment-receipt.js";
 import { MAX_ORIGINAL_BYTES, sha256Hex } from "./entertainment-receipt-append.js";
-import { buildBookingProposal } from "./mixed-receipt-booking.js";
+import { bookingTextFor, buildBookingProposal } from "./mixed-receipt-booking.js";
 import { findAuslagenkonto, type Auslagenkonto } from "./mixed-receipt-account.js";
 import { computeMixedReceipt, type MixedReceiptAmounts } from "./mixed-receipt-calc.js";
 import { renderMixedReceiptPdf } from "./mixed-receipt-pdf.js";
@@ -68,6 +68,16 @@ const generateShape = {
     .positive()
     .optional()
     .describe("Posting account number of the paying person's Auslagenkonto. Skips the automatic detection; the upload assigns the receipt to this account."),
+  booking_text: z
+    .string()
+    .min(1)
+    .max(40)
+    .optional()
+    .describe(
+      "Neutral, generic posting text for the booking proposal, e.g. 'Milch' (at most 40 characters). BuchhaltungsButler turns every distinct " +
+        "posting text into its own booking suggestion, so no merchant, brand, size, quantity, date or receipt number. Always set it to the plain " +
+        "generic term; without it a text is derived from the position descriptions (numbers and units removed)."
+    ),
   without_auslagenkonto: z
     .boolean()
     .optional()
@@ -379,6 +389,8 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
           redacted_blocks: built.blocks,
           bon_on_second_page: built.bonOnSecondPage,
           amounts: amountsView(built.amounts),
+          // the posting text of the later booking proposal (neutral: BuchhaltungsButler makes every distinct text its own suggestion)
+          booking_text: bookingTextFor(args.positions.map((p) => p.description), args.booking_text),
           booking_hint: bookingHint(built.amounts, args.paid_by),
           auslagenkonto: built.auslagenkonto,
           images: built.images.map((i) => i.info),
@@ -491,8 +503,8 @@ export function createMixedReceiptTools(client: BBClient): ToolDef[] {
         newId: newId ?? check.id,
         amounts: built.amounts,
         positions: built.args.positions,
-        merchant: built.args.merchant.name,
         paidBy: built.args.paid_by,
+        bookingText: built.args.booking_text,
         receiptDate: built.date,
         auslagenkonto,
         accountPassedOnUpload: auslagenkonto !== null,

@@ -35,8 +35,9 @@ export interface BookingInput {
   newId: string | number | undefined;
   amounts: MixedReceiptAmounts;
   positions: BusinessPosition[];
-  merchant: string;
   paidBy: string;
+  // Explicit neutral posting text from the caller; without it a neutral text is derived from the position descriptions.
+  bookingText?: string;
   receiptDate: string; // YYYY-MM-DD
   auslagenkonto: Auslagenkonto | null;
   // The upload passed this Auslagenkonto as `account` (so BuchhaltungsButler was asked to create the payment).
@@ -74,13 +75,35 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+export const MAX_POSTING_TEXT = 40;
+
+// BuchhaltungsButler turns every distinct posting text into its own booking suggestion, so the text stays generic: no merchant,
+// brand, size, quantity, percentage or price. Derived from the position descriptions; the caller can set booking_text instead.
+export function neutralPostingText(descriptions: string[]): string {
+  const cleaned = descriptions
+    .map((d) =>
+      d
+        .replace(/\d+(?:[.,]\d+)?\s*(?:%|€|ml|cl|kg|mg|g|l|stk\.?|stück|x|×)?/gi, " ")
+        .replace(/[()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter((d) => d !== "");
+  const text = [...new Set(cleaned)].join(", ") || descriptions.join(", ");
+  return text.slice(0, MAX_POSTING_TEXT).trim();
+}
+
+export function bookingTextFor(descriptions: string[], explicit?: string): { value: string; source: "given" | "derived" } {
+  return explicit && explicit.trim() !== "" ? { value: explicit.trim(), source: "given" } : { value: neutralPostingText(descriptions), source: "derived" };
+}
+
 function splitsFor(input: BookingInput, receiptId: number) {
   return input.amounts.rates.map((r) => {
     const names = input.positions.filter((p) => p.vat_rate === r.vat_rate).map((p) => p.description);
     return {
       amount: r.gross.toFixed(2),
       postingaccount: BOOKING_ACCOUNT,
-      postingtext: `${names.join(", ")} - ${input.merchant}`,
+      postingtext: bookingTextFor(names, input.bookingText).value,
       vat: r.vat_rate === 0 ? "0_none" : `${r.vat_rate}_pre`,
       receipt_id_by_customer: receiptId,
     };
