@@ -5,7 +5,17 @@ import { createAllTools } from "./tools/index.js";
 import { attachImages } from "./tools/types.js";
 import { VERSION } from "./version.js";
 
-export function createServer(client: BBClient): McpServer {
+export interface ServerOptions {
+  /** Nur Tools mit readOnlyHint: true anbieten; buchende, anlegende und löschende Tools fehlen dann ganz. */
+  readOnly?: boolean;
+}
+
+/** BHB_READ_ONLY=1|true|yes|on schaltet den Nur-Lese-Modus ein. */
+export function readOnlyFromEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
+  return /^(1|true|yes|on)$/i.test(env.BHB_READ_ONLY?.trim() ?? "");
+}
+
+export function createServer(client: BBClient, options: ServerOptions = {}): McpServer {
   const server = new McpServer(
     {
       name: "buchhaltungsbutler",
@@ -14,7 +24,8 @@ export function createServer(client: BBClient): McpServer {
     { instructions: SERVER_INSTRUCTIONS }
   );
 
-  const tools = createAllTools(client);
+  const allTools = createAllTools(client);
+  const tools = options.readOnly ? allTools.filter((t) => t.annotations.readOnlyHint === true) : allTools;
   for (const tool of tools) {
     server.registerTool(
       tool.name,

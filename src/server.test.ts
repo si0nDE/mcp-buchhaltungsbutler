@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer } from "./server.js";
+import { createServer, readOnlyFromEnv } from "./server.js";
 import type { BBClient } from "./bb-client/client.js";
 import { inkLines, makeFakeScanPdf } from "./tools/mixed-receipt-scan.fixture.js";
 
@@ -32,6 +32,28 @@ describe("createServer", () => {
     const registeredTools = (server as unknown as { _registeredTools: Record<string, unknown> })
       ._registeredTools;
     expect(Object.keys(registeredTools)).toHaveLength(61);
+  });
+
+  it("registers only tools marked readOnlyHint in read-only mode", () => {
+    const server = createServer(mockClient({}), { readOnly: true });
+    const registeredTools = (
+      server as unknown as { _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean } }> }
+    )._registeredTools;
+    const names = Object.keys(registeredTools);
+
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.length).toBeLessThan(61);
+    expect(Object.values(registeredTools).every((t) => t.annotations?.readOnlyHint === true)).toBe(true);
+    for (const writer of ["add_receipt_postings", "create_invoice", "delete_transaction", "set_policy", "upload_receipt"]) {
+      expect(names).not.toContain(writer);
+    }
+  });
+
+  it("reads BHB_READ_ONLY", () => {
+    expect(readOnlyFromEnv({})).toBe(false);
+    expect(readOnlyFromEnv({ BHB_READ_ONLY: "0" })).toBe(false);
+    expect(readOnlyFromEnv({ BHB_READ_ONLY: "1" })).toBe(true);
+    expect(readOnlyFromEnv({ BHB_READ_ONLY: " TRUE " })).toBe(true);
   });
 
   it("wires list_accounts through to the given client", async () => {

@@ -104,8 +104,10 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
 1. Veröffentlichtes Image ziehen: `ghcr.io/si0nde/mcp-buchhaltungsbutler:latest` (automatisch aus `main`
    gebaut via `.github/workflows/docker-publish.yml`), oder lokal bauen mit `docker build -t mcp-buchhaltungsbutler .`.
 2. Starten mit den üblichen `BB_API_CLIENT`/`BB_API_SECRET`/`BB_API_KEY`, plus:
-   - `MCP_AUTH_TOKEN` (Pflicht) — ein langes Zufalls-Secret; jeder Request braucht `Authorization: Bearer <token>`.
+   - `MCP_AUTH_TOKEN` (Pflicht) — ein langes Zufalls-Secret, mindestens 32 Zeichen (z. B. `openssl rand -base64 48`); mit einem kürzeren startet der Server nicht. Jeder Request braucht `Authorization: Bearer <token>`. Das Token gibt vollen Lese- und Schreibzugriff auf die Buchhaltung.
    - `MCP_ALLOWED_HOSTS` (empfohlen) — kommagetrennte Hostnamen, unter denen der Server erreichbar ist (z. B. deine Reverse-Proxy-Domain), für DNS-Rebinding-Schutz.
+   - `MCP_TRUST_PROXY` (empfohlen hinter einem Reverse-Proxy) — Anzahl der Proxys vor dem Server, in der Regel `1`. Der Server sperrt eine Adresse nach 10 Fehlversuchen für bis zu eine Minute (Antwort `429` mit `Retry-After`); ohne diese Angabe sieht er nur die Adresse des Proxys, und die Sperre trifft dann alle Clients gemeinsam. Nicht setzen, wenn der Server ohne Proxy direkt erreichbar ist: sonst kann jeder seine Adresse per `X-Forwarded-For` fälschen.
+   - `BHB_READ_ONLY` (optional) — `1` oder `true` bietet nur die lesenden Tools an; buchen, anlegen, hochladen und löschen fehlen dann ganz. Gilt auch für den lokalen Start über stdio. Sinnvoll für einen zweiten, nur auswertenden Zugang.
    - `PORT` (optional, Standard `3000`).
    - `BHB_POLICY_FILE` (optional) — Speicherort der Hausregeln für `set_policy` (Standard `~/.mcp-buchhaltungsbutler/policy.json`). Im Container ein Volume einhängen, das der Benutzer `node` (uid 1000) beschreiben darf, z. B. `-v bhb-policy:/data -e BHB_POLICY_FILE=/data/policy.json`; sonst ist die Regel nach einem Neustart weg.
    - `BHB_TRAVEL_RATES_ONLINE` (optional) — `0` oder `false` schaltet den Online-Abruf einer fehlenden BMF-Auslandstabelle ab (Reisekostenabrechnungen werden dann vorläufig mit der letzten eingebauten Tabelle gerechnet). Standard: an (nur https zu `lsth.`/`ksth.bundesfinanzministerium.de`).
@@ -113,8 +115,8 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
    ```bash
    docker run -d --name mcp-buchhaltungsbutler \
      -e BB_API_CLIENT=... -e BB_API_SECRET=... -e BB_API_KEY=... \
-     -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.deine-domain.example \
-     -p 3000:3000 \
+     -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.deine-domain.example -e MCP_TRUST_PROXY=1 \
+     -p 127.0.0.1:3000:3000 \
      ghcr.io/si0nde/mcp-buchhaltungsbutler:latest
    ```
 3. Reverse-Proxy davor (Caddy, nginx, Traefik, ...) für TLS — der Container selbst spricht nur reines
@@ -122,6 +124,13 @@ alternativ als Streamable-HTTP-Dienst statt über stdio, container-fertig.
    `POST /mcp` und braucht den Bearer-Token.
 4. In Claude als Remote-/Custom-Connector eintragen mit `https://mcp.deine-domain.example/mcp` und
    `Authorization: Bearer <token>` — dadurch auch von Claude auf iOS/iPadOS erreichbar, nicht nur Desktop.
+
+**Sicherheit im Remote-Betrieb.** Der Endpunkt hängt an einem einzigen Token. Deshalb:
+
+- Token nur zufällig erzeugen, nirgends im Klartext ablegen außer in der Client-Konfiguration, und tauschen, sobald ein Gerät mit dieser Konfiguration verloren geht oder ausgemustert wird.
+- Wenn möglich den Endpunkt nicht offen ins Internet stellen, sondern im Reverse-Proxy auf bekannte Adressen oder ein VPN beschränken. TLS und HSTS setzt der Reverse-Proxy.
+- Port 3000 des Containers nicht nach außen veröffentlichen, nur zum Proxy (`-p 127.0.0.1:3000:3000` oder ein internes Docker-Netz).
+- Texte aus der Buchhaltung (Verwendungszwecke, Belegtexte, Kontaktnamen) stammen von Dritten und erreichen das Modell. Schreibende Tools verlangen deshalb eine Bestätigung; wer nur auswertet, startet mit `BHB_READ_ONLY=1`.
 
 ## Reisekostenabrechnung
 

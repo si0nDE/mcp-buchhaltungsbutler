@@ -105,8 +105,10 @@ Streamable HTTP service instead of stdio, container-ready.
 1. Pull the published image: `ghcr.io/si0nde/mcp-buchhaltungsbutler:latest` (built automatically from
    `main` by `.github/workflows/docker-publish.yml`), or build locally with `docker build -t mcp-buchhaltungsbutler .`.
 2. Run it with the usual `BB_API_CLIENT`/`BB_API_SECRET`/`BB_API_KEY`, plus:
-   - `MCP_AUTH_TOKEN` (required) — a long random secret; every request must send `Authorization: Bearer <token>`.
+   - `MCP_AUTH_TOKEN` (required) — a long random secret, at least 32 characters (e.g. `openssl rand -base64 48`); the server refuses to start with a shorter one. Every request must send `Authorization: Bearer <token>`. The token grants full read and write access to the bookkeeping.
    - `MCP_ALLOWED_HOSTS` (recommended) — comma-separated hostnames this server is reachable as (e.g. your reverse proxy's domain), for DNS-rebinding protection.
+   - `MCP_TRUST_PROXY` (recommended behind a reverse proxy) — number of proxies in front of the server, usually `1`. The server blocks an address for up to a minute after 10 failed attempts (`429` with `Retry-After`); without this setting it only sees the proxy's address, so the block hits all clients together. Do not set it when the server is reachable without a proxy: anyone could then forge their address via `X-Forwarded-For`.
+   - `BHB_READ_ONLY` (optional) — `1` or `true` offers only the reading tools; booking, creating, uploading and deleting tools are not registered at all. Also applies to the local stdio start. Useful for a second, reporting-only access.
    - `PORT` (optional, default `3000`).
    - `BHB_POLICY_FILE` (optional) — where `set_policy` stores the house rules (default `~/.mcp-buchhaltungsbutler/policy.json`). In a container, mount a volume writable by the `node` user (uid 1000), e.g. `-v bhb-policy:/data -e BHB_POLICY_FILE=/data/policy.json`; otherwise the rule is gone after a restart.
    - `BHB_TRAVEL_RATES_ONLINE` (optional) — `0` or `false` disables the online lookup of a missing BMF foreign per-diem table (travel expense reports are then calculated provisionally with the latest built-in table). Default: enabled (https to `lsth.`/`ksth.bundesfinanzministerium.de` only).
@@ -114,8 +116,8 @@ Streamable HTTP service instead of stdio, container-ready.
    ```bash
    docker run -d --name mcp-buchhaltungsbutler \
      -e BB_API_CLIENT=... -e BB_API_SECRET=... -e BB_API_KEY=... \
-     -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.your-domain.example \
-     -p 3000:3000 \
+     -e MCP_AUTH_TOKEN=... -e MCP_ALLOWED_HOSTS=mcp.your-domain.example -e MCP_TRUST_PROXY=1 \
+     -p 127.0.0.1:3000:3000 \
      ghcr.io/si0nde/mcp-buchhaltungsbutler:latest
    ```
 3. Put a reverse proxy (Caddy, nginx, Traefik, ...) in front for TLS — this container only speaks plain
@@ -124,6 +126,13 @@ Streamable HTTP service instead of stdio, container-ready.
 4. Add it to Claude as a remote/custom connector using `https://mcp.your-domain.example/mcp` and an
    `Authorization: Bearer <token>` header — this is what makes it reachable from Claude on iOS/iPadOS,
    not just Desktop.
+
+**Security of a remote deployment.** The endpoint depends on a single token, so:
+
+- Generate the token randomly, keep it nowhere in plain text except the client configuration, and replace it as soon as a device holding that configuration is lost or retired.
+- If you can, do not expose the endpoint to the whole internet: restrict it to known addresses or a VPN in the reverse proxy. TLS and HSTS belong to the reverse proxy.
+- Do not publish the container's port 3000 to the outside, only to the proxy (`-p 127.0.0.1:3000:3000` or an internal Docker network).
+- Text from the bookkeeping (payment references, receipt text, contact names) is written by third parties and reaches the model. Writing tools therefore require a confirmation; for reporting only, start with `BHB_READ_ONLY=1`.
 
 ## Reisekostenabrechnung (travel expense reports)
 
