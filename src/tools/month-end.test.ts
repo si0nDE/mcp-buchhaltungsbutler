@@ -4,6 +4,7 @@ import {
   accountBalance,
   bookedReceiptIds,
   bookedTransactionIds,
+  collectMonthEnd,
   createMonthEndTools,
   findDuplicateReceipts,
   findTransitAccounts,
@@ -84,6 +85,19 @@ describe("helpers", () => {
     expect(accountBalance([P({ amount: "5.00" })], 1200)).toBe(-5);
   });
 
+  it("accountBalance follows the sides, not the sign of the amount (payment postings carry the payment's sign)", () => {
+    const postings = [
+      P({ amount: "1000.00", debit_postingaccount_number: "1210", credit_postingaccount_number: "1360" }),
+      P({ amount: "-1000.00", debit_postingaccount_number: "1360", credit_postingaccount_number: "1200" }),
+    ];
+    expect(accountBalance(postings, 1360)).toBe(0);
+  });
+
+  it("findDuplicateReceipts ignores an invoice and its cancellation (same number, amounts cancel out)", () => {
+    expect(findDuplicateReceipts([R(1, { invoicenumber: "2026-10001", amount: "50.00" }), R(2, { invoicenumber: "2026-10001", amount: "-50.00" })])).toEqual([]);
+    expect(findDuplicateReceipts([R(1, { invoicenumber: "9" }), R(2, { invoicenumber: "9" }), R(3, { invoicenumber: "9", amount: "-119.00" })]).length).toBe(1);
+  });
+
   it("findTransitAccounts matches Geldtransit and Interimskonto by name only", () => {
     expect(
       findTransitAccounts([
@@ -139,7 +153,34 @@ describe("check_month_end", () => {
   it("reads a wider posting range for the Geldtransit balance when balance_from is given", async () => {
     const { call, tool } = setup({ accounts: [{ postingaccount_number: "1360", name: "Geldtransit" }] });
     await tool.handler({ ...RANGE, balance_from: "2026-01-01" });
-    expect(call).toHaveBeenCalledWith("postingsGet", expect.objectContaining({ date_from: "2026-01-01", date_to: "2026-09-30" }));
+    expect(call).toHaveBeenCalledWith("postingsGet", expect.objectContaining({ date_from: "2026-01-01" }));
+  });
+
+  it("counts postings after the month and ignores postings after date_to for the Geldtransit balance", async () => {
+    const { tool } = setup({
+      inbound: [R(1)],
+      transactions: [T(21)],
+      postings: [
+        P({ transaction_id_by_customer: "21", receipt_id_by_customer: "1", date: "2026-10-02 01:00:00" }),
+        P({ debit_postingaccount_number: "1360", amount: "40.00", date: "2026-10-05 01:00:00" }),
+      ],
+      accounts: [{ postingaccount_number: "1360", name: "Geldtransit" }],
+    });
+    const res = parse(await tool.handler({ ...RANGE }));
+    const byName = Object.fromEntries(res.ergebnisse.map((e: any) => [e.pruefung, e]));
+    expect(byName.zahlungen_ohne_buchung.status).toBe("ok");
+    expect(byName.belege_ohne_buchung.status).toBe("ok");
+    expect(byName.geldtransit_und_interimskonto_saldo.details[0].saldo).toBe(0);
+    expect(res.rohdaten).toBeUndefined();
+  });
+
+  it("splits unbooked receipts by direction in collectMonthEnd", async () => {
+    const call = vi.fn((key: string, params: Record<string, unknown>) =>
+      Promise.resolve({ data: key === "receiptsGet" ? (params.list_direction === "inbound" ? [R(1)] : [R(2, { type: "invoice outbound" })]) : [] })
+    );
+    const res = await collectMonthEnd({ call } as unknown as BBClient, { ...RANGE });
+    expect(res.rohdaten.belege_ohne_buchung_eingang.map((r) => r.id_by_customer)).toEqual(["1"]);
+    expect(res.rohdaten.belege_ohne_buchung_ausgang.map((r) => r.id_by_customer)).toEqual(["2"]);
   });
 
   it("says nicht_pruefbar when no Geldtransit account exists", async () => {

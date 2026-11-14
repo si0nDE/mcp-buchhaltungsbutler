@@ -63,8 +63,10 @@ export function findDuplicateReceipts(receipts: Row[]): DuplicateGroup[] {
     bucket.map.set(bucket.key, [...(bucket.map.get(bucket.key) ?? []), r]);
   }
   const groups: DuplicateGroup[] = [];
+  // Rechnung und ihre Stornorechnung (gleiche Nummer, Beträge heben sich auf) sind kein Duplikat.
+  const cancelsOut = (rows: Row[]) => rows.reduce((sum, r) => sum + cents(r.amount), 0) === 0;
   for (const rows of byNumber.values()) {
-    if (rows.length > 1) {
+    if (rows.length > 1 && !cancelsOut(rows)) {
       groups.push({
         grund: "gleicher Rechnungssteller und gleiche Rechnungsnummer",
         ids: rows.map((r) => idOf(r.id_by_customer)),
@@ -75,7 +77,7 @@ export function findDuplicateReceipts(receipts: Row[]): DuplicateGroup[] {
     }
   }
   for (const rows of byDateAmount.values()) {
-    if (rows.length > 1) {
+    if (rows.length > 1 && !cancelsOut(rows)) {
       groups.push({
         grund: "gleicher Rechnungssteller, gleiches Datum, gleicher Betrag (ohne Rechnungsnummer)",
         ids: rows.map((r) => idOf(r.id_by_customer)),
@@ -114,11 +116,14 @@ export function bookedTransactionIds(postings: Row[]): Set<number> {
   return ids;
 }
 
-// Saldo = Soll minus Haben über die gelesenen Buchungen, in Cent gerechnet.
+// Saldo = Soll minus Haben über die gelesenen Buchungen, in Cent gerechnet. Maßgeblich sind die Seiten (Soll/Haben), nicht das
+// Vorzeichen des Betrags: Buchungen zu Zahlungen tragen den Betrag mit dem Vorzeichen der Zahlung (Abfluss negativ), die
+// Seiten stehen trotzdem richtig. Am Livekonto geprüft (14.11.2026): Bei Soll 1360, Haben Bank und negativem Betrag zählt BHBs
+// Kontenblatt den Betrag als Soll und endet bei 0; mit dem Vorzeichen gerechnet käme das Doppelte als negativer Saldo heraus.
 export function accountBalance(postings: Row[], account: number): number {
   let sum = 0;
   for (const p of postings) {
-    const c = cents(p.amount);
+    const c = Math.abs(cents(p.amount));
     if (idOf(p.debit_postingaccount_number) === account) sum += c;
     if (idOf(p.credit_postingaccount_number) === account) sum -= c;
   }
@@ -145,6 +150,8 @@ const cap = <T>(rows: T[]) => rows.slice(0, DETAIL_CAP);
 export interface MonthEndResult {
   zeitraum: { date_from: string; date_to: string };
   ergebnisse: Result[];
+  // Für get_closing_checklist: die Belege ohne Buchung nach Richtung getrennt (nicht gekappt). check_month_end gibt sie nicht aus.
+  rohdaten: { belege_ohne_buchung_eingang: Row[]; belege_ohne_buchung_ausgang: Row[] };
   unvollstaendig?: string[];
   warnung?: string;
   hinweis: string;
@@ -161,17 +168,27 @@ export async function collectMonthEnd(
     if (p.truncated) unvollstaendig.push(label);
   };
 
-  const [inbound, outbound, transactions, postings, accounts] = await Promise.all([
+  // Ein Beleg oder eine Zahlung des Monats kann später gebucht sein (Zahlung im Folgemonat, Beleg nachträglich zu einer
+  // früheren Einnahme). Für "gebucht" werden die Buchungen deshalb vom Jahresanfang bis heute gelesen, nicht nur im Monat.
+  const yearStart = `${args.date_from.slice(0, 4)}-01-01`;
+  const today = new Date().toISOString().slice(0, 10);
+  const wideRange = {
+    date_from: args.balance_from && args.balance_from < yearStart ? args.balance_from : yearStart,
+    date_to: today > args.date_to ? today : args.date_to,
+  };
+  const [inbound, outbound, transactions, postings, wide, accounts] = await Promise.all([
     readAll(client, "receiptsGet", { ...range, list_direction: "inbound", deleted: false }, PAGE.receipts),
     readAll(client, "receiptsGet", { ...range, list_direction: "outbound", deleted: false }, PAGE.receipts),
     readAll(client, "transactionsGet", range, PAGE.transactions),
     readAll(client, "postingsGet", { ...range, posting_status: "all" }, PAGE.postings),
+    readAll(client, "postingsGet", { ...wideRange, posting_status: "all" }, PAGE.postings),
     readAll(client, "settingsGetPostingaccounts", {}, PAGE.accounts),
   ]);
   note("Eingangsbelege", inbound);
   note("Ausgangsrechnungen", outbound);
   note("Zahlungen", transactions);
   note("Buchungen", postings);
+  note("Buchungen (Jahresanfang bis heute)", wide);
   note("Buchungskonten", accounts);
 
   const receipts = [...inbound.rows, ...outbound.rows];
@@ -187,7 +204,7 @@ export async function collectMonthEnd(
       "Vor dem Löschen prüfen, ob es wirklich Duplikate sind (Rechnungskorrekturen tragen oft dieselbe Nummer). Zum Löschen set_receipt_deleted.",
   });
 
-  const bookedTx = bookedTransactionIds(postings.rows);
+  const bookedTx = bookedTransactionIds(wide.rows);
   const openTx = transactions.rows.filter((t) => !bookedTx.has(idOf(t.id_by_customer)));
   results.push({
     pruefung: "zahlungen_ohne_buchung",
@@ -203,26 +220,25 @@ export async function collectMonthEnd(
           })),
         }
       : {}),
-    hinweis: "Alle Konten gemeinsam geprüft. Buchungen mit anderem Datum als die Zahlung werden hier nicht erkannt.",
+    hinweis: "Alle Konten gemeinsam geprüft. Eine Buchung zählt, auch wenn sie ein anderes Datum hat als die Zahlung (gelesen: Jahresanfang bis heute).",
   });
 
-  const bookedReceipts = bookedReceiptIds(postings.rows);
+  const bookedReceipts = bookedReceiptIds(wide.rows);
   const openReceipts = receipts.filter((r) => !bookedReceipts.has(idOf(r.id_by_customer)));
+  const summarize = (r: Row) => ({
+    id_by_customer: r.id_by_customer,
+    type: r.type,
+    counterparty: r.counterparty,
+    invoicenumber: r.invoicenumber,
+    amount: r.amount,
+    date: r.date,
+  });
   results.push({
     pruefung: "belege_ohne_buchung",
     status: openReceipts.length === 0 ? "ok" : "pruefen",
     anzahl: openReceipts.length,
     ...(openReceipts.length > 0
-      ? {
-          details: cap(openReceipts).map((r) => ({
-            id_by_customer: r.id_by_customer,
-            type: r.type,
-            counterparty: r.counterparty,
-            invoicenumber: r.invoicenumber,
-            amount: r.amount,
-            date: r.date,
-          })),
-        }
+      ? { details: cap(openReceipts).map(summarize) }
       : {}),
     hinweis:
       "Bilanzierer: ungebuchte Eingangsrechnungen kreditorisch als offene Posten einbuchen. EÜR-Rechner buchen nur Zahlungen; dort ist ein unbezahlter Beleg ohne Buchung normal.",
@@ -246,12 +262,11 @@ export async function collectMonthEnd(
     });
   } else {
     const balanceRange = { date_from: args.balance_from ?? args.date_from, date_to: args.date_to };
-    const wide =
-      balanceRange.date_from === args.date_from
-        ? postings
-        : await readAll(client, "postingsGet", { ...balanceRange, posting_status: "all" }, PAGE.postings);
-    if (wide !== postings) note("Buchungen (Saldo-Zeitraum)", wide);
-    const saldi = transit.map((a) => ({ konto: a.number, name: a.name, saldo: accountBalance(wide.rows, a.number) }));
+    const inBalanceRange = wide.rows.filter((p) => {
+      const d = String(p.date ?? "").slice(0, 10);
+      return d === "" || (d >= balanceRange.date_from && d <= balanceRange.date_to);
+    });
+    const saldi = transit.map((a) => ({ konto: a.number, name: a.name, saldo: accountBalance(inBalanceRange, a.number) }));
     const off = saldi.filter((s) => Math.abs(s.saldo) >= 0.005);
     results.push({
       pruefung: "geldtransit_und_interimskonto_saldo",
@@ -287,6 +302,10 @@ export async function collectMonthEnd(
   return {
     zeitraum: range,
     ergebnisse: results,
+    rohdaten: {
+      belege_ohne_buchung_eingang: openReceipts.filter((r) => String(r.type ?? "").includes("inbound")).map(summarize),
+      belege_ohne_buchung_ausgang: openReceipts.filter((r) => String(r.type ?? "").includes("outbound")).map(summarize),
+    },
     ...(unvollstaendig.length > 0
       ? {
           unvollstaendig,
@@ -295,7 +314,8 @@ export async function collectMonthEnd(
       : {}),
     hinweis:
       "'ok' heißt nur: kein Auffälliges in den abgerufenen Daten. Gebucht wird aus den Buchungen abgeleitet (Näherung).",
-  };}
+  };
+}
 
 export function createMonthEndTools(client: BBClient): [ToolDef, ToolDef] {
   const checkMonthEnd = defineTool({
@@ -321,7 +341,8 @@ export function createMonthEndTools(client: BBClient): [ToolDef, ToolDef] {
         .describe("YYYY-MM-DD: Beginn für den Saldo von Geldtransit/Interimskonto (Standard: date_from). Wirtschaftsjahresbeginn nehmen."),
     },
     async handler(args) {
-      return ok(await collectMonthEnd(client, args));
+      const { rohdaten: _rohdaten, ...result } = await collectMonthEnd(client, args);
+      return ok(result);
     },
   });
   const calculateAccountBalance = defineTool({

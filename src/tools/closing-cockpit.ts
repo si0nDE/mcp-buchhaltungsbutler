@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BBClient } from "../bb-client/client.js";
 import { defineTool, OBJECT_OUTPUT_SHAPE, ok, type ToolDef } from "./types.js";
-import { cents, collectMonthEnd, readAll, type Result as MonthEndCheck } from "./month-end.js";
+import { cents, collectMonthEnd, readAll, type MonthEndResult, type Result as MonthEndCheck } from "./month-end.js";
 import { loadPolicy, type Policy } from "./policy.js";
 
 // Abbild der Monatsabschluss-Checkliste im Abschluss-Cockpit von BuchhaltungsButler (Beta, Menü "Abschluss-Cockpit"):
@@ -19,7 +19,9 @@ interface TaskDef {
   titel: string;
   art: Pruefart;
   // Name der Prüfung aus check_month_end, aus der der Status kommt.
-  check?: "duplikatsverdacht_belege" | "zahlungen_ohne_buchung" | "belege_ohne_buchung" | "festschreibung" | "geldtransit_und_interimskonto_saldo";
+  check?: "duplikatsverdacht_belege" | "zahlungen_ohne_buchung" | "festschreibung" | "geldtransit_und_interimskonto_saldo";
+  // Belege ohne Buchung, nur Eingangs- oder nur Ausgangsbelege.
+  belege?: "eingang" | "ausgang";
   saldo?: boolean;
   werkzeug?: string;
   hinweis: string;
@@ -55,9 +57,9 @@ export const CHECKLIST: SectionDef[] = [
   {
     nr: 3, gruppe: "Vorbereitung", titel: "Belegerfassung",
     aufgaben: [
-      { id: "X1", titel: "Ungebuchte Eingangsbelege prüfen und verbuchen", art: "teilweise", check: "belege_ohne_buchung", hinweis: "Bei EÜR ohne Debitoren/Kreditoren ist ein unbezahlter Beleg ohne Buchung normal; dort zählt die Zahlung (D1). Nur Bilanzierer buchen Belege." },
+      { id: "X1", titel: "Ungebuchte Eingangsbelege prüfen und verbuchen", art: "teilweise", belege: "eingang", hinweis: "Bei EÜR ohne Debitoren/Kreditoren ist ein unbezahlter Beleg ohne Buchung normal; dort zählt die Zahlung (D1). Nur Bilanzierer buchen Belege." },
       { id: "X3", titel: "Offene Aufgaben zu Eingangsbelegen abarbeiten", art: "oberflaeche", hinweis: "Aufgaben und Kommentare an Belegen sind in der Oberfläche; die API hat Kommentare (add_comment), aber keine Aufgabenliste." },
-      { id: "X7", titel: "Ungebuchte Ausgangsbelege prüfen und verbuchen", art: "teilweise", check: "belege_ohne_buchung", hinweis: "Wie X1: bei EÜR zählt die Zahlung. Ausgangsrechnungen ohne Zahlungseingang sind offene Forderungen, keine Buchungslücke." },
+      { id: "X7", titel: "Ungebuchte Ausgangsbelege prüfen und verbuchen", art: "teilweise", belege: "ausgang", hinweis: "Wie X1: bei EÜR zählt die Zahlung. Ausgangsrechnungen ohne Zahlungseingang sind offene Forderungen, keine Buchungslücke." },
       { id: "X9", titel: "Erlösminderungen wie Rabatte, Erstattungen, Chargebacks prüfen", art: "manuell", werkzeug: "get_account_ledger", hinweis: "Erlösminderungskonten im Kontenblatt ansehen; ob ein Posten richtig ist, beurteilt der Nutzer." },
       { id: "X4", titel: "Lieferantengutschriften, Korrekturen und Stornos prüfen", art: "manuell", werkzeug: "get_booking_guide storno_ruecklastschrift", hinweis: "Gutschriften und Stornos gegen Ausgangsbelege abgleichen." },
       { id: "X5", titel: "Fehlerhafte Buchungen bei Ausgaben korrigieren", art: "manuell", werkzeug: "get_account_ledger, cancel_posting", hinweis: "Kontierung und Steuerschlüssel stichprobenhaft im Kontenblatt prüfen. Festgeschriebenes geht nur per Storno." },
@@ -163,19 +165,33 @@ export interface KontoStand {
   status: "stimmt" | "abweichung" | "auszugssaldo_fehlt";
 }
 
+// Zahlungskonten mit Kontoauszug oder Kassenbestand: Kasse und Bank im SKR03 (1000-1099, 1200-1299) und SKR04 (1600-1699, 1800-1899).
+// accountsGet liefert keine Kontoart; Darlehens- und Verrechnungskonten (z. B. 1705, 1371) stehen dort auch und haben keinen Auszug.
+// Wer andere Konten abgleichen will, gibt payment_accounts an.
+export const isPaymentAccount = (nr: number) =>
+  (nr >= 1000 && nr <= 1099) || (nr >= 1200 && nr <= 1299) || (nr >= 1600 && nr <= 1699) || (nr >= 1800 && nr <= 1899);
+
 // Bedingungen, die ohne Debitoren/Kreditoren (EÜR) wegfallen.
 const NUR_BILANZ: Bedingung[] = ["bilanz"];
 
-function statusOf(t: TaskDef, ctx: { checks: Map<string, MonthEndCheck>; konten: KontoStand[]; unvollstaendig: boolean; euer: boolean }): { status: TaskStatus; detail?: unknown } {
+function statusOf(
+  t: TaskDef,
+  ctx: { checks: Map<string, MonthEndCheck>; konten: KontoStand[]; unvollstaendig: boolean; euer: boolean; rohdaten: MonthEndResult["rohdaten"] }
+): { status: TaskStatus; detail?: unknown } {
+  if (t.belege) {
+    const rows = t.belege === "eingang" ? ctx.rohdaten.belege_ohne_buchung_eingang : ctx.rohdaten.belege_ohne_buchung_ausgang;
+    if (rows.length === 0) return { status: "geprueft_ok" };
+    if (ctx.euer) {
+      // Bei EÜR ist ein Beleg ohne Buchung kein Fehler (unbezahlt oder noch nicht gebucht, die Zahlung zählt, D1); die Liste bleibt Information.
+      return { status: "offen", detail: { belege_ohne_buchung: rows.length, hinweis: "bei EÜR kein Fehler, zählt über die Zahlung (D1); unbezahlte Rechnungen mit überschrittenem Fälligkeitsdatum sind offene Forderungen", belege: rows } };
+    }
+    return { status: "auffaellig", detail: { anzahl: rows.length, details: rows } };
+  }
   if (t.check) {
     const c = ctx.checks.get(t.check);
     if (!c) return { status: "offen" };
     if (t.check === "festschreibung") {
       return { status: c.status === "ok" ? "geprueft_ok" : "nur_oberflaeche", detail: { nicht_festgeschrieben: c.anzahl } };
-    }
-    if (t.check === "belege_ohne_buchung" && ctx.euer) {
-      // Bei EÜR ist ein Beleg ohne Buchung kein Fehler; die Zahl bleibt als Information.
-      return { status: "offen", detail: { belege_ohne_buchung: c.anzahl, hinweis: "bei EÜR kein Fehler, zählt über die Zahlung (D1)" } };
     }
     if (t.check === "geldtransit_und_interimskonto_saldo" && c.status === "nicht_pruefbar") return { status: "nicht_zutreffend", detail: c.hinweis };
     return { status: c.status === "ok" ? "geprueft_ok" : "auffaellig", detail: { anzahl: c.anzahl, ...(c.details !== undefined ? { details: c.details } : {}) } };
@@ -220,6 +236,10 @@ export function createClosingCockpitTools(client: BBClient, policyLoader: () => 
         .array(z.string())
         .optional()
         .describe("Kennungen der Aufgaben, die in BHB (Einstellungen im Cockpit) ausgeblendet sind, z. B. [\"F2\", \"K2\"]."),
+      payment_accounts: z
+        .array(z.number().int())
+        .optional()
+        .describe("Kontonummern der Zahlungskonten, die gegen den Kontoauszug abgeglichen werden. Standard: Konten im Bereich Kasse und Bank (SKR03 1000-1099 und 1200-1299, SKR04 1600-1699 und 1800-1899); Darlehens- und Verrechnungskonten bleiben außen vor."),
       conditions: z
         .array(z.enum(["lohn", "anlagen", "waren", "eu", "oss", "import"]))
         .optional()
@@ -235,10 +255,16 @@ export function createClosingCockpitTools(client: BBClient, policyLoader: () => 
       const accountsRes = await client.call<{ data?: Array<Record<string, unknown>> }>("accountsGet", {});
       const statements = args.statement_balances ?? {};
       const konten: KontoStand[] = [];
+      const weitereKonten: Array<{ konto: number; name: string }> = [];
       let kontoUnvollstaendig = false;
+      const explicit = args.payment_accounts ? new Set(args.payment_accounts) : undefined;
       for (const a of accountsRes.data ?? []) {
         const nr = Number(a.postingaccount_number);
         if (!Number.isFinite(nr)) continue;
+        if (explicit ? !explicit.has(nr) : !isPaymentAccount(nr)) {
+          weitereKonten.push({ konto: nr, name: String(a.name ?? "") });
+          continue;
+        }
         const { rows, truncated } = await readAll(client, "transactionsGet", { account: nr, date_to: args.date_to }, 500);
         if (truncated) kontoUnvollstaendig = true;
         const berechnet = Math.round(rows.reduce((s, t) => s + cents(t.amount), 0)) / 100;
@@ -256,7 +282,7 @@ export function createClosingCockpitTools(client: BBClient, policyLoader: () => 
       const unvollstaendig = (base.unvollstaendig?.length ?? 0) > 0 || kontoUnvollstaendig;
       const hidden = new Set(args.hidden_tasks ?? []);
       const present = args.conditions ? new Set<string>(args.conditions) : undefined;
-      const ctx = { checks, konten, unvollstaendig, euer };
+      const ctx = { checks, konten, unvollstaendig, euer, rohdaten: base.rohdaten };
 
       const abschnitte = CHECKLIST.map((s) => ({
         nr: s.nr,
@@ -312,6 +338,7 @@ export function createClosingCockpitTools(client: BBClient, policyLoader: () => 
         nur_nutzer: NUR_NUTZER,
         zaehlung,
         konten,
+        ...(weitereKonten.length > 0 ? { weitere_konten_nicht_abgestimmt: weitereKonten } : {}),
         abschnitte,
         rueckfrage_an_nutzer:
           "Soll ich die Checkliste selbst abarbeiten und dir berichten, oder zusätzlich als Artefakt bereitstellen? (Aufbau: get_booking_guide abschluss_cockpit)",

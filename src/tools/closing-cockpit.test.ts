@@ -23,11 +23,11 @@ const P = (over: Record<string, unknown>) => ({
 });
 
 function setup(
-  data: { transactions?: unknown[]; postings?: unknown[]; accounts?: unknown[]; receipts?: unknown[]; byAccount?: Record<string, unknown[]> },
+  data: { transactions?: unknown[]; postings?: unknown[]; accounts?: unknown[]; receipts?: unknown[]; outboundReceipts?: unknown[]; byAccount?: Record<string, unknown[]> },
   dk: "aktiv" | "aus" | null = "aus"
 ) {
   const call = vi.fn((key: string, params: Record<string, unknown>) => {
-    if (key === "receiptsGet") return Promise.resolve({ data: params.list_direction === "inbound" ? (data.receipts ?? []) : [] });
+    if (key === "receiptsGet") return Promise.resolve({ data: params.list_direction === "inbound" ? (data.receipts ?? []) : (data.outboundReceipts ?? []) });
     if (key === "transactionsGet") {
       if (params.account !== undefined) return Promise.resolve({ data: data.byAccount?.[String(params.account)] ?? [] });
       return Promise.resolve({ data: data.transactions ?? [] });
@@ -61,7 +61,7 @@ describe("catalog", () => {
 });
 
 describe("get_closing_checklist", () => {
-  const accounts = [{ postingaccount_number: "1200", name: "GLS Giro" }];
+  const accounts = [{ postingaccount_number: "1200", name: "Girokonto" }];
 
   it("is not ready without a statement balance and says so", async () => {
     const { tool } = setup({ accounts, byAccount: { "1200": [TX(1, "100.00")] }, transactions: [TX(1, "100.00")], postings: [P({ transaction_id_by_customer: "1" })] });
@@ -102,6 +102,37 @@ describe("get_closing_checklist", () => {
     expect(find(out, "X1").status).toBe("offen");
     expect(find(out, "X1").detail.belege_ohne_buchung).toBe(1);
     expect(out.profil.gewinnermittlung_abgeleitet).toBe("EÜR");
+  });
+
+  it("splits X1 (Eingang) and X7 (Ausgang) and does not count receipts booked later or on other days", async () => {
+    const inb = { id_by_customer: "7", type: "invoice inbound", date: "2026-10-05", counterparty: "Muster GmbH", invoicenumber: "RE-1", amount: "10.00" };
+    const out = { id_by_customer: "8", type: "invoice outbound", date: "2026-10-05", counterparty: "Kunde", invoicenumber: "A-1", amount: "20.00" };
+    const later = { id_by_customer: "9", type: "invoice inbound", date: "2026-10-06", counterparty: "Beispiel Netz GmbH", invoicenumber: "T-1", amount: "30.00" };
+    const { tool } = setup({
+      accounts,
+      receipts: [inb, later],
+      outboundReceipts: [out],
+      byAccount: { "1200": [] },
+      postings: [P({ receipt_id_by_customer: "9", date: "2026-11-02 01:00:00" })],
+    });
+    const out1 = parse(await tool.handler(RANGE));
+    expect(find(out1, "X1").detail.belege.map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["7"]);
+    expect(find(out1, "X7").detail.belege.map((r: { id_by_customer: string }) => r.id_by_customer)).toEqual(["8"]);
+  });
+
+  it("compares only Kasse and Bank accounts with the statement, and honours payment_accounts", async () => {
+    const accs = [
+      { postingaccount_number: "1200", name: "Girokonto" },
+      { postingaccount_number: "1705", name: "Darlehen" },
+      { postingaccount_number: "1371", name: "EÜR Verrechnungskonto" },
+    ];
+    const { tool } = setup({ accounts: accs, byAccount: { "1200": [TX(1, "10.00")], "1705": [TX(2, "-5.00")] } });
+    const out1 = parse(await tool.handler({ ...RANGE, statement_balances: { "1200": 10 } }));
+    expect(out1.konten.map((k: { konto: number }) => k.konto)).toEqual([1200]);
+    expect(out1.weitere_konten_nicht_abgestimmt.map((k: { konto: number }) => k.konto)).toEqual([1705, 1371]);
+    const out2 = parse(await tool.handler({ ...RANGE, payment_accounts: [1200, 1705], statement_balances: { "1200": 10 } }));
+    expect(out2.konten.map((k: { konto: number }) => k.konto)).toEqual([1200, 1705]);
+    expect(find(out2, "E2").status).toBe("offen");
   });
 
   it("keeps the Bilanz tasks open and warns when debitoren_kreditoren is not set", async () => {
