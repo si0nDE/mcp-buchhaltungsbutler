@@ -160,7 +160,7 @@ Rechtsgrundlagen: [docs/rechtsgrundlagen-reisekosten.md](docs/rechtsgrundlagen-r
 | Transaktionen | `list_transactions`, `get_transaction`, `create_transactions`, `assign_receipts_to_transactions`, `unassign_receipt`, `get_transaction_receipts`, `delete_transaction` |
 | Buchungen | `list_postings`, `add_receipt_postings`, `add_transaction_postings`, `add_free_postings`, `unconfirm_posting`, `cancel_posting`, `assign_receipt_to_free_posting`, `confirm_payment` |
 | Rechnungen | `create_invoice`, `create_invoice_correction` |
-| Monatsabschluss | `check_month_end` (Abschluss-Prüfungen, nur lesend), `calculate_account_balance` |
+| Monatsabschluss | `check_month_end` (Abschluss-Prüfungen, nur lesend), `get_closing_checklist` (die 54 Aufgaben des Abschluss-Cockpits mit Status, nur lesend), `calculate_account_balance` |
 | Bewirtungsbeleg | `generate_entertainment_receipt`, `generate_and_upload_entertainment_receipt` |
 | Reisekostenabrechnung | `generate_travel_expense_report`, `generate_and_upload_travel_expense_report` |
 | USt-VA | `get_ustva_position`, `preview_vat_impact` (Summen der Steuerkonten und `elster_estimate` mit auf volle Euro abgerundeten Bemessungsgrundlagen wie in ELSTER; trotzdem nicht die ELSTER-Zahl), `audit_vat_period` (Quartalsprüfung vor der USt-Voranmeldung: Dubletten und andere objektive Muster als Tabelle) |

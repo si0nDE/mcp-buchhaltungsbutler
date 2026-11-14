@@ -1077,6 +1077,30 @@ export const BOOKING_GUIDE: BookingGuideEntry[] = [
       "5. Artefakt mit allen Reitern bauen, dem Nutzer Stand, Annahmen und offene Punkte nennen.",
     ],
   },
+  {
+    id: "abschluss_cockpit",
+    titel: "Abschluss-Cockpit: Monatsabschluss-Checkliste abarbeiten oder als Artefakt bereitstellen",
+    quelle: "Abschluss-Cockpit von BuchhaltungsButler (Beta, Menü 'Abschluss-Cockpit', gelesen am 14.11.2026 am EÜR-Konto Fieber IT) und Hilfeartikel 'Monatsabschluss-Checkliste (Beta)' (38676182512029)",
+    regeln: [
+      "Das Cockpit hat 11 Abschnitte mit 54 Aufgaben (Vorbereitung: Belege und Daten, Banken, Belegerfassung; Buchhaltung: Zahlungen; Erweiterte Buchhaltung: Lohn, Anlagen, Bestand und EU-Waren, Forderungen, Abgrenzung; Abschluss: Finale Abstimmung, Monatsabschluss und steuerliche Meldung). Alle sind standardmäßig aktiv; ausgeblendet wird in den Einstellungen des Cockpits, global je Firma. get_closing_checklist bildet sie mit denselben Kennungen ab.",
+      "Das Cockpit hat keine API. Abhaken, Speichern je Abschnitt, Monat abschließen und Wiedereröffnen laufen über Endpunkte der Weboberfläche, die nur mit einer Browser-Sitzung antworten. Ein Haken im Cockpit ist ein Vermerk des Menschen, kein Prüfergebnis; 'Monat abschließen' schließt nur die Checkliste und schreibt keine Buchungen fest. Claude hakt dort nichts ab, außer der Nutzer verlangt es ausdrücklich und eine Browser-Sitzung steht; dann nur Aufgaben, die get_closing_checklist als geprueft_ok oder vom Nutzer bestätigt ausweist.",
+      "Prüfbar sind Duplikate (A3), ungebuchte Zahlungen (D1), Kontostand gegen Kontoauszug (E2, J0), Geldtransit und Interimskonto (J4) und der Festschreibestand (I2-5). Alles andere ist offen (nur der Nutzer kann es beurteilen) oder nur in der Oberfläche möglich (Abruf der Schnittstellen, Matching, Festschreiben, USt-Voranmeldung, ZM). Festschreiben, Übermittlung der USt-Voranmeldung und der ZM und das Abschließen des Monats macht immer der Nutzer.",
+      "Ehrliche Aussage am Ende: 'Alle prüfbaren Punkte grün, diese Punkte bleiben bei dir'. Nie 'sicher' oder 'kann übermittelt werden': bereit_fuer_festschreibung true ist keine Freigabe der Steuerübermittlung, die Prüfungen sind eine Näherung (gebucht wird aus den Buchungen abgeleitet) und ersetzen nicht den Steuerberater.",
+      "EÜR ohne Debitoren/Kreditoren (Hausregel debitoren_kreditoren aus): Forderungen (Abschnitt 8), Abgrenzung (9) und Bestand (K1) sind nicht_zutreffend; Belege ohne Buchung sind Information, es zählt die Zahlung. Lohn, Anlagen, EU-Waren, ZM und OSS hängen davon ab, was die Firma hat: den Nutzer fragen (conditions) oder die im Cockpit ausgeblendeten Aufgaben abfragen (hidden_tasks).",
+      "Vor dem Start fragen: 'Soll ich die Checkliste selbst abarbeiten und dir berichten, oder zusätzlich als Artefakt bereitstellen?' Selbst abarbeiten heißt: get_closing_checklist aufrufen, Auffälligkeiten mit den genannten Werkzeugen klären (Buchen nur nach Rückfrage), am Ende berichten. Mit Artefakt: zusätzlich eine Seite bauen (Abschnitte als aufklappbare Gruppen mit Zähler x/y, je Aufgabe Status-Chip und Hinweis, Tabelle der Konten mit berechnetem Stand, Auszugssaldo und Differenz, oben ein Streifen 'bereit für Festschreibung: ja/nein' mit den Gründen und der Liste nur_nutzer). Das Artefakt enthält Kunden- und Lieferantennamen und ist privat, bis der Nutzer es teilt; ein fester Stand mit Datum, kein Live-Abruf.",
+    ],
+    ablauf: [
+      "1. Zeitraum (Monat) und Stichtag klären; Rückfrage 'selbst abarbeiten oder zusätzlich Artefakt?'.",
+      "2. Hausregel prüfen (get_policy); ist debitoren_kreditoren nicht gesetzt, den Nutzer fragen und nur nach seiner Aussage mit set_policy setzen.",
+      "3. Kontoauszugssalden zum Stichtag je Konto beim Nutzer erfragen (E1); ohne sie gibt es kein Urteil zu E2 und J0. Vorher prüfen lassen, ob alle Konten abgerufen sind (A4 nur in der Oberfläche; ein Konto ohne frischen Abruf verfälscht D1 und E2).",
+      "4. get_closing_checklist mit date_from, date_to, balance_from (Wirtschaftsjahresbeginn), statement_balances und conditions aufrufen.",
+      "5. Auffällige Aufgaben klären (Werkzeug steht je Aufgabe), danach den Aufruf wiederholen, bis nichts mehr auffällt oder der Nutzer entscheidet.",
+      "6. Bericht: je Abschnitt geprüft, auffällig, offen; Liste vom_nutzer_zu_bestaetigen und nur_nutzer. Festschreiben, USt-VA und ZM dem Nutzer überlassen.",
+    ],
+    konnektor: [
+      "get_closing_checklist (liest nur) liefert Status je Aufgabe; check_month_end bleibt die Grundlage der automatischen Prüfungen.",
+    ],
+  },
 ];
 
 const BOOKING_TOPICS = BOOKING_GUIDE.map((e) => e.id) as [string, ...string[]];

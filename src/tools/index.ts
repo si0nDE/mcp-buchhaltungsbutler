@@ -13,6 +13,7 @@ import { createEntertainmentReceiptTools } from "./entertainment-receipt.js";
 import { createMixedReceiptTools } from "./mixed-receipt.js";
 import { createTravelExpenseTools } from "./travel-expense-report.js";
 import { createInvoicesTools } from "./invoices.js";
+import { createClosingCockpitTools } from "./closing-cockpit.js";
 import { createMonthEndTools } from "./month-end.js";
 import { createPostingAccountsTools } from "./posting-accounts.js";
 import { createPostingsTools } from "./postings.js";
@@ -52,6 +53,7 @@ export function createAllTools(client: BBClient): ToolDef[] {
     ...createTaxPositionTools(client),
     ...createBookingGuideTools(),
     ...createMonthEndTools(client),
+    ...createClosingCockpitTools(client),
     ...createUstVaTools(),
     ...createVatPreviewTools(client),
     ...createPolicyTools(),

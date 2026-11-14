@@ -19,7 +19,7 @@ interface Paged {
   truncated: boolean;
 }
 
-async function readAll(
+export async function readAll(
   client: BBClient,
   key: "receiptsGet" | "transactionsGet" | "postingsGet" | "settingsGetPostingaccounts",
   params: Record<string, unknown>,
@@ -36,7 +36,7 @@ async function readAll(
 }
 
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-const cents = (v: unknown) => Math.round(Number(v) * 100);
+export const cents = (v: unknown) => Math.round(Number(v) * 100);
 const idOf = (v: unknown) => Number(v);
 
 export interface DuplicateGroup {
@@ -131,8 +131,8 @@ export function findTransitAccounts(accounts: Row[]): Array<{ number: number; na
     .map((a) => ({ number: idOf(a.postingaccount_number), name: String(a.name) }));
 }
 
-type Status = "ok" | "pruefen" | "nicht_pruefbar";
-interface Result {
+export type Status = "ok" | "pruefen" | "nicht_pruefbar";
+export interface Result {
   pruefung: string;
   status: Status;
   anzahl?: number;
@@ -141,6 +141,161 @@ interface Result {
 }
 
 const cap = <T>(rows: T[]) => rows.slice(0, DETAIL_CAP);
+
+export interface MonthEndResult {
+  zeitraum: { date_from: string; date_to: string };
+  ergebnisse: Result[];
+  unvollstaendig?: string[];
+  warnung?: string;
+  hinweis: string;
+}
+
+// Die Prüfungen von check_month_end; get_closing_checklist nutzt dieselben Ergebnisse.
+export async function collectMonthEnd(
+  client: BBClient,
+  args: { date_from: string; date_to: string; balance_from?: string }
+): Promise<MonthEndResult> {
+  const range = { date_from: args.date_from, date_to: args.date_to };
+  const unvollstaendig: string[] = [];
+  const note = (label: string, p: Paged) => {
+    if (p.truncated) unvollstaendig.push(label);
+  };
+
+  const [inbound, outbound, transactions, postings, accounts] = await Promise.all([
+    readAll(client, "receiptsGet", { ...range, list_direction: "inbound", deleted: false }, PAGE.receipts),
+    readAll(client, "receiptsGet", { ...range, list_direction: "outbound", deleted: false }, PAGE.receipts),
+    readAll(client, "transactionsGet", range, PAGE.transactions),
+    readAll(client, "postingsGet", { ...range, posting_status: "all" }, PAGE.postings),
+    readAll(client, "settingsGetPostingaccounts", {}, PAGE.accounts),
+  ]);
+  note("Eingangsbelege", inbound);
+  note("Ausgangsrechnungen", outbound);
+  note("Zahlungen", transactions);
+  note("Buchungen", postings);
+  note("Buchungskonten", accounts);
+
+  const receipts = [...inbound.rows, ...outbound.rows];
+  const results: Result[] = [];
+
+  const dups = findDuplicateReceipts(receipts);
+  results.push({
+    pruefung: "duplikatsverdacht_belege",
+    status: dups.length === 0 ? "ok" : "pruefen",
+    anzahl: dups.length,
+    ...(dups.length > 0 ? { details: cap(dups) } : {}),
+    hinweis:
+      "Vor dem Löschen prüfen, ob es wirklich Duplikate sind (Rechnungskorrekturen tragen oft dieselbe Nummer). Zum Löschen set_receipt_deleted.",
+  });
+
+  const bookedTx = bookedTransactionIds(postings.rows);
+  const openTx = transactions.rows.filter((t) => !bookedTx.has(idOf(t.id_by_customer)));
+  results.push({
+    pruefung: "zahlungen_ohne_buchung",
+    status: openTx.length === 0 ? "ok" : "pruefen",
+    anzahl: openTx.length,
+    ...(openTx.length > 0
+      ? {
+          details: cap(openTx).map((t) => ({
+            id_by_customer: t.id_by_customer,
+            to_from: t.to_from,
+            amount: t.amount,
+            booking_date: t.booking_date,
+          })),
+        }
+      : {}),
+    hinweis: "Alle Konten gemeinsam geprüft. Buchungen mit anderem Datum als die Zahlung werden hier nicht erkannt.",
+  });
+
+  const bookedReceipts = bookedReceiptIds(postings.rows);
+  const openReceipts = receipts.filter((r) => !bookedReceipts.has(idOf(r.id_by_customer)));
+  results.push({
+    pruefung: "belege_ohne_buchung",
+    status: openReceipts.length === 0 ? "ok" : "pruefen",
+    anzahl: openReceipts.length,
+    ...(openReceipts.length > 0
+      ? {
+          details: cap(openReceipts).map((r) => ({
+            id_by_customer: r.id_by_customer,
+            type: r.type,
+            counterparty: r.counterparty,
+            invoicenumber: r.invoicenumber,
+            amount: r.amount,
+            date: r.date,
+          })),
+        }
+      : {}),
+    hinweis:
+      "Bilanzierer: ungebuchte Eingangsrechnungen kreditorisch als offene Posten einbuchen. EÜR-Rechner buchen nur Zahlungen; dort ist ein unbezahlter Beleg ohne Buchung normal.",
+  });
+
+  const unfixed = postings.rows.filter((p) => String(p.fixed ?? "0") === "0").length;
+  results.push({
+    pruefung: "festschreibung",
+    status: unfixed === 0 ? "ok" : "pruefen",
+    anzahl: unfixed,
+    details: { festgeschrieben: postings.rows.length - unfixed, nicht_festgeschrieben: unfixed },
+    hinweis: "Festschreiben geht nur in der Oberfläche (Abschluss, Zeitraum einstellen), nicht per API. Danach erst die USt-Voranmeldung.",
+  });
+
+  const transit = findTransitAccounts(accounts.rows);
+  if (transit.length === 0) {
+    results.push({
+      pruefung: "geldtransit_und_interimskonto_saldo",
+      status: "nicht_pruefbar",
+      hinweis: "Kein Konto 'Geldtransit' oder 'Interimskonto' im Kontenplan gefunden.",
+    });
+  } else {
+    const balanceRange = { date_from: args.balance_from ?? args.date_from, date_to: args.date_to };
+    const wide =
+      balanceRange.date_from === args.date_from
+        ? postings
+        : await readAll(client, "postingsGet", { ...balanceRange, posting_status: "all" }, PAGE.postings);
+    if (wide !== postings) note("Buchungen (Saldo-Zeitraum)", wide);
+    const saldi = transit.map((a) => ({ konto: a.number, name: a.name, saldo: accountBalance(wide.rows, a.number) }));
+    const off = saldi.filter((s) => Math.abs(s.saldo) >= 0.005);
+    results.push({
+      pruefung: "geldtransit_und_interimskonto_saldo",
+      status: off.length === 0 ? "ok" : "pruefen",
+      anzahl: off.length,
+      details: saldi,
+      hinweis:
+        `Saldo = Soll minus Haben im Zeitraum ${balanceRange.date_from} bis ${balanceRange.date_to}. Beide Konten müssen 0 sein; ` +
+        "sonst fehlt eine Gegenbuchung (siehe get_booking_guide geldtransit).",
+    });
+  }
+
+  results.push(
+    {
+      pruefung: "banksalden",
+      status: "nicht_pruefbar",
+      hinweis:
+        "Kontostand je Zahlungskonto mit calculate_account_balance (statement_balance = Saldo laut Kontoauszug) abstimmen; Anfangsbestand muss erfasst sein.",
+    },
+    {
+      pruefung: "plausibilisierung_konten",
+      status: "nicht_pruefbar",
+      hinweis:
+        "Soll/Haben-Seite, Anzahl wiederkehrender Zahlungen, Kontierung, Buchungen mit/ohne Steuer: get_report (sums) und get_account_ledger.",
+    },
+    {
+      pruefung: "festschreiben_und_ust_voranmeldung",
+      status: "nicht_pruefbar",
+      hinweis: "Nur in der Oberfläche (Abschluss). Kein API-Endpunkt.",
+    }
+  );
+
+  return {
+    zeitraum: range,
+    ergebnisse: results,
+    ...(unvollstaendig.length > 0
+      ? {
+          unvollstaendig,
+          warnung: `Seitenlimit erreicht (${MAX_PAGES} Seiten): ${unvollstaendig.join(", ")}. Zeitraum verkleinern, sonst sind die Ergebnisse unvollständig.`,
+        }
+      : {}),
+    hinweis:
+      "'ok' heißt nur: kein Auffälliges in den abgerufenen Daten. Gebucht wird aus den Buchungen abgeleitet (Näherung).",
+  };}
 
 export function createMonthEndTools(client: BBClient): [ToolDef, ToolDef] {
   const checkMonthEnd = defineTool({
@@ -166,147 +321,7 @@ export function createMonthEndTools(client: BBClient): [ToolDef, ToolDef] {
         .describe("YYYY-MM-DD: Beginn für den Saldo von Geldtransit/Interimskonto (Standard: date_from). Wirtschaftsjahresbeginn nehmen."),
     },
     async handler(args) {
-      const range = { date_from: args.date_from, date_to: args.date_to };
-      const unvollstaendig: string[] = [];
-      const note = (label: string, p: Paged) => {
-        if (p.truncated) unvollstaendig.push(label);
-      };
-
-      const [inbound, outbound, transactions, postings, accounts] = await Promise.all([
-        readAll(client, "receiptsGet", { ...range, list_direction: "inbound", deleted: false }, PAGE.receipts),
-        readAll(client, "receiptsGet", { ...range, list_direction: "outbound", deleted: false }, PAGE.receipts),
-        readAll(client, "transactionsGet", range, PAGE.transactions),
-        readAll(client, "postingsGet", { ...range, posting_status: "all" }, PAGE.postings),
-        readAll(client, "settingsGetPostingaccounts", {}, PAGE.accounts),
-      ]);
-      note("Eingangsbelege", inbound);
-      note("Ausgangsrechnungen", outbound);
-      note("Zahlungen", transactions);
-      note("Buchungen", postings);
-      note("Buchungskonten", accounts);
-
-      const receipts = [...inbound.rows, ...outbound.rows];
-      const results: Result[] = [];
-
-      const dups = findDuplicateReceipts(receipts);
-      results.push({
-        pruefung: "duplikatsverdacht_belege",
-        status: dups.length === 0 ? "ok" : "pruefen",
-        anzahl: dups.length,
-        ...(dups.length > 0 ? { details: cap(dups) } : {}),
-        hinweis:
-          "Vor dem Löschen prüfen, ob es wirklich Duplikate sind (Rechnungskorrekturen tragen oft dieselbe Nummer). Zum Löschen set_receipt_deleted.",
-      });
-
-      const bookedTx = bookedTransactionIds(postings.rows);
-      const openTx = transactions.rows.filter((t) => !bookedTx.has(idOf(t.id_by_customer)));
-      results.push({
-        pruefung: "zahlungen_ohne_buchung",
-        status: openTx.length === 0 ? "ok" : "pruefen",
-        anzahl: openTx.length,
-        ...(openTx.length > 0
-          ? {
-              details: cap(openTx).map((t) => ({
-                id_by_customer: t.id_by_customer,
-                to_from: t.to_from,
-                amount: t.amount,
-                booking_date: t.booking_date,
-              })),
-            }
-          : {}),
-        hinweis: "Alle Konten gemeinsam geprüft. Buchungen mit anderem Datum als die Zahlung werden hier nicht erkannt.",
-      });
-
-      const bookedReceipts = bookedReceiptIds(postings.rows);
-      const openReceipts = receipts.filter((r) => !bookedReceipts.has(idOf(r.id_by_customer)));
-      results.push({
-        pruefung: "belege_ohne_buchung",
-        status: openReceipts.length === 0 ? "ok" : "pruefen",
-        anzahl: openReceipts.length,
-        ...(openReceipts.length > 0
-          ? {
-              details: cap(openReceipts).map((r) => ({
-                id_by_customer: r.id_by_customer,
-                type: r.type,
-                counterparty: r.counterparty,
-                invoicenumber: r.invoicenumber,
-                amount: r.amount,
-                date: r.date,
-              })),
-            }
-          : {}),
-        hinweis:
-          "Bilanzierer: ungebuchte Eingangsrechnungen kreditorisch als offene Posten einbuchen. EÜR-Rechner buchen nur Zahlungen; dort ist ein unbezahlter Beleg ohne Buchung normal.",
-      });
-
-      const unfixed = postings.rows.filter((p) => String(p.fixed ?? "0") === "0").length;
-      results.push({
-        pruefung: "festschreibung",
-        status: unfixed === 0 ? "ok" : "pruefen",
-        anzahl: unfixed,
-        details: { festgeschrieben: postings.rows.length - unfixed, nicht_festgeschrieben: unfixed },
-        hinweis: "Festschreiben geht nur in der Oberfläche (Abschluss, Zeitraum einstellen), nicht per API. Danach erst die USt-Voranmeldung.",
-      });
-
-      const transit = findTransitAccounts(accounts.rows);
-      if (transit.length === 0) {
-        results.push({
-          pruefung: "geldtransit_und_interimskonto_saldo",
-          status: "nicht_pruefbar",
-          hinweis: "Kein Konto 'Geldtransit' oder 'Interimskonto' im Kontenplan gefunden.",
-        });
-      } else {
-        const balanceRange = { date_from: args.balance_from ?? args.date_from, date_to: args.date_to };
-        const wide =
-          balanceRange.date_from === args.date_from
-            ? postings
-            : await readAll(client, "postingsGet", { ...balanceRange, posting_status: "all" }, PAGE.postings);
-        if (wide !== postings) note("Buchungen (Saldo-Zeitraum)", wide);
-        const saldi = transit.map((a) => ({ konto: a.number, name: a.name, saldo: accountBalance(wide.rows, a.number) }));
-        const off = saldi.filter((s) => Math.abs(s.saldo) >= 0.005);
-        results.push({
-          pruefung: "geldtransit_und_interimskonto_saldo",
-          status: off.length === 0 ? "ok" : "pruefen",
-          anzahl: off.length,
-          details: saldi,
-          hinweis:
-            `Saldo = Soll minus Haben im Zeitraum ${balanceRange.date_from} bis ${balanceRange.date_to}. Beide Konten müssen 0 sein; ` +
-            "sonst fehlt eine Gegenbuchung (siehe get_booking_guide geldtransit).",
-        });
-      }
-
-      results.push(
-        {
-          pruefung: "banksalden",
-          status: "nicht_pruefbar",
-          hinweis:
-            "Kontostand je Zahlungskonto mit calculate_account_balance (statement_balance = Saldo laut Kontoauszug) abstimmen; Anfangsbestand muss erfasst sein.",
-        },
-        {
-          pruefung: "plausibilisierung_konten",
-          status: "nicht_pruefbar",
-          hinweis:
-            "Soll/Haben-Seite, Anzahl wiederkehrender Zahlungen, Kontierung, Buchungen mit/ohne Steuer: get_report (sums) und get_account_ledger.",
-        },
-        {
-          pruefung: "festschreiben_und_ust_voranmeldung",
-          status: "nicht_pruefbar",
-          hinweis: "Nur in der Oberfläche (Abschluss). Kein API-Endpunkt.",
-        }
-      );
-
-      return ok({
-        zeitraum: range,
-        ergebnisse: results,
-        ...(unvollstaendig.length > 0
-          ? {
-              unvollstaendig,
-              warnung: `Seitenlimit erreicht (${MAX_PAGES} Seiten): ${unvollstaendig.join(", ")}. Zeitraum verkleinern, sonst sind die Ergebnisse unvollständig.`,
-            }
-          : {}),
-        hinweis:
-          "'ok' heißt nur: kein Auffälliges in den abgerufenen Daten. Gebucht wird aus den Buchungen abgeleitet (Näherung).",
-      });
+      return ok(await collectMonthEnd(client, args));
     },
   });
   const calculateAccountBalance = defineTool({

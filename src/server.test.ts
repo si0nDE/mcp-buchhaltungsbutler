@@ -27,11 +27,11 @@ afterEach(() => {
 });
 
 describe("createServer", () => {
-  it("registers exactly 61 tools", () => {
+  it("registers exactly 62 tools", () => {
     const server = createServer(mockClient({}));
     const registeredTools = (server as unknown as { _registeredTools: Record<string, unknown> })
       ._registeredTools;
-    expect(Object.keys(registeredTools)).toHaveLength(61);
+    expect(Object.keys(registeredTools)).toHaveLength(62);
   });
 
   it("registers only tools marked readOnlyHint in read-only mode", () => {
@@ -42,7 +42,7 @@ describe("createServer", () => {
     const names = Object.keys(registeredTools);
 
     expect(names.length).toBeGreaterThan(0);
-    expect(names.length).toBeLessThan(61);
+    expect(names.length).toBeLessThan(62);
     expect(Object.values(registeredTools).every((t) => t.annotations?.readOnlyHint === true)).toBe(true);
     for (const writer of ["add_receipt_postings", "create_invoice", "delete_transaction", "set_policy", "upload_receipt"]) {
       expect(names).not.toContain(writer);
