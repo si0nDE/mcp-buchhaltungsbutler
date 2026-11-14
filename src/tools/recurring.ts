@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // BuchhaltungsButler kennt für Wiederholungsrechnungen weder Stopp noch Liste (spec/buchhaltungsbutler-v1.json, API 1.9.1).
 // Ein Enddatum steht nicht in der Spec, die Oberfläche hat es aber ("Letzte Rechnung"), und die API nimmt es als
-// `recurring_date_end` an: belegt am 29.10.2026 mit einem Testplan im Konto Fieber IT (der Plan zeigte "Letzte Rechnung").
+// `recurring_date_end` an: belegt am 29.10.2026 mit einem Testplan an einem Livekonto (der Plan zeigte "Letzte Rechnung").
 // Ein ungültiges Datum ergab dort HTTP 500 NACH dem Anlegen der Rechnung (ohne Plan); deshalb wird alles vorab geprüft.
 export const recurringGuardShape = {
   confirm_creates_first_invoice: z

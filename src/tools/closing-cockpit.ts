@@ -5,7 +5,7 @@ import { cents, collectMonthEnd, readAll, type MonthEndResult, type Result as Mo
 import { loadPolicy, type Policy } from "./policy.js";
 
 // Abbild der Monatsabschluss-Checkliste im Abschluss-Cockpit von BuchhaltungsButler (Beta, Menü "Abschluss-Cockpit"):
-// 11 Abschnitte, 54 Aufgaben, Kennungen wie im Cockpit (gelesen am 14.11.2026 am EÜR-Konto Fieber IT, alle Aufgaben
+// 11 Abschnitte, 54 Aufgaben, Kennungen wie im Cockpit (gelesen am 14.11.2026 an einem EÜR-Livekonto, alle Aufgaben
 // standardmäßig aktiv). Die Texte unten sind eigene Kurzfassungen, nicht BHBs Hilfetexte. Das Cockpit selbst hat keine
 // API: Speichern, Monat abschließen und Salden laufen über Endpunkte der Weboberfläche, die nur mit einer Browser-Sitzung
 // antworten. Dieses Tool liest deshalb nur und urteilt über das, was die API hergibt; das Abhaken dort bleibt Handarbeit.

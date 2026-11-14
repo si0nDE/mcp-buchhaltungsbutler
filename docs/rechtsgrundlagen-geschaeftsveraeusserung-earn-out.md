@@ -320,14 +320,14 @@ bis 8836, und ob BHBs BWA die 88xx-Konten als Umsatz führt.
 
 ## 8. Offene Punkte, vor dem Buchen zu klären
 
-1. Welche Seite bucht: Fieber IT als Veräußerer (EÜR, SKR03) oder eine Gesellschaft als Erwerber? Der Vermerk ist für den Veräußerer
+1. Welche Seite bucht: das Einzelunternehmen als Veräußerer (EÜR, SKR03) oder eine Gesellschaft als Erwerber? Der Vermerk ist für den Veräußerer
    geschrieben, Abschnitt 4 deckt den Erwerber nur an.
 2. Ist die "Earn-Out-Provision" ein variabler Kaufpreis an den Veräußerer oder die Provision eines Vermittlers, die am Earn-Out bemessen
    wird? Beides ist beschrieben (2.2 bzw. 2.4 und 5.2 Schritt 6), die Buchung ist verschieden.
 3. Kaufvertrag: Earn-Out ohne Leistungspflicht des Veräußerers? Übergangsberatung gesondert vergütet? Wettbewerbsverbot? Steuerklausel?
 4. Hat der Erwerber den Betrieb fortgeführt und war er Unternehmer (oder ist er es mit dem Erwerb geworden)?
 5. Kaufpreisaufteilung auf Wirtschaftsgüter und Höhe des Übergangsgewinns: nur mit dem Steuerberater.
-6. Liegt die Übertragung in einem Jahr, in dem Fieber IT noch laufende Umsätze hatte? Dann Teilbetrieb oder Gesamtbetrieb (für § 16
+6. Liegt die Übertragung in einem Jahr, in dem der Veräußerer noch laufende Umsätze hatte? Dann Teilbetrieb oder Gesamtbetrieb (für § 16
    Abs. 4 EStG und die Gewerbesteuerfreiheit ist beides erfasst, für die Ermittlung aber verschieden).
 
 ## 9. Quellenprotokoll und Fundstellenprüfung
@@ -349,7 +349,7 @@ Geprüft nach den fünf Dimensionen Existenz, Identität, Inhalt, Zeitbezug und 
 | H 4.5 (6) EStH (keine Verteilung des Übergangsgewinns bei Veräußerung) | nicht gelesen; Sekundärquellen | offen | **offen** | - | - |
 | R 7.1 Abs. 3 Satz 1, 2 und 7 GewStR | gewsth.bundesfinanzministerium.de (Amtliches GewSt-Handbuch 2024), gelesen | bestätigt | bestätigt | GewStR-Stand des Handbuchs 2024 | direkt einschlägig |
 | Anleitung zur USt-Voranmeldung 2026 (USt 1 E) | nicht erreicht (BMF 503, Formularserver ohne Direktlink) | - | **offen**; Kz-45-Wortlaut "Übrige nicht steuerbare Umsätze (Leistungsort nicht im Inland)" nur aus Vordruckabdrucken Dritter | - | Schluss "Geschäftsveräußerung nicht in Kz 45" ist eigene Folgerung aus dem Vordruckwortlaut |
-| SKR03-Konten 8800 ff., 2310 ff., 35/38, 4824 | `list_posting_accounts` am Fieber-IT-Konto (Kontenkatalog, keine Buchungsdaten) | bestätigt | bestätigt | Katalog 09.11.2026 | direkt |
+| SKR03-Konten 8800 ff., 2310 ff., 35/38, 4824 | `list_posting_accounts` an einem EÜR-Livekonto (Kontenkatalog, keine Buchungsdaten) | bestätigt | bestätigt | Katalog 09.11.2026 | direkt |
 
 Nichtamtliche Quellen, nur zur Orientierung genutzt (keine Nachweise): Kleeberg, EY, PwC, Grant Thornton, IWW, Haufe, BDO, BUSE,
 REEF Legal (zu IV R 9/21 und Earn-Out); Haufe und steuerkurse.de (UStAE 1.5, Kundenstamm); firma.de, Deubner, Sonntag & Partner
