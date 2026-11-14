@@ -308,6 +308,48 @@ describe("Rechtsstand 09.11.2026", () => {
     expect(JSON.stringify(findBookingGuide("controlling_artefakt"))).toMatch(/280 %/);
   });
 
+  it("the iab topic follows § 7g EStG as read on 14.11.2026 (40 % Sonderabschreibung, 1,8 % Zinsen, Gewinngrenze je Betrieb)", () => {
+    const entry = findBookingGuide("iab");
+    expect(entry?.quelle).toContain("20068054846237");
+    const e = JSON.stringify(entry);
+    expect(e).toMatch(/9970.*9971/);
+    expect(e).toMatch(/40 %.*31\.12\.2023/);
+    expect(e).not.toMatch(/Sonderabschreibung von 20 %/);
+    expect(e).toMatch(/200\.000 €/);
+    expect(e).toMatch(/je Betrieb/);
+    expect(e).toMatch(/vermietet/);
+    expect(e).toMatch(/mindestens 90 %/);
+    expect(e).toMatch(/nicht benannt/);
+    expect(e).toMatch(/0,15 % je Monat.*1,8 %/);
+    expect(e).toMatch(/6 %.*überholt/);
+    expect(e).toMatch(/Körperschaften/);
+    expect(e).toMatch(/get_booking_guide photovoltaik/);
+  });
+
+  it("has a photovoltaik topic with the verified rules on § 3 Nr. 72 EStG, § 7g and the Nullsteuersatz", () => {
+    const entry = findBookingGuide("photovoltaik");
+    expect(entry?.quelle).toMatch(/^Übergabe/);
+    expect(entry?.quelle).toMatch(/docs\/rechtsgrundlagen-iab-photovoltaik\.md/);
+    const e = JSON.stringify(entry);
+    expect(e).toMatch(/30 kW \(peak\) je Wohn- oder Gewerbeeinheit/);
+    expect(e).toMatch(/100 kW \(peak\)/);
+    expect(e).toMatch(/31\.12\.2024/);
+    expect(e).toMatch(/31\.12\.2021/);
+    expect(e).toMatch(/§ 3c Abs\. 1 EStG/);
+    expect(e).toMatch(/eigenbetrieblich/);
+    expect(e).toMatch(/Rn\. 24/);
+    expect(e).toMatch(/III B 24\/24/);
+    expect(e).toMatch(/§ 12 Abs\. 3 UStG/);
+    expect(e).toMatch(/Betreiber/);
+    expect(e).toMatch(/Vermietung.*Regelsteuersatz/);
+    expect(e).toMatch(/0_none/);
+    expect(e).toMatch(/nicht geprüft/);
+  });
+
+  it("the photovoltaik topic is findable from the get_booking_guide description", () => {
+    expect(tool.description).toMatch(/photovoltaik/);
+  });
+
   it("create_invoice_correction points to the E-Rechnung rule for corrections", () => {
     const corr = createInvoicesTools({ call: vi.fn() } as unknown as BBClient).find((t) => t.name === "create_invoice_correction")!;
     expect(corr.description).toMatch(/E-Rechnung/);
